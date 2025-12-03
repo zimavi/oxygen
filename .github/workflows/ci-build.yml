@@ -1,0 +1,72 @@
+name: CI - CMake build (with LLVM)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_requests:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        llvm_version: [ 19 ]
+      fail-fast: false
+
+    env:
+      BUILD_DIR: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Print runner info
+        run: |
+          echo "OS: $RUNNER_OS"
+          uname -a || true
+          lsb_release -a || sw_vers || true
+
+      - name: Setup toolchain (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y cmake ninja-build build-essential pkg-config curl ca-certificates
+          sudo apt-get install -y libzstd-dev
+          CODENAME=$(lsb_release -cs)
+          echo "Detected distro codename: $CODENAME"
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-apt-keyring.gpg || true
+          echo "deb [signed-by=/usr/share/keyrings/llvm-apt-keyring.gpg] https://apt.llvm.orm/$CODENAME llvm-toolchain-$CODENAME-${{ matrix.llvm_version }} main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update -y || true
+          sudo apt-get install -u "llvm-${{ matrix.llvm_version }}" "llvm-${{ matrix.llvm_version }}-dev" "clang-${{ matrix.llvm_version }}" || \
+            sudo apt-get install -y llvm clang || true
+          echo "=== Versions ==="
+          llvm-config --version || true
+          clang --version || true
+          which llvm-config || true
+
+      - name: Configure CMake
+        id: cmake-config
+        run: |
+          set -euo pipefail
+          mkdir -p "$BUILD_DIR"
+          CMAKE_GENERATOR="Ninja"
+          if ! command -v ninja > /dev/null 2>&1; then
+            CMAKE_GENERATOR="Unix Makefiles"
+          fi
+
+          echo "Using generator: $CMAKE_GENERATOR"
+
+          cmake -S . -B "$BUILD_DIR" -G "$CMAKE_GENERATOR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMAND=ON || true
+
+          echo "---- cmake cache ----"
+          cmake -LA -N -S . -B "$BUILD_DIR" || true
+          echo "---- CMake configure finished ----"
+
+      - name: Build
+        if: always()
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" -- -j$(nproc || sysctl -n hw.ncpu || echo 2)
