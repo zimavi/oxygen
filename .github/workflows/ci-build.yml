@@ -35,6 +35,10 @@ jobs:
           set -euo pipefail
           sudo apt-get update -y
           sudo apt-get install -y cmake ninja-build build-essential pkg-config curl ca-certificates
+          sudo apt-get install -y software-properties-common
+          sudo apt-get-repository -y ppa:ubuntu-toochain-r/test || true
+          sudo apt-get update -y
+          sudo apt-get install -y g++-14 gcc-14
           sudo apt-get install -y libzstd-dev
           CODENAME=$(lsb_release -cs)
           echo "Detected distro codename: $CODENAME"
@@ -60,7 +64,7 @@ jobs:
 
           echo "Using generator: $CMAKE_GENERATOR"
 
-          cmake -S . -B "$BUILD_DIR" -G "$CMAKE_GENERATOR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMAND=ON || true
+          cmake -S . -B "$BUILD_DIR" -G "$CMAKE_GENERATOR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMAND=ON -DCMAKE_CXX_COMPILER=/usr/bin/g++-14 || true
 
           echo "---- cmake cache ----"
           cmake -LA -N -S . -B "$BUILD_DIR" || true
