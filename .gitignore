@@ -1,6 +1,8 @@
 out/
 bin/
 build/
+debug/
 .vs/
 .idea/
+.cache/
 CMakeSettings.json
