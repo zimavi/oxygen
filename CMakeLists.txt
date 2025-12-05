@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.31.2)
 
+include(FetchContent)
+
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Link libraries statically")
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "CNU|Clang")
@@ -13,6 +15,14 @@ if(MSVC)
 endif()
 
 #add_subdirectory("thirdparty/lib")
+
+FetchContent_Declare(
+    cxxopts
+    GIT_REPOSITORY https://github.com/jarro2783/cxxopts.git
+    GIT_TAG "v3.3.1"
+)
+
+FetchContent_MakeAvailable(cxxopts)
 
 project(oxygen LANGUAGES CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -29,6 +39,8 @@ target_compile_definitions("${CMAKE_PROJECT_NAME}" PUBLIC RESOURCE_PATH="${CMAKE
 
 target_include_directories(oxygen PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 #target_link_libraries(oxygen PRIVATE lib)
+
+target_link_libraries(oxygen PRIVATE cxxopts::cxxopts)
 
 # ----- LLVM ------
 find_package(LLVM REQUIRED CONFIG)
