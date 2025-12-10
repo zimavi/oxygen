@@ -9,7 +9,7 @@
 int main(int argc, char** argv) {
     CompilerOptions opts = parseArguments(argc, argv);
     SourceManager sm;
-    DiagnosticsEngine diag(sm, opts.context);
+    DiagnosticsEngine diag(sm, opts.context, opts.wignore, opts.werror);
 
     auto mainId = sm.loadFile(opts.inputFile);
 

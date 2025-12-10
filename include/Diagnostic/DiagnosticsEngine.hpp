@@ -14,12 +14,27 @@
 
 class DiagnosticsEngine {
 public:
-    DiagnosticsEngine(SourceManager& sm, int contextLines = 1)
-        : srcMgr(sm), context(contextLines) {}
+    DiagnosticsEngine(SourceManager& sm, int contextLines = 1, bool ignoreWarnings = false, bool warningsAreErrors = false)
+        : srcMgr(sm), context(contextLines), ignoreWarnings(ignoreWarnings), warningsAsErrors(warningsAreErrors) {}
 
     void report(const Diagnostic& d) {
-        diags.push_back(d);
-        printDiagnostic(d);
+        if (d.level == DiagnosticLevel::Warning && ignoreWarnings)
+            return;
+
+        Diagnostic newD;
+        if (d.level == DiagnosticLevel::Warning && warningsAsErrors) {
+            newD.loc = d.loc;
+            newD.level = DiagnosticLevel::Error;
+            newD.length = d.length;
+            newD.message = d.message;
+            newD.notes = d.notes;
+            newD.suggestion = d.suggestion;
+        } else {
+            newD = d;
+        }
+
+        diags.push_back(newD);
+        printDiagnostic(newD);
     }
 
     bool hasErrors() const {
@@ -36,6 +51,8 @@ private:
     SourceManager& srcMgr;
     int context;
     std::vector<Diagnostic> diags;
+    bool ignoreWarnings = false;
+    bool warningsAsErrors = false;
 
     static std::string expandTabs(const std::string& s, unsigned tabSize = 4) {
         std::string out;
