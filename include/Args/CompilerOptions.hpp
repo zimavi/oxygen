@@ -2,18 +2,24 @@
 
 #include "Diagnostic/DiagnosticLevel.hpp"
 #include "Diagnostic/DiagnosticsEngine.hpp"
+#include <iostream>
 #include <string>
 #include <cxxopts.hpp>
 
 struct CompilerOptions {
-    bool wall = false;      // Enable basic warnings
-    bool wextra = false;    // Enable more warnings
     bool werror = false;    // Produce errors instead of warnings
+    bool wignore = false;   // Disable all warnings
+
     std::string inputFile;
     std::string outputFile = "a.out";
+
+    int context = 1;
+
+    /* -=-=-=- DEBUG -=-=-=- */
+    bool dumpArgs = false;
 };
 
-CompilerOptions parseArguments(int argc, char** argv, DiagnosticsEngine& diag) {
+CompilerOptions parseArguments(int argc, char** argv) {
     CompilerOptions opts;
 
     cxxopts::Options options(argv[0], "Oxygen compiler");
@@ -21,11 +27,20 @@ CompilerOptions parseArguments(int argc, char** argv, DiagnosticsEngine& diag) {
 
     options.add_options()
         ("h,help", "Print help")
-        ("Wall", "Enable all warnings", cxxopts::value<bool>(opts.wall))
-        ("Wextra", "Enable extra warning", cxxopts::value<bool>(opts.wextra))
+
+        ("Wignore", "Disable all warnings", cxxopts::value<bool>(opts.wignore))
         ("Werror", "Produce errors instead of warnings", cxxopts::value<bool>(opts.werror))
+
         ("o", "Output file", cxxopts::value<std::string>(opts.outputFile))
-        ("input", "Input file", cxxopts::value<std::string>(opts.outputFile));
+        ("input", "Input file", cxxopts::value<std::string>(opts.inputFile))
+
+        ("context", "Lines of context around diagnostic", cxxopts::value<int>(opts.context)->default_value("1"))
+
+#ifdef DBG_OXY_DUMP_ARGS
+        ("dArgs", "Dumps parsed arguments to standard output", cxxopts::value<bool>(opts.dumpArgs))
+#endif
+; // options.add_options()
+
 
     options.parse_positional({"input"});
 
@@ -37,7 +52,17 @@ CompilerOptions parseArguments(int argc, char** argv, DiagnosticsEngine& diag) {
     }
 
     if (!result.count("input")) {
-        diag.report(DiagnosticLevel::Error, {"<command-line>", 1, 1}, "No input file provided", "Provide a source file as positional argument");
+        std::cerr << "No input file provded. Use --help\n";
+        exit(1);
+    }
+
+    if(opts.dumpArgs) {
+        std::cout << "PARSED ARGS:\n";
+        std::cout << "  Wignore -> " << opts.wignore << "\n";
+        std::cout << "  Werror -> " << opts.werror << "\n";
+        std::cout << "  output -> " << opts.outputFile << "\n";
+        std::cout << "  input -> " << opts.inputFile << "\n";
+        std::cout << "  context -> " << opts.context << "\n";
     }
 
     return opts;

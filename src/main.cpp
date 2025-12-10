@@ -1,26 +1,50 @@
+#define DBG_OXY_DUMP_ARGS
+
 #include "Args/CompilerOptions.hpp"
+#include "Diagnostic/Diagnostic.hpp"
 #include "Diagnostic/DiagnosticLevel.hpp"
 #include "Diagnostic/DiagnosticsEngine.hpp"
-#include <iostream>
+#include "Diagnostic/SourceManager.hpp"
 
 int main(int argc, char** argv) {
-    DiagnosticsEngine diag;
-    CompilerOptions opts = parseArguments(argc, argv, diag);
+    CompilerOptions opts = parseArguments(argc, argv);
+    SourceManager sm;
+    DiagnosticsEngine diag(sm, opts.context);
 
-    if (diag.hasError()) {
-        std::cerr << "Compilation aborted due to previous errors.\n";
+    auto mainId = sm.loadFile(opts.inputFile);
+
+    if (!sm.exists(mainId)) {
+        Diagnostic d;
+        d.level = DiagnosticLevel::Error;
+        d.loc = { opts.inputFile, 1, 1 };
+        d.message = "cannot open input file";
+        d.length = 6;
+        d.suggestion = "make sure file exists and you have permissions to read it";
+        diag.report(d);
         return 1;
     }
 
-    diag.errorWarnings = opts.werror;
-
-    if (opts.wall) {
-        diag.report(DiagnosticLevel::Info, {"main.cpp", 16, 9}, "Wall enabled, all warnings are active");
+    {
+        Diagnostic w;
+        w.level = DiagnosticLevel::Warning;
+        w.loc = { opts.inputFile, mainId, 1, 8 };
+        w.message = "unable to resolve 'std.io'";
+        w.length = 6;
+        w.suggestion = "is it spelled corectly?";
+        diag.report(w);
     }
 
-    std::cout << "Compiling " << opts.inputFile << " -> " << opts.outputFile << "\n";
+    {
+        Diagnostic d;
+        d.level = DiagnosticLevel::Error;
+        d.loc = { opts.inputFile, mainId, 4, 5 };
+        d.message = "Unexpected identifier 'println'";
+        d.length = 7;
+        d.suggestion = "check if it is defined, or module is imported";
 
-    diag.report(DiagnosticLevel::Warning, {"main.cpp", 21, 5}, "Sample warning");
+        d.notes.push_back({ { opts.inputFile, mainId, 1, 8 }, "this unresovled import might contain identifier" });
+        diag.report(d);
+    }
 
     return 0;
 }

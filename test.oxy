@@ -1,0 +1,7 @@
+import std.io;
+
+func int main() {
+    println("hello, world");
+
+    return 0;
+}

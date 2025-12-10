@@ -1,16 +1,10 @@
 #pragma once
 
-#include <sstream>
 #include <string>
 
 struct SourceLocation {
     std::string file;
+    int fileId = -1;
     int line;
     int column;
-
-    std::string toString() const {
-        std::ostringstream oss;
-        oss << file << ":" << line << ":" << column;
-        return oss.str();
-    }
 };
