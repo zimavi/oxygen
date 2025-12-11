@@ -1,5 +1,3 @@
-#define DBG_OXY_DUMP_ARGS
-
 #include "Args/CompilerOptions.hpp"
 #include "Diagnostic/Diagnostic.hpp"
 #include "Diagnostic/DiagnosticLevel.hpp"

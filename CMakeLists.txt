@@ -14,6 +14,7 @@ if(MSVC)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+
 #add_subdirectory("thirdparty/lib")
 
 FetchContent_Declare(
@@ -36,6 +37,11 @@ add_executable(oxygen "${MY_SOURCES}")
 
 target_compile_definitions("${CMAKE_PROJECT_NAME}" PUBLIC RESOURCE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/resources/")
 #target_compile_definitions("${CMAKE_PROJECT_NAME}" PUBLIC RESOURCE_PATH="./resources/")
+
+# ----- Preprocessor -----
+if(include_dump_args_flag)
+    target_compile_definitions("${CMAKE_PROJECT_NAME}" PRIVATE DBG_OXY_DUMP_ARGS=1)
+endif()
 
 target_include_directories(oxygen PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 #target_link_libraries(oxygen PRIVATE lib)
