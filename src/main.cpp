@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
         d.length = 7;
         d.suggestion = "check if it is defined, or module is imported";
 
-        d.notes.push_back({ { opts.inputFile, mainId, 1, 8 }, "this unresovled import might contain identifier" });
+        d.notes.push_back({ { opts.inputFile, mainId, 1, 8 }, 6, "this unresovled import might contain identifier" });
         diag.report(d);
     }
 

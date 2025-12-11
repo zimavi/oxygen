@@ -5,5 +5,6 @@
 
 struct DiagnosticNote {
     SourceLocation loc;
+    int length = 1;
     std::string message;
 };

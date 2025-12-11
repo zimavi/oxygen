@@ -109,7 +109,7 @@ private:
             std::ostringstream noteHeader;
             noteHeader << note.loc.file << ":" << note.loc.line << ":" << note.loc.column << ": ";
             std::cerr << Colors::Cyan << noteHeader.str() << "note: " << Colors::Reset << note.message << "\n";
-            printSourceSnippet(note.loc, 1);
+            printSourceSnippet(note.loc, note.length);
         }
     }
 
@@ -149,20 +149,38 @@ private:
             ln << std::setw(width) << L;
 
             std::cerr << gutter.str() << Colors::Gray << ln.str() << " | " << Colors::Reset;
-            std::cerr << expanded << "\n";
+            //std::cerr << expanded << "\n";
 
             if (L == loc.line) {
                 int col = std::max(1, loc.column);
-
-                std::ostringstream prefixSpaces;
-                prefixSpaces << "  " << std::string(width, ' ') << " | ";
-
-                std::cerr << prefixSpaces.str();
 
                 int lineLen = (int)expanded.size();
                 int startCol = std::min(col, lineLen + 1);
                 int maxAvail = std::max(0, lineLen - (startCol - 1));
                 int caretCount = (length > 0) ? std::min(length, std::max(1, maxAvail)) : 1;
+
+                int prefixLen = (startCol > 1) ? startCol - 1 : 0;
+                if (prefixLen > expanded.size()) prefixLen = expanded.size();
+
+                int errorLen = 0;
+                if (prefixLen < expanded.size()) {
+                    errorLen = std::min((int)(expanded.size() - prefixLen), caretCount);
+                }
+
+                if (errorLen > 0) {
+                    std::cerr << expanded.substr(0, prefixLen) 
+                              << Colors::Bold << Colors::Red 
+                              << expanded.substr(prefixLen, errorLen) 
+                              << Colors::Reset 
+                              << expanded.substr(prefixLen + errorLen) << "\n";
+                } else {
+                    std::cerr << expanded << "\n";
+                }
+
+                std::ostringstream prefixSpaces;
+                prefixSpaces << "  " << std::string(width, ' ') << " | ";
+
+                std::cerr << prefixSpaces.str();
 
                 if (startCol > 1)
                     std::cerr << std::string(startCol - 1, ' ');
@@ -170,6 +188,8 @@ private:
                 std::cerr << Colors::Red << "^";
                 for (int i = 1; i < caretCount; ++i) std::cerr << "~";
                 std::cerr << Colors::Reset << "\n";
+            } else {
+                std::cerr << expanded << "\n";
             }
         }
     }
