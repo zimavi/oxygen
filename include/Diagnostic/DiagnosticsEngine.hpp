@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -92,7 +93,7 @@ private:
     void printDiagnostic(const Diagnostic& d) {
         // header -> file:line:column: <level>: <message>
         std::ostringstream header;
-        header << d.loc.file << ":" << d.loc.line << ":" << d.loc.column << ": ";
+        header << std::filesystem::canonical(d.loc.file).string() << ":" << d.loc.line << ":" << d.loc.column << ": ";
 
         std::string lev = levelToString(d.level);
         const char* color = levelColor(d.level);
@@ -107,7 +108,7 @@ private:
 
         for(const auto &note : d.notes) {
             std::ostringstream noteHeader;
-            noteHeader << note.loc.file << ":" << note.loc.line << ":" << note.loc.column << ": ";
+            noteHeader << std::filesystem::canonical(note.loc.file).string() << ":" << note.loc.line << ":" << note.loc.column << ": ";
             std::cerr << Colors::Cyan << noteHeader.str() << "note: " << Colors::Reset << note.message << "\n";
             printSourceSnippet(note.loc, note.length);
         }
