@@ -1,0 +1,176 @@
+#include <algorithm>
+#include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include "Diagnostic/DiagnosticsEngine.hpp"
+#include "Diagnostic/Colors.hpp"
+
+void DiagnosticsEngine::report(const Diagnostic& d) {
+    if (d.level == DiagnosticLevel::Warning && ignoreWarnings)
+        return;
+
+    Diagnostic newD;
+    if (d.level == DiagnosticLevel::Warning && warningsAsErrors) {
+        newD.loc = d.loc;
+        newD.level = DiagnosticLevel::Error;
+        newD.length = d.length;
+        newD.message = d.message;
+        newD.notes = d.notes;
+        newD.suggestion = d.suggestion;
+    } else {
+        newD = d;
+    }
+
+    diags.push_back(newD);
+    printDiagnostic(newD);
+}
+
+bool DiagnosticsEngine::hasErrors() const {
+    for (auto &d : diags) {
+        if (d.level == DiagnosticLevel::Error)
+            return true;
+    }
+    return false;
+}
+
+
+std::string DiagnosticsEngine::expandTabs(const std::string& s, unsigned tabSize) {
+    std::string out;
+    out.reserve(s.size());
+    unsigned col = 0;
+    for (char ch : s) {
+        if (ch == '\t') {
+            unsigned spaces = tabSize - (col % tabSize);
+            out.append(spaces, ' ');
+            col += spaces;
+        } else {
+            out.push_back(ch);
+            ++col;
+        }
+    }
+    return out;
+}
+
+const char* DiagnosticsEngine::levelToString(DiagnosticLevel level) {
+    switch (level) {
+        case DiagnosticLevel::Info: return "note";
+        case DiagnosticLevel::Warning: return "warning";
+        case DiagnosticLevel::Error: return "error";
+    }
+    return "";
+}
+
+const char* DiagnosticsEngine::levelColor(DiagnosticLevel level) {
+    switch (level) {
+        case DiagnosticLevel::Info: return Colors::Blue;
+        case DiagnosticLevel::Warning: return Colors::Yellow;
+        case DiagnosticLevel::Error: return Colors::Red;
+    }
+    return "";
+}
+
+void DiagnosticsEngine::printDiagnostic(const Diagnostic& d) {
+    // header -> file:line:column: <level>: <message>
+    std::ostringstream header;
+    header << std::filesystem::canonical(d.loc.file).string() << ":" << d.loc.line << ":" << d.loc.column << ": ";
+
+    std::string lev = levelToString(d.level);
+    const char* color = levelColor(d.level);
+
+    std::cerr << color << header.str() << lev << ": " << Colors::Bold << d.message << Colors::Reset << "\n";
+
+    if (!d.suggestion.empty()) {
+        std::cerr << Colors::Gray << "  hint: " << Colors::Reset << d.suggestion << "\n";
+    }
+
+    printSourceSnippet(d.loc, d.length);
+
+    for(const auto &note : d.notes) {
+        std::ostringstream noteHeader;
+        noteHeader << std::filesystem::canonical(note.loc.file).string() << ":" << note.loc.line << ":" << note.loc.column << ": ";
+        std::cerr << Colors::Cyan << noteHeader.str() << "note: " << Colors::Reset << note.message << "\n";
+        printSourceSnippet(note.loc, note.length);
+    }
+}
+
+void DiagnosticsEngine::printSourceSnippet(const SourceLocation& loc, int length) {
+    const auto& lines = srcMgr.getLines(loc.fileId);
+    if(lines.empty()) {
+        std::cerr << Colors::Gray << "  (source not available)\n" << Colors::Reset;
+        return;
+    }
+
+    int totalLines = (int)lines.size();
+    int lineIdx = std::max(1, loc.line);
+    if (lineIdx > totalLines) {
+        std::cerr << Colors::Gray << "  (location outside file: line " << loc.line << " > " << totalLines << ")\n" << Colors::Reset;
+        return;
+    }
+
+    int start = std::max(1, loc.line - context);
+    int end = std::min(totalLines, loc.line + context);
+
+    int width = 1;
+    int maxLine = end;
+    while(maxLine >= 10) { maxLine /= 10; ++width; }
+
+    for (int L = start; L <= end; ++L) {
+        std::string rawLine = lines[L - 1];
+        std::string expanded = expandTabs(rawLine);
+
+        std::ostringstream gutter;
+        if (L == loc.line) {
+            gutter << Colors::Red << ">" << Colors::Reset << " ";
+        } else {
+            gutter << "  ";
+        }
+
+        std::ostringstream ln;
+        ln << std::setw(width) << L;
+
+        std::cerr << gutter.str() << Colors::Gray << ln.str() << " | " << Colors::Reset;
+        //std::cerr << expanded << "\n";
+
+        if (L == loc.line) {
+            int col = std::max(1, loc.column);
+
+            int lineLen = (int)expanded.size();
+            int startCol = std::min(col, lineLen + 1);
+            int maxAvail = std::max(0, lineLen - (startCol - 1));
+            int caretCount = (length > 0) ? std::min(length, std::max(1, maxAvail)) : 1;
+
+            int prefixLen = (startCol > 1) ? startCol - 1 : 0;
+            if (prefixLen > expanded.size()) prefixLen = expanded.size();
+
+            int errorLen = 0;
+            if (prefixLen < expanded.size()) {
+                errorLen = std::min((int)(expanded.size() - prefixLen), caretCount);
+            }
+
+            if (errorLen > 0) {
+                std::cerr << expanded.substr(0, prefixLen) 
+                          << Colors::Bold << Colors::Red 
+                          << expanded.substr(prefixLen, errorLen) 
+                          << Colors::Reset 
+                          << expanded.substr(prefixLen + errorLen) << "\n";
+            } else {
+                std::cerr << expanded << "\n";
+            }
+
+            std::ostringstream prefixSpaces;
+            prefixSpaces << "  " << std::string(width, ' ') << " | ";
+
+            std::cerr << prefixSpaces.str();
+
+            if (startCol > 1)
+                std::cerr << std::string(startCol - 1, ' ');
+
+            std::cerr << Colors::Red << "^";
+            for (int i = 1; i < caretCount; ++i) std::cerr << "~";
+            std::cerr << Colors::Reset << "\n";
+        } else {
+            std::cerr << expanded << "\n";
+        }
+    }
+}

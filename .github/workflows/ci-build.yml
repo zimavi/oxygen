@@ -2,7 +2,7 @@ name: CI - CMake build (with LLVM)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: '**'
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
