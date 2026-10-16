@@ -1,4 +1,6 @@
 ﻿using System.CommandLine;
+using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Parsing;
 using Oxygen.Compiler.Lexer;
 using Serilog;
 
@@ -34,12 +36,15 @@ buildCommand.SetAction((ParseResult result) =>
     }
     
     Tokenizer tokenizer = new Tokenizer(Log.Logger.ForContext("SourceContext", "Lexer"));
-
-    List<IReadOnlyList<Token>> sourceTokens = [];
+    
+    List<CompilationUnit> compilationUnits = [];
 
     foreach (var source in sources)
     {
-        sourceTokens.Add(tokenizer.Tokenize(source));
+        var tokens = tokenizer.Tokenize(source);
+        var parser = new Parser(tokens, 
+            Log.Logger.ForContext("SourceContext", "Parser"));
+        compilationUnits.Add(parser.Parse());
     }
 });
 
