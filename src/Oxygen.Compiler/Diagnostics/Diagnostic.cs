@@ -37,6 +37,11 @@ public sealed class DiagnosticBag
 
     public bool HasErrors => _diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
 
+    public bool HasWarnings => _diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Warning);
+
+    public bool HasBlockingDiagnostics(bool warningsAsErrors = false) =>
+        HasErrors || warningsAsErrors && HasWarnings;
+
     public void Add(Diagnostic diagnostic) => _diagnostics.Add(diagnostic);
 
     public void Add(
@@ -48,6 +53,21 @@ public sealed class DiagnosticBag
         Add(new Diagnostic(
             phase,
             DiagnosticSeverity.Error,
+            message,
+            sourceName,
+            new SourceSpan(location, Math.Max(1, length)),
+            DiagnosticAdvice.Explain(phase, message),
+            DiagnosticAdvice.Suggest(phase, message)));
+
+    public void AddWarning(
+        DiagnosticPhase phase,
+        string message,
+        SourceLocation location,
+        int length = 1,
+        string? sourceName = null) =>
+        Add(new Diagnostic(
+            phase,
+            DiagnosticSeverity.Warning,
             message,
             sourceName,
             new SourceSpan(location, Math.Max(1, length)),

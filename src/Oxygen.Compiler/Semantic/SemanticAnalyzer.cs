@@ -8,6 +8,11 @@ namespace Oxygen.Compiler.Semantic;
 public sealed class SemanticAnalyzer
 {
     private readonly ILogger _logger;
+    private DiagnosticBag? _diagnostics;
+    private readonly HashSet<VariableSymbol> _usedVariables = [];
+    private readonly HashSet<FunctionSymbol> _usedFunctions = [];
+    private readonly List<VariableSymbol> _declaredVariables = [];
+    private string? _sourceName;
 
     public SemanticAnalyzer(ILogger? logger = null)
     {
@@ -26,6 +31,10 @@ public sealed class SemanticAnalyzer
         IReadOnlyList<string?>? sourceNames = null)
     {
         ArgumentNullException.ThrowIfNull(compilationUnits);
+        _diagnostics = diagnostics;
+        _usedVariables.Clear();
+        _usedFunctions.Clear();
+        _declaredVariables.Clear();
 
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
         var functionsByName = new Dictionary<string, List<FunctionSymbol>>(StringComparer.Ordinal);
@@ -84,6 +93,7 @@ public sealed class SemanticAnalyzer
         {
             try
             {
+                _sourceName = functionSources.GetValueOrDefault(symbol);
                 AnalyzeFunction(symbol, functionsByName, expressionTypes);
             }
             catch (SemanticException exception) when (diagnostics is not null)
@@ -97,7 +107,23 @@ public sealed class SemanticAnalyzer
             }
         }
 
+        if (diagnostics is not null)
+        {
+            foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads))
+            {
+                if (symbol.Name != "main" && !_usedFunctions.Contains(symbol))
+                {
+                    ReportWarning(
+                        $"Function '{symbol.Name}' is never called",
+                        symbol.Declaration.Location,
+                        symbol.Name.Length,
+                        functionSources.GetValueOrDefault(symbol));
+                }
+            }
+        }
+
         _logger.Information("Analyzed {FunctionCount} function(s).", functions.Count);
+        _sourceName = null;
         return new SemanticModel(functions, expressionTypes, mainFunction);
     }
 
@@ -185,16 +211,42 @@ public sealed class SemanticAnalyzer
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
         IDictionary<Expression, SemanticType> expressionTypes)
     {
-        var scope = new Scope();
+        _declaredVariables.Clear();
+        var scope = new Scope(null, MarkVariableUsed);
         foreach (var parameter in function.Parameters)
         {
-            scope.Declare(parameter.Name, new VariableSymbol(parameter.Type, false, parameter.Declaration));
+            var variable = new VariableSymbol(parameter.Type, false, parameter.Declaration, true);
+            scope.Declare(parameter.Name, variable);
+            _declaredVariables.Add(variable);
         }
 
         var hasReturn = AnalyzeBlock(function.Declaration.Body, scope, function, functions, expressionTypes);
         if (!function.ReturnType.IsVoid && !hasReturn)
         {
             throw Error($"Function '{function.Name}' must return a value", function.Declaration.Location);
+        }
+
+        if (_diagnostics is not null)
+        {
+            foreach (var variable in _declaredVariables)
+            {
+                if (!_usedVariables.Contains(variable))
+                {
+                    var name = variable.Declaration switch
+                    {
+                        ParameterDeclaration parameter => $"Parameter '{parameter.Name}' is never used",
+                        VariableDeclarationStatement declaration => $"Variable '{declaration.Name}' is never used",
+                        _ => "Declaration is never used"
+                    };
+                    var length = variable.Declaration switch
+                    {
+                        ParameterDeclaration parameter => parameter.Name.Length,
+                        VariableDeclarationStatement declaration => declaration.Name.Length,
+                        _ => 1
+                    };
+                    ReportWarning(name, variable.Declaration.Location, length);
+                }
+            }
         }
     }
 
@@ -205,11 +257,16 @@ public sealed class SemanticAnalyzer
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
         IDictionary<Expression, SemanticType> expressionTypes)
     {
-        var scope = new Scope(parent);
+        var scope = new Scope(parent, MarkVariableUsed);
         var hasReturn = false;
 
         foreach (var statement in block.Statements)
         {
+            if (hasReturn)
+            {
+                ReportWarning("Unreachable statement", statement.Location);
+            }
+
             hasReturn |= AnalyzeStatement(statement, scope, function, functions, expressionTypes);
         }
 
@@ -279,7 +336,9 @@ public sealed class SemanticAnalyzer
                 declaration.Initializer!.Location);
         }
 
-        scope.Declare(declaration.Name, new VariableSymbol(type, declaration.IsConst, declaration));
+        var variable = new VariableSymbol(type, declaration.IsConst, declaration, false);
+        scope.Declare(declaration.Name, variable);
+        _declaredVariables.Add(variable);
     }
 
     private void AnalyzeAssignment(
@@ -476,6 +535,7 @@ public sealed class SemanticAnalyzer
         }
 
         var function = matches[0];
+        _usedFunctions.Add(function);
         if (function.ReturnType.IsVoid)
         {
             throw Error($"Void function '{call.Name}' cannot be used as an expression", call.Location);
@@ -499,16 +559,38 @@ public sealed class SemanticAnalyzer
     private static SemanticException Error(string message, SourceLocation location, int length = 1) =>
         new(message, location, length);
 
-    private sealed record VariableSymbol(SemanticType Type, bool IsConst, SyntaxNode Declaration);
+    private void MarkVariableUsed(VariableSymbol variable) => _usedVariables.Add(variable);
+
+    private void ReportWarning(
+        string message,
+        SourceLocation location,
+        int length = 1,
+        string? sourceName = null)
+    {
+        _diagnostics?.AddWarning(
+            DiagnosticPhase.Semantic,
+            message,
+            location,
+            length,
+            sourceName);
+    }
+
+    private sealed record VariableSymbol(
+        SemanticType Type,
+        bool IsConst,
+        SyntaxNode Declaration,
+        bool IsParameter);
 
     private sealed class Scope
     {
         private readonly Dictionary<string, VariableSymbol> _variables = new(StringComparer.Ordinal);
         private readonly Scope? _parent;
+        private readonly Action<VariableSymbol> _markUsed;
 
-        public Scope(Scope? parent = null)
+        public Scope(Scope? parent = null, Action<VariableSymbol>? markUsed = null)
         {
             _parent = parent;
+            _markUsed = markUsed ?? (_ => { });
         }
 
         public void Declare(string name, VariableSymbol symbol) => _variables.Add(name, symbol);
@@ -517,8 +599,14 @@ public sealed class SemanticAnalyzer
 
         public VariableSymbol Lookup(string name, SourceLocation location) =>
             _variables.TryGetValue(name, out var symbol)
-                ? symbol
+                ? MarkUsed(symbol)
                 : _parent?.Lookup(name, location)
                   ?? throw Error($"Variable '{name}' is not declared", location, name.Length);
+
+        private VariableSymbol MarkUsed(VariableSymbol symbol)
+        {
+            _markUsed(symbol);
+            return symbol;
+        }
     }
 }

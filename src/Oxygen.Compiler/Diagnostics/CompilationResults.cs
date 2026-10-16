@@ -13,4 +13,10 @@ public sealed record ParseResult(
 
 public sealed record SemanticResult(
     Semantic.SemanticModel? Model,
-    IReadOnlyList<Diagnostic> Diagnostics);
+    IReadOnlyList<Diagnostic> Diagnostics)
+{
+    public bool HasBlockingDiagnostics(bool warningsAsErrors = false) =>
+        Diagnostics.Any(diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error
+            || warningsAsErrors && diagnostic.Severity == DiagnosticSeverity.Warning);
+}

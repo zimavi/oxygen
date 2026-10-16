@@ -1,5 +1,6 @@
 using System.Linq;
 using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
 using Oxygen.Compiler.Parsing;
 using Oxygen.Compiler.Semantic;
@@ -138,9 +139,65 @@ public sealed class SemanticTests
         Assert.Contains("Variable 'value' is already declared in this scope", exception.Message);
     }
 
+    [Fact]
+    public void ReportsUnusedDeclarationsAndUnreachableStatementsAsWarnings()
+    {
+        var result = AnalyzeWithDiagnostics(
+            """
+            i32 helper(i32 unused) {
+                return 1;
+                i32 unreachable = 2;
+            }
+
+            i32 main() {
+                i32 unusedLocal = 3;
+                return helper(0);
+            }
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Warning
+            && diagnostic.Message.Contains("Parameter 'unused' is never used"));
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Warning
+            && diagnostic.Message.Contains("Variable 'unusedLocal' is never used"));
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Warning
+            && diagnostic.Message == "Unreachable statement");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void ReportsUnusedNonMainFunctions()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 unused() { return 1; } i32 main() { return 0; }");
+
+        var warning = Assert.Single(result.Diagnostics, diagnostic =>
+            diagnostic.Message == "Function 'unused' is never called");
+        Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
+    }
+
+    [Fact]
+    public void WarningsCanBePromotedToBlockingDiagnostics()
+    {
+        var bag = new DiagnosticBag();
+        bag.AddWarning(DiagnosticPhase.Semantic, "unused", new SourceLocation(1, 1));
+
+        Assert.False(bag.HasBlockingDiagnostics());
+        Assert.True(bag.HasBlockingDiagnostics(warningsAsErrors: true));
+    }
+
     private SemanticModel Analyze(string source)
     {
         var unit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
         return new SemanticAnalyzer(Log.Logger).Analyze([unit]);
+    }
+
+    private SemanticResult AnalyzeWithDiagnostics(string source)
+    {
+        var tokenization = _tokenizer.TokenizeWithDiagnostics(source, "main.oxy");
+        var parsed = new Parser(tokenization.Tokens, Log.Logger).ParseWithDiagnostics("main.oxy");
+        return new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics([parsed.Unit], ["main.oxy"]);
     }
 }

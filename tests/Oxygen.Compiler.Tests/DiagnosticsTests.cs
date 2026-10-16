@@ -70,6 +70,25 @@ public sealed class DiagnosticsTests
     }
 
     [Fact]
+    public void FormatsWarningsWithWarningSeverityAndColor()
+    {
+        var diagnostic = new Diagnostic(
+            DiagnosticPhase.Semantic,
+            DiagnosticSeverity.Warning,
+            "Unused variable",
+            "main.oxy",
+            new SourceSpan(new SourceLocation(1, 5), 3));
+
+        var formatted = new DiagnosticFormatter().Format(
+            diagnostic,
+            new SourceText("main.oxy", "i32 x;"),
+            useColor: true);
+
+        Assert.Contains("main.oxy:1:5: warning: Unused variable", formatted);
+        Assert.Contains("\u001b[33m", formatted);
+    }
+
+    [Fact]
     public void AppliesIdeLikeSyntaxColorsToContextLines()
     {
         var diagnostic = new Diagnostic(

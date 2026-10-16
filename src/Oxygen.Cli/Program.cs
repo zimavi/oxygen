@@ -41,6 +41,10 @@ var debugOption = new Option<bool>("--debug")
 {
     Description = "Generate debug symbols and use the debug runtime"
 };
+var warningsAsErrorsOption = new Option<bool>("--warnings-as-errors")
+{
+    Description = "Treat semantic warnings as errors"
+};
 var optimizationOption = new Option<string>("--optimization", "-O")
 {
     Description = "Clang optimization level, for example O0 or O2",
@@ -62,6 +66,7 @@ var buildCommand = new Command("build", "Build the project")
     emitIrOption,
     clangOption,
     debugOption,
+    warningsAsErrorsOption,
     optimizationOption,
     runtimeOption,
     standardLibraryOption
@@ -96,10 +101,14 @@ buildCommand.SetAction(result =>
 
     var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
         .AnalyzeWithDiagnostics(compilationUnits, sources.Select(source => (string?)source.Name).ToList());
+    var warningsAsErrors = result.GetValue(warningsAsErrorsOption);
     if (semanticResult.Diagnostics.Count > 0)
     {
         DisplayDiagnostics(semanticResult.Diagnostics, sources, formatter, useColor);
-        return;
+        if (semanticResult.HasBlockingDiagnostics(warningsAsErrors))
+        {
+            return;
+        }
     }
 
     using var generated = new LlvmModuleGenerator().Generate("program", semanticResult.Model!);

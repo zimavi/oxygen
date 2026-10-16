@@ -15,8 +15,9 @@ public sealed class DiagnosticFormatter
             Math.Max(1, diagnostic.Span.Length),
             Math.Max(1, sourceLine.Length - start));
         var lineNumber = diagnostic.Span.Start.Line.ToString();
-        var prefix = $"{source.Name}:{diagnostic.Span.Start.Line}:{diagnostic.Span.Start.Column}: error: ";
-        var errorColor = "\u001b[31m";
+        var severity = diagnostic.Severity == DiagnosticSeverity.Warning ? "warning" : "error";
+        var prefix = $"{source.Name}:{diagnostic.Span.Start.Line}:{diagnostic.Span.Start.Column}: {severity}: ";
+        var diagnosticColor = diagnostic.Severity == DiagnosticSeverity.Warning ? "\u001b[33m" : "\u001b[31m";
         var reset = "\u001b[0m";
         var gutterColor = "\u001b[90m";
         var helpColor = "\u001b[36m";
@@ -24,7 +25,7 @@ public sealed class DiagnosticFormatter
 
         if (useColor)
         {
-            builder.Append(errorColor).Append(prefix).Append(diagnostic.Message).Append(reset);
+            builder.Append(diagnosticColor).Append(prefix).Append(diagnostic.Message).Append(reset);
         }
         else
         {
@@ -39,12 +40,12 @@ public sealed class DiagnosticFormatter
         }
 
         AppendSourceLine(builder, sourceLine, diagnostic.Span.Start.Line, useColor, gutterColor, reset,
-            start, underlineLength, errorColor);
+            start, underlineLength, diagnosticColor);
         builder.AppendLine();
 
         AppendGutter(builder, lineNumber, useColor, gutterColor, reset);
         builder.Append(' ', start)
-            .Append(useColor ? errorColor : string.Empty)
+            .Append(useColor ? diagnosticColor : string.Empty)
             .Append('^')
             .Append('~', Math.Max(0, underlineLength - 1))
             .Append(useColor ? reset : string.Empty);
