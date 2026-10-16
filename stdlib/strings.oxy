@@ -1,4 +1,4 @@
-module stdlib.strings;
+module std.strings;
 
 @extern("oxygen_string_to_c_string")
 public extern i8* to_c_string(string value);

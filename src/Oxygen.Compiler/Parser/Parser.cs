@@ -18,6 +18,8 @@ public sealed class Parser
             [TokenKind.U16] = PrimitiveType.U16,
             [TokenKind.U32] = PrimitiveType.U32,
             [TokenKind.U64] = PrimitiveType.U64,
+            [TokenKind.USize] = PrimitiveType.USize,
+            [TokenKind.ISize] = PrimitiveType.ISize,
             [TokenKind.F32] = PrimitiveType.F32,
             [TokenKind.F64] = PrimitiveType.F64,
             [TokenKind.Bool] = PrimitiveType.Bool,
@@ -274,7 +276,9 @@ public sealed class Parser
             Match(TokenKind.Private);
         var isExternal = Match(TokenKind.Extern);
         var returnType = ParseType(allowInferred: false);
-        var name = Consume(TokenKind.Identifier, "Expected a function name.").Lexeme;
+        var nameToken = Consume(TokenKind.Identifier, "Expected a function name.");
+        var name = nameToken.Lexeme;
+        var typeParameters = ParseTypeParameters();
         Consume(TokenKind.OpenParenthesis, "Expected '(' after function name.");
 
         var parameters = new List<ParameterDeclaration>();
@@ -296,7 +300,8 @@ public sealed class Parser
         if (isExternal)
             Consume(TokenKind.Semicolon, "Expected ';' after extern function declaration.");
         _logger.Debug("Parsed function {FunctionName}.", name);
-        return new FunctionDeclaration(returnType, name, parameters, body, visibility, location, annotations, isExternal);
+        return new FunctionDeclaration(returnType, name, parameters, body, visibility, location, annotations, isExternal,
+            typeParameters);
     }
 
     private IReadOnlyList<AnnotationSyntax> ParseAnnotations()
@@ -604,6 +609,7 @@ public sealed class Parser
                     qualifiedParts.Add(Consume(TokenKind.Identifier, "Expected an identifier after '.'.").Lexeme);
                 name = string.Join(".", qualifiedParts);
 
+                var typeArguments = ParseTypeArguments();
                 if (Match(TokenKind.OpenParenthesis))
                 {
                     var arguments = new List<Expression>();
@@ -616,7 +622,7 @@ public sealed class Parser
                     }
 
                     Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
-                    return new CallExpression(name, arguments, token.Location);
+                    return new CallExpression(name, arguments, token.Location, typeArguments);
                 }
 
                 if (Check(TokenKind.OpenBrace))
@@ -662,6 +668,32 @@ public sealed class Parser
                 return new BooleanLiteralExpression(true, token.Location);
             case TokenKind.False:
                 return new BooleanLiteralExpression(false, token.Location);
+            case TokenKind.Cast:
+            {
+                Consume(TokenKind.LessThan, "Expected '<' after 'cast'.");
+                var type = ParseType(allowInferred: false);
+                Consume(TokenKind.GreaterThan, "Expected '>' after cast type.");
+                Consume(TokenKind.OpenParenthesis, "Expected '(' after cast type.");
+                var operand = ParseExpression();
+                Consume(TokenKind.CloseParenthesis, "Expected ')' after cast operand.");
+                return new CastExpression(type, operand, token.Location);
+            }
+            case TokenKind.SizeOf:
+            {
+                if (Match(TokenKind.LessThan))
+                {
+                    var type = ParseType(allowInferred: false);
+                    Consume(TokenKind.GreaterThan, "Expected '>' after sizeof type.");
+                    Consume(TokenKind.OpenParenthesis, "Expected '(' after sizeof type.");
+                    Consume(TokenKind.CloseParenthesis, "Expected ')' after sizeof type.");
+                    return new SizeOfExpression(type, null, token.Location);
+                }
+
+                Consume(TokenKind.OpenParenthesis, "Expected '(' after 'sizeof'.");
+                var operand = ParseExpression();
+                Consume(TokenKind.CloseParenthesis, "Expected ')' after sizeof operand.");
+                return new SizeOfExpression(null, operand, token.Location);
+            }
             case TokenKind.OpenParenthesis:
                 if ((Check(TokenKind.Identifier) || IsType(Current.Kind)) && Peek(1).Kind == TokenKind.CloseParenthesis)
                 {
@@ -703,6 +735,64 @@ public sealed class Parser
         throw Error(
             $"{(allowInferred ? "Expected a primitive type, string, or 'var'" : "Expected a primitive type or string")}, but found {Describe(Current)}.",
             Current);
+    }
+
+    private IReadOnlyList<TypeParameterSyntax> ParseTypeParameters()
+    {
+        var parameters = new List<TypeParameterSyntax>();
+        if (!Match(TokenKind.LessThan))
+            return parameters;
+
+        do
+        {
+            var token = Consume(TokenKind.Identifier, "Expected a generic type parameter.");
+            parameters.Add(new TypeParameterSyntax(token.Lexeme, token.Location));
+        } while (Match(TokenKind.Comma));
+
+        Consume(TokenKind.GreaterThan, "Expected '>' after generic type parameters.");
+        return parameters;
+    }
+
+    private IReadOnlyList<TypeSyntax>? ParseTypeArguments()
+    {
+        if (!Check(TokenKind.LessThan) || !LooksLikeTypeArgumentCall())
+            return null;
+
+        Advance();
+        var arguments = new List<TypeSyntax>();
+        do
+        {
+            arguments.Add(ParseType(allowInferred: false));
+        } while (Match(TokenKind.Comma));
+
+        Consume(TokenKind.GreaterThan, "Expected '>' after generic type arguments.");
+        return arguments;
+    }
+
+    private bool LooksLikeTypeArgumentCall()
+    {
+        var index = _position;
+        var depth = 0;
+        while (index < _tokens.Count)
+        {
+            switch (_tokens[index].Kind)
+            {
+                case TokenKind.LessThan:
+                    depth++;
+                    break;
+                case TokenKind.GreaterThan:
+                    depth--;
+                    if (depth == 0)
+                        return index + 1 < _tokens.Count && _tokens[index + 1].Kind == TokenKind.OpenParenthesis;
+                    break;
+                case TokenKind.EndOfFile:
+                    return false;
+            }
+
+            index++;
+        }
+
+        return false;
     }
 
     private TypeSyntax ParsePointerSuffix(TypeSyntax type)

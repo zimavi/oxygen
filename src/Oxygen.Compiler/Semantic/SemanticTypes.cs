@@ -10,7 +10,8 @@ public enum SemanticTypeKind
     Struct,
     Array,
     Enum,
-    Union
+    Union,
+    GenericParameter
 }
 
 public sealed record SemanticType(
@@ -18,7 +19,8 @@ public sealed record SemanticType(
     PrimitiveType? Primitive,
     SemanticType? Pointee = null,
     string? StructName = null,
-    string? EnumName = null)
+    string? EnumName = null,
+    string? GenericParameterName = null)
 {
     public int ArrayLength { get; init; }
     public SemanticType? ElementType { get; init; }
@@ -31,6 +33,8 @@ public sealed record SemanticType(
     public static SemanticType Struct(string name) => new(SemanticTypeKind.Struct, null, null, name);
     public static SemanticType Enum(string name) => new(SemanticTypeKind.Enum, null, null, null, name);
     public static SemanticType Union(string name) => new(SemanticTypeKind.Union, null, null, null, name);
+    public static SemanticType GenericParameter(string name) =>
+        new(SemanticTypeKind.GenericParameter, null, null, null, null, name);
     public static SemanticType ArrayOf(SemanticType element, int length) => new(SemanticTypeKind.Array, null) { ElementType = element, ArrayLength = length };
 
     public bool IsVoid => Kind == SemanticTypeKind.Primitive && Primitive == PrimitiveType.Void;
@@ -41,6 +45,8 @@ public sealed record SemanticType(
     public bool IsArray => Kind == SemanticTypeKind.Array;
     public bool IsEnum => Kind == SemanticTypeKind.Enum;
     public bool IsUnion => Kind == SemanticTypeKind.Union;
+    public bool IsGenericParameter => Kind == SemanticTypeKind.GenericParameter;
+    public bool IsOpaquePointer => IsPointer && Pointee?.IsVoid == true;
 
     public bool IsNumeric =>
         Kind == SemanticTypeKind.Primitive &&
@@ -55,6 +61,7 @@ public sealed record SemanticType(
             SemanticTypeKind.Array => $"{ElementType}[{ArrayLength}]",
             SemanticTypeKind.Enum => EnumName ?? "enum",
             SemanticTypeKind.Union => EnumName ?? "union",
+            SemanticTypeKind.GenericParameter => GenericParameterName ?? "generic",
             _ => Primitive?.ToString().ToLowerInvariant() ?? "unknown"
         };
 }

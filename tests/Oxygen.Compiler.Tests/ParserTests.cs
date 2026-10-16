@@ -173,6 +173,35 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesGenericFunctionsAndExplicitTypeArguments()
+    {
+        var unit = Parse("i32 identity<T>(T value) { return 1; } i32 main() { return identity<i32>(2); }");
+
+        var generic = unit.Functions[0];
+        var parameter = Assert.Single(generic.DeclaredTypeParameters);
+        Assert.Equal("T", parameter.Name);
+        var call = Assert.IsType<CallExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(unit.Functions[1].Body.Statements)).Value);
+        Assert.Equal(PrimitiveType.I32, Assert.Single(call.ExplicitTypeArguments).Primitive);
+    }
+
+    [Fact]
+    public void ParsesGenericCastSizeOfAndVoidPointerTypes()
+    {
+        var unit = Parse(
+            "void* pointer<T>(T value) { return pointer; } i32 main() { i32 value = cast<i32>(sizeof<void*>()); return sizeof(value); }");
+
+        Assert.True(unit.Functions[0].ReturnType.IsPointer);
+        Assert.Equal(PrimitiveType.Void, unit.Functions[0].ReturnType.Pointee!.Primitive);
+        var declaration = Assert.IsType<VariableDeclarationStatement>(unit.Functions[1].Body.Statements[0]);
+        var cast = Assert.IsType<CastExpression>(declaration.Initializer);
+        Assert.IsType<SizeOfExpression>(cast.Operand);
+        var sizeOfValue = Assert.IsType<SizeOfExpression>(
+            Assert.IsType<ReturnStatement>(unit.Functions[1].Body.Statements[1]).Value);
+        Assert.NotNull(sizeOfValue.Operand);
+    }
+
+    [Fact]
     public void ParsesStructDeclarationsLiteralsAndMembers()
     {
         var unit = Parse(

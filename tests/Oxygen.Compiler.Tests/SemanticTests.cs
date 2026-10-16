@@ -108,6 +108,47 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void SpecializesGenericCallsAndValidatesPointerAndSizeof()
+    {
+        var model = Analyze(
+            "T* identity<T>(T* value) { return value; } i32 main() { i32 value = 1; i32* pointer = identity<i32>(&value); void* opaque = cast<void*>(pointer); i32* typed = cast<i32*>(opaque); u64 bytes = sizeof(typed); return 0; }");
+
+        Assert.Contains(model.Functions.Values, function =>
+            !function.IsGeneric && function.Name == "identity"
+            && function.Parameters[0].Type == SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.I32)));
+        Assert.Contains(model.ExpressionTypes.Values, type =>
+            type == SemanticType.FromPrimitive(PrimitiveType.U64));
+    }
+
+    [Fact]
+    public void InfersGenericFreeForImportedPointer()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse("import std.memory; i32 main() { i32* pointer = memory.alloc<i32>(1); memory.free(pointer); return 0; }"),
+            Parse("public module std.memory; public T* alloc<T>(u64 count) { return 0; } public void free<T>(T* pointer) { return; }")
+        ]);
+
+        Assert.Contains(model.ResolvedCalls.Values, function =>
+            function.Name == "free"
+            && function.Parameters[0].Type == SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.I32)));
+    }
+
+    [Fact]
+    public void KeepsExplicitGenericSpecializationsWithDifferentReturnTypesSeparate()
+    {
+        var model = Analyze(
+            "T* alloc<T>(u64 count) { return 0; } i32 main() { i32* first = alloc<i32>(1); i64* second = alloc<i64>(1); return 0; }");
+
+        var allocations = model.ResolvedCalls.Values.Where(function => function.Name == "alloc").ToArray();
+        Assert.Equal(2, allocations.Length);
+        Assert.Contains(allocations, function =>
+            function.ReturnType == SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.I32)));
+        Assert.Contains(allocations, function =>
+            function.ReturnType == SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.I64)));
+    }
+
+    [Fact]
     public void RejectsVoidCallsWhenAValueIsRequired()
     {
         var exception = Assert.Throws<SemanticException>(() =>
@@ -187,6 +228,24 @@ public sealed class SemanticTests
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { return true; }"));
 
         Assert.Contains("Cannot return bool from function 'main'; expected i32", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsProofBasedConstantNumericConversions()
+    {
+        var model = Analyze("i32 main() { usize value = 1 + 2; return 0; }");
+        Assert.NotNull(model.MainFunction);
+
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { u8 value = 256; return 0; }"));
+        Assert.Contains("Cannot initialize", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsExplicitPointerIntegerCasts()
+    {
+        var model = Analyze("i32 main() { i32 value = 1; i32* pointer = &value; usize address = cast<usize>(pointer); i32* restored = cast<i32*>(address); return 0; }");
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.FromPrimitive(PrimitiveType.USize));
     }
 
     [Fact]

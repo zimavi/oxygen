@@ -105,7 +105,7 @@ const char *oxygen_string_to_c_string(oxygen_string value)
     for (uint64_t index = 0; index < value.length; index++)
     {
         if (value.data[index] == '\0')
-            return NULL;
+            return value.data;
     }
 
     char *result = malloc((size_t)value.length + 1);

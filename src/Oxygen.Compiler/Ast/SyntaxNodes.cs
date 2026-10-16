@@ -90,10 +90,16 @@ public sealed record FunctionDeclaration(
     Visibility Visibility,
     SourceLocation Location,
     IReadOnlyList<AnnotationSyntax>? Annotations = null,
-    bool IsExternalDeclaration = false) : SyntaxNode(Location)
+    bool IsExternalDeclaration = false,
+    IReadOnlyList<TypeParameterSyntax>? TypeParameters = null) : SyntaxNode(Location)
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+    public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
 }
+
+public sealed record TypeParameterSyntax(
+    string Name,
+    SourceLocation Location) : SyntaxNode(Location);
 
 public sealed record ParameterDeclaration(
     TypeSyntax Type,
@@ -110,6 +116,8 @@ public enum PrimitiveType
     U16,
     U32,
     U64,
+    USize,
+    ISize,
     F32,
     F64,
     Bool,
@@ -214,7 +222,11 @@ public sealed record BinaryExpression(
 public sealed record CallExpression(
     string Name,
     IReadOnlyList<Expression> Arguments,
-    SourceLocation Location) : Expression(Location);
+    SourceLocation Location,
+    IReadOnlyList<TypeSyntax>? TypeArguments = null) : Expression(Location)
+{
+    public IReadOnlyList<TypeSyntax> ExplicitTypeArguments => TypeArguments ?? [];
+}
 
 public sealed record StructLiteralExpression(
     string TypeName,
@@ -247,6 +259,11 @@ public sealed record CastExpression(
 
 public sealed record LengthExpression(
     Expression Target,
+    SourceLocation Location) : Expression(Location);
+
+public sealed record SizeOfExpression(
+    TypeSyntax? TargetType,
+    Expression? Operand,
     SourceLocation Location) : Expression(Location);
 
 public sealed record UnionConstructionExpression(

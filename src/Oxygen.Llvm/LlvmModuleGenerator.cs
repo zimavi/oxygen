@@ -17,7 +17,10 @@ public static class OxygenNameMangler
         var signature = function.Parameters.Count == 0
             ? string.Empty
             : $"_p{function.Parameters.Count}_{parameterTypes}";
-        return $"_Ox_v0_m{moduleName.Length}{moduleName}_f{function.Name.Length}{function.Name}{signature}";
+        var specialization = function.IsSpecialized
+            ? $"_g{string.Concat(function.SpecializationArguments!.Select(EncodeType))}"
+            : string.Empty;
+        return $"_Ox_v0_m{moduleName.Length}{moduleName}_f{function.Name.Length}{function.Name}{signature}{specialization}";
     }
 
     public static string EncodeType(SemanticType type) => type.Kind == SemanticTypeKind.String
@@ -30,6 +33,7 @@ public static class OxygenNameMangler
             PrimitiveType.U32 => "u32", PrimitiveType.U64 => "u64", PrimitiveType.F32 => "f32",
             PrimitiveType.F64 => "f64", PrimitiveType.Bool => "b", PrimitiveType.Void => "v",
             _ when type.Kind == SemanticTypeKind.Pointer => "p" + EncodeType(type.Pointee!),
+            _ when type.Kind == SemanticTypeKind.GenericParameter => "g" + type.GenericParameterName!.Length + type.GenericParameterName,
             _ when type.Kind == SemanticTypeKind.Enum => "e" + type.EnumName!.Length + type.EnumName,
             _ when type.Kind == SemanticTypeKind.Union => "u" + type.EnumName!.Length + type.EnumName,
             _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
@@ -52,7 +56,10 @@ public sealed class LlvmModuleGenerator
         var context = LLVMContextRef.Create();
         var module = context.CreateModuleWithName(moduleName);
         var builder = context.CreateBuilder();
-        var symbols = model.Functions.Values.ToList();
+        var symbols = model.Functions.Values
+            .Where(symbol => !symbol.IsGeneric)
+            .Distinct()
+            .ToList();
         var llvmFunctions = new Dictionary<FunctionSymbol, LLVMValueRef>();
 
         try
@@ -221,9 +228,8 @@ public sealed class LlvmModuleGenerator
         switch (statement)
         {
             case VariableDeclarationStatement declaration:
-                var declaredType = declaration.Initializer is not null && model.ExpressionTypes.TryGetValue(
-                    declaration.Initializer, out var initializerType)
-                    ? initializerType
+                var declaredType = declaration.Type.IsInferred && declaration.Initializer is not null
+                    ? model.ExpressionTypes[declaration.Initializer]
                     : FromTypeSyntax(declaration.Type, model);
                 if (declaration.Initializer is not null)
                 {
@@ -240,12 +246,14 @@ public sealed class LlvmModuleGenerator
                         var declarationStorage = builder.BuildAlloca(
                             ToLlvmType(declaredType, model),
                             declaration.Name + ".addr");
-                        builder.BuildStore(initializer, declarationStorage);
+                        builder.BuildStore(CoerceValue(builder, initializer,
+                            model.ExpressionTypes[declaration.Initializer], declaredType, model), declarationStorage);
                         storage[declaration.Name] = declarationStorage;
                     }
                     else
                     {
-                        values[declaration.Name] = initializer;
+                        values[declaration.Name] = CoerceValue(builder, initializer,
+                            model.ExpressionTypes[declaration.Initializer], declaredType, model);
                     }
                 }
                 else
@@ -259,7 +267,8 @@ public sealed class LlvmModuleGenerator
             case AssignmentStatement assignment:
                 var assigned = EmitExpression(context, builder, assignment.Value, values, storage, model, llvmFunctions);
                 if (assignment.Target is IdentifierExpression identifier)
-                    builder.BuildStore(assigned, storage[identifier.Name]);
+                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                        model.ExpressionTypes[assignment.Target], model), storage[identifier.Name]);
                 else if (assignment.Target is MemberAccessExpression member
                     && member.Target is IdentifierExpression targetIdentifier)
                 {
@@ -289,7 +298,9 @@ public sealed class LlvmModuleGenerator
                         builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType, model), 0, false));
                 }
                 else
-                    builder.BuildRet(EmitExpression(context, builder, returnStatement.Value, values, storage, model, llvmFunctions));
+                    builder.BuildRet(CoerceValue(builder,
+                        EmitExpression(context, builder, returnStatement.Value, values, storage, model, llvmFunctions),
+                        model.ExpressionTypes[returnStatement.Value], emittedReturnType, model));
                 return true;
             case ExpressionStatement expression:
                 EmitExpression(context, builder, expression.Expression, values, storage, model, llvmFunctions);
@@ -439,8 +450,9 @@ public sealed class LlvmModuleGenerator
             IntegerLiteralExpression integer when model.ExpressionTypes[integer].IsPointer =>
                 LLVMValueRef.CreateConstNull(ToLlvmType(model.ExpressionTypes[integer], model)),
             IntegerLiteralExpression integer => LLVMValueRef.CreateConstInt(
-                LLVMTypeRef.Int32, ulong.Parse(integer.Lexeme, CultureInfo.InvariantCulture), false),
-            FloatingPointLiteralExpression floating => LLVMValueRef.CreateConstRealOfString(LLVMTypeRef.Double, floating.Lexeme),
+                ToLlvmType(model.ExpressionTypes[integer], model), ulong.Parse(NumericValue(integer.Lexeme), CultureInfo.InvariantCulture), false),
+            FloatingPointLiteralExpression floating => LLVMValueRef.CreateConstRealOfString(
+                ToLlvmType(model.ExpressionTypes[floating], model), NumericValue(floating.Lexeme)),
             StringLiteralExpression literal => EmitStringLiteral(builder, literal),
             BooleanLiteralExpression boolean => LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, boolean.Value ? 1UL : 0UL, false),
             StructLiteralExpression literal => EmitStructLiteral(context, builder, literal, values, storage, model, llvmFunctions),
@@ -452,6 +464,7 @@ public sealed class LlvmModuleGenerator
                 LLVMTypeRef.Int32, (ulong)model.ExpressionTypes[target].ArrayLength, false),
             MemberAccessExpression member => EmitMemberAccess(context, builder, member, values, storage, model, llvmFunctions),
             CastExpression cast => EmitCast(context, builder, cast, values, storage, model, llvmFunctions),
+            SizeOfExpression sizeOf => EmitSizeOf(sizeOf, model),
             BinaryExpression binary => EmitBinary(context, builder, binary, values, storage, model, llvmFunctions),
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
             CallExpression call => EmitCall(context, builder, call, values, storage, model, llvmFunctions),
@@ -576,6 +589,42 @@ public sealed class LlvmModuleGenerator
     {
         var operand = EmitExpression(context, builder, cast.Operand, values, storage, model, llvmFunctions);
         var targetType = model.ExpressionTypes[cast];
+        var operandType = model.ExpressionTypes[cast.Operand];
+        if (targetType.IsPointer && operandType.IsPointer)
+        {
+            return builder.BuildBitCast(
+                operand,
+                ToLlvmType(targetType, model),
+                "ptr.cast");
+        }
+        if (targetType.IsPointer && operandType.Primitive is PrimitiveType.USize or PrimitiveType.ISize)
+            return builder.BuildIntToPtr(operand, ToLlvmType(targetType, model), "int.to.ptr");
+        if (operandType.IsPointer && targetType.Primitive is PrimitiveType.USize or PrimitiveType.ISize)
+            return builder.BuildPtrToInt(operand, ToLlvmType(targetType, model), "ptr.to.int");
+        if (targetType.IsNumeric && operandType.IsNumeric)
+        {
+            var target = ToLlvmType(targetType, model);
+            var source = ToLlvmType(operandType, model);
+            if (targetType.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
+                return operandType.Primitive is PrimitiveType.F32 or PrimitiveType.F64
+                    ? builder.BuildFPCast(operand, target, "float.cast")
+                    : builder.BuildSIToFP(operand, target, "int.to.float");
+            if (operandType.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
+                return builder.BuildFPToSI(operand, target, "float.to.int");
+            var sourceBits = IntegerBitWidth(operandType.Primitive!.Value);
+            var targetBits = IntegerBitWidth(targetType.Primitive!.Value);
+            if (targetBits > sourceBits)
+            {
+                var signed = operandType.Primitive is PrimitiveType.I8 or PrimitiveType.I16
+                    or PrimitiveType.I32 or PrimitiveType.I64;
+                return signed
+                    ? builder.BuildSExt(operand, target, "int.cast")
+                    : builder.BuildZExt(operand, target, "int.cast");
+            }
+            return targetBits < sourceBits
+                ? builder.BuildTrunc(operand, target, "int.cast")
+                : operand;
+        }
         if (!targetType.IsEnum)
             return operand;
 
@@ -604,6 +653,45 @@ public sealed class LlvmModuleGenerator
         builder.PositionAtEnd(continueBlock);
         return operand;
     }
+
+    private static LLVMValueRef EmitSizeOf(SizeOfExpression expression, SemanticModel model)
+    {
+        var type = expression.TargetType is not null
+            ? FromTypeSyntax(expression.TargetType, model)
+            : model.ExpressionTypes[expression.Operand!];
+        return LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)SizeOf(type, model), false);
+    }
+
+    private static ulong SizeOf(SemanticType type, SemanticModel model) =>
+        type.Kind switch
+        {
+            SemanticTypeKind.Pointer => 8,
+            SemanticTypeKind.String => 16,
+            SemanticTypeKind.Array => checked((ulong)type.ArrayLength * SizeOf(type.ElementType!, model)),
+            SemanticTypeKind.Struct => (ulong)model.Structs[type.StructName!].Fields
+                .Sum(field => checked((long)SizeOf(field.Type, model))),
+            SemanticTypeKind.Union => 8,
+            SemanticTypeKind.Enum => SizeOf(SemanticType.FromPrimitive(model.Enums[type.EnumName!].UnderlyingType), model),
+            SemanticTypeKind.Primitive => type.Primitive switch
+            {
+                PrimitiveType.I8 or PrimitiveType.U8 or PrimitiveType.Bool => 1,
+                PrimitiveType.I16 or PrimitiveType.U16 => 2,
+                PrimitiveType.I32 or PrimitiveType.U32 or PrimitiveType.F32 => 4,
+                PrimitiveType.I64 or PrimitiveType.U64 or PrimitiveType.F64 => 8,
+                _ => throw new InvalidOperationException($"Type '{type}' has no size.")
+            },
+            _ => throw new InvalidOperationException($"Type '{type}' has no size.")
+        };
+
+    private static int IntegerBitWidth(PrimitiveType type) =>
+        type switch
+        {
+            PrimitiveType.I8 or PrimitiveType.U8 or PrimitiveType.Bool => 8,
+            PrimitiveType.I16 or PrimitiveType.U16 => 16,
+            PrimitiveType.I32 or PrimitiveType.U32 => 32,
+            PrimitiveType.I64 or PrimitiveType.U64 or PrimitiveType.USize or PrimitiveType.ISize => 64,
+            _ => throw new InvalidOperationException($"'{type}' is not an integer type.")
+        };
 
     private static HashSet<string> CollectStorageRequirements(BlockStatement body)
     {
@@ -717,6 +805,25 @@ public sealed class LlvmModuleGenerator
         var right = EmitExpression(context, builder, expression.Right, values, storage, model, llvmFunctions);
         var leftType = model.ExpressionTypes[expression.Left];
         var rightType = model.ExpressionTypes[expression.Right];
+        if (leftType != rightType && leftType.IsNumeric && rightType.IsNumeric)
+        {
+            if (model.ExpressionTypes[expression] != SemanticType.FromPrimitive(PrimitiveType.Bool))
+            {
+                var common = model.ExpressionTypes[expression];
+                if (leftType != common)
+                    left = CoerceValue(builder, left, leftType, common, model);
+                if (rightType != common)
+                    right = CoerceValue(builder, right, rightType, common, model);
+            }
+            else if (leftType != rightType)
+            {
+                if (leftType.IsNumeric && rightType.IsNumeric)
+                {
+                    var common = leftType;
+                    right = CoerceValue(builder, right, rightType, common, model);
+                }
+            }
+        }
         if ((leftType.IsPointer || rightType.IsPointer)
             && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
         {
@@ -823,6 +930,7 @@ public sealed class LlvmModuleGenerator
         {
             var argument = expression.Arguments[index];
             var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
+            value = CoerceValue(builder, value, model.ExpressionTypes[argument], function.Parameters[index].Type, model);
             if (UsesPointerStringAbi(function) && function.Parameters[index].Type.Kind == SemanticTypeKind.String)
             {
                 var storagePointer = builder.BuildAlloca(ToLlvmStringType(), "cabi.string");
@@ -856,11 +964,12 @@ public sealed class LlvmModuleGenerator
         PrimitiveType.I8 or PrimitiveType.U8 => LLVMTypeRef.Int8,
         PrimitiveType.I16 or PrimitiveType.U16 => LLVMTypeRef.Int16,
         PrimitiveType.I32 or PrimitiveType.U32 => LLVMTypeRef.Int32,
-        PrimitiveType.I64 or PrimitiveType.U64 => LLVMTypeRef.Int64,
+        PrimitiveType.I64 or PrimitiveType.U64 or PrimitiveType.USize or PrimitiveType.ISize => LLVMTypeRef.Int64,
         PrimitiveType.Bool => LLVMTypeRef.Int1,
         PrimitiveType.F32 => LLVMTypeRef.Float,
         PrimitiveType.F64 => LLVMTypeRef.Double,
         PrimitiveType.Void => LLVMTypeRef.Void,
+        _ when type.Kind == SemanticTypeKind.Pointer && type.IsOpaquePointer => LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
         _ when type.Kind == SemanticTypeKind.Pointer => LLVMTypeRef.CreatePointer(ToLlvmType(type.Pointee!, model), 0),
         _ when type.Kind == SemanticTypeKind.Struct => LLVMTypeRef.CreateStruct(
             model.Structs[type.StructName!].Fields.Select(field => ToLlvmType(field.Type, model)).ToArray(),
@@ -873,17 +982,54 @@ public sealed class LlvmModuleGenerator
         _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
     };
 
+    private static string NumericValue(string lexeme)
+    {
+        foreach (var suffix in new[] { "usize", "isize", "f32", "f64", "i16", "i32", "i64", "u16", "u32", "u64", "i8", "u8" })
+            if (lexeme.EndsWith(suffix, StringComparison.Ordinal))
+                return lexeme[..^suffix.Length];
+        return lexeme;
+    }
+
+    private static LLVMValueRef CoerceValue(
+        LLVMBuilderRef builder, LLVMValueRef value, SemanticType source, SemanticType target, SemanticModel model)
+    {
+        if (source == target)
+            return value;
+        if (source.IsPointer && target.IsNumeric)
+            return builder.BuildPtrToInt(value, ToLlvmType(target, model), "ptr.to.int");
+        if (target.IsPointer && source.IsNumeric)
+            return builder.BuildIntToPtr(value, ToLlvmType(target, model), "int.to.ptr");
+        if (source.IsNumeric && target.IsNumeric)
+        {
+            var targetType = ToLlvmType(target, model);
+            if (target.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
+                return source.Primitive is PrimitiveType.F32 or PrimitiveType.F64
+                    ? builder.BuildFPCast(value, targetType, "float.cast")
+                    : builder.BuildSIToFP(value, targetType, "int.to.float");
+            if (source.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
+                return builder.BuildFPToSI(value, targetType, "float.to.int");
+            var sourceBits = IntegerBitWidth(source.Primitive!.Value);
+            var targetBits = IntegerBitWidth(target.Primitive!.Value);
+            if (targetBits > sourceBits)
+                return source.Primitive is PrimitiveType.I8 or PrimitiveType.I16 or PrimitiveType.I32 or PrimitiveType.I64 or PrimitiveType.ISize
+                    ? builder.BuildSExt(value, targetType, "int.cast")
+                    : builder.BuildZExt(value, targetType, "int.cast");
+            if (targetBits < sourceBits)
+                return builder.BuildTrunc(value, targetType, "int.cast");
+        }
+        return value;
+    }
+
     private static SemanticType FromTypeSyntax(TypeSyntax syntax, SemanticModel model)
     {
+        if (syntax.IsArray)
+            return SemanticType.ArrayOf(FromTypeSyntax(syntax.ElementType!, model), syntax.ArrayLength!.Value);
+        if (syntax.IsPointer)
+            return SemanticType.PointerTo(FromTypeSyntax(syntax.Pointee!, model));
         if (syntax.IsString)
-            return syntax.IsPointer
-                ? SemanticType.PointerTo(FromTypeSyntax(syntax.Pointee!, model))
-                : SemanticType.String;
+            return SemanticType.String;
         if (syntax.NamedType is not null)
-            return syntax.IsPointer
-                ? SemanticType.PointerTo(model.Unions.ContainsKey(syntax.NamedType)
-                    ? SemanticType.Union(syntax.NamedType) : SemanticType.Enum(syntax.NamedType))
-                : model.Unions.ContainsKey(syntax.NamedType)
+            return model.Unions.ContainsKey(syntax.NamedType)
                     ? SemanticType.Union(syntax.NamedType) : SemanticType.Enum(syntax.NamedType);
         if (syntax.Primitive is null)
             throw new InvalidOperationException("Inferred variable type is missing.");

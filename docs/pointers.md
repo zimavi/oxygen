@@ -28,3 +28,21 @@ pointer, pointer-pointer arithmetic, and pointer comparisons other than
 
 Pointers are lowered as native LLVM pointers. They are not managed, reference
 counted, or garbage-collected.
+
+`void*` is an opaque pointer type. A typed pointer can be converted to or from
+`void*` only with an explicit `cast<T*>(value)`, and a `void*` cannot be
+dereferenced until it has been cast to a typed pointer.
+
+`usize` and `isize` are pointer-sized integer types. Converting between a
+pointer and either type requires an explicit cast:
+
+```oxygen
+usize address = cast<usize>(pointer);
+i32* restored = cast<i32*>(address);
+```
+
+Numeric literal suffixes such as `1u64`, `1f32`, and `1usize` select the
+literal type. Implicit numeric conversions are accepted when the compiler can
+prove they are safe: lossless widening conversions and representable
+compile-time constants are allowed. Other runtime numeric conversions require
+an explicit cast.

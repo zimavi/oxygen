@@ -52,9 +52,14 @@ public sealed record FunctionSymbol(
     Visibility Visibility,
     string? NativeName = null,
     bool IsExternal = false,
-    CInteropFunctionMetadata? CInterop = null)
+    CInteropFunctionMetadata? CInterop = null,
+    IReadOnlyList<string>? GenericParameters = null,
+    IReadOnlyList<SemanticType>? SpecializationArguments = null)
 {
     public string QualifiedName => $"{ModuleName}.{Name}";
+    public IReadOnlyList<string> DeclaredGenericParameters => GenericParameters ?? [];
+    public bool IsGeneric => DeclaredGenericParameters.Count != 0;
+    public bool IsSpecialized => SpecializationArguments is not null;
 }
 
 public sealed class SemanticModel

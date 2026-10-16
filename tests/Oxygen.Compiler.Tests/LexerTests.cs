@@ -78,6 +78,18 @@ public sealed class LexerTests
     }
 
     [Fact]
+    public void TokenizesNumericSuffixesAndSizeTypes()
+    {
+        var tokens = _lexer.Tokenize("1u64 1f32 usize isize");
+        Assert.Equal(
+            [TokenKind.IntegerLiteral, TokenKind.FloatingPointLiteral, TokenKind.USize, TokenKind.ISize,
+                TokenKind.EndOfFile],
+            tokens.Select(token => token.Kind));
+        Assert.Equal("1u64", tokens[0].Lexeme);
+        Assert.Equal("1f32", tokens[1].Lexeme);
+    }
+
+    [Fact]
     public void TokenizesAddressOfWithoutConfusingLogicalAnd()
     {
         var tokens = _lexer.Tokenize("i32* value = &other && flag;");

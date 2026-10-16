@@ -18,6 +18,9 @@ public sealed class SemanticAnalyzer
     private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, UnionSymbol> _unionsByName = new(StringComparer.Ordinal);
     private int _loopDepth;
+    private Dictionary<FunctionDeclaration, FunctionSymbol>? _functionSymbols;
+    private IReadOnlyDictionary<string, SemanticType> _genericTypes =
+        new Dictionary<string, SemanticType>(StringComparer.Ordinal);
 
     public SemanticAnalyzer(ILogger? logger = null)
     {
@@ -58,15 +61,19 @@ public sealed class SemanticAnalyzer
             return target;
         }
 
-        throw Error($"Unsupported cast from {operand} to {target}", cast.Location);
-    }
+        if (operand.IsNumeric && target.IsNumeric)
+            return target;
 
-    private static bool TryGetConstantInteger(Expression expression, out int value)
-    {
-        if (expression is IntegerLiteralExpression literal && int.TryParse(literal.Lexeme, out value))
-            return true;
-        value = 0;
-        return false;
+        if (target.IsPointer && operand.IsNumeric && IsPointerInteger(operand))
+            return target;
+        if (operand.IsPointer && target.IsNumeric && IsPointerInteger(target))
+            return target;
+
+        if (target.IsPointer && operand.IsPointer &&
+            (target.IsOpaquePointer || operand.IsOpaquePointer))
+            return target;
+
+        throw Error($"Unsupported cast from {operand} to {target}", cast.Location);
     }
 
     private static bool FitsUnderlying(int value, PrimitiveType underlying) =>
@@ -107,6 +114,7 @@ public sealed class SemanticAnalyzer
         _loopDepth = 0;
 
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
+        _functionSymbols = functions;
         foreach (var unit in compilationUnits)
         {
             var moduleName = unit.ModuleName ?? "program";
@@ -233,7 +241,10 @@ public sealed class SemanticAnalyzer
             }
             foreach (var declaration in unit.Functions)
             {
+                _genericTypes = declaration.DeclaredTypeParameters
+                    .ToDictionary(parameter => parameter.Name, parameter => SemanticType.GenericParameter(parameter.Name), StringComparer.Ordinal);
                 var symbol = CreateFunctionSymbol(declaration, moduleName);
+                _genericTypes = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
                 if (declaration.IsExternalDeclaration)
                 {
                     var nativeName = symbol.CInterop?.ExternalName ?? declaration.Name;
@@ -286,7 +297,7 @@ public sealed class SemanticAnalyzer
         }
 
         var expressionTypes = new Dictionary<Expression, SemanticType>();
-        foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads))
+        foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads).ToList())
         {
             if (symbol.IsExternal)
                 continue;
@@ -294,7 +305,8 @@ public sealed class SemanticAnalyzer
             {
                 _sourceName = functionSources.GetValueOrDefault(symbol);
                 var module = functionModules[symbol];
-                AnalyzeFunction(symbol, functionsByName, module.Name, module.Imports, expressionTypes, resolvedCalls);
+                if (!symbol.IsGeneric)
+                    AnalyzeFunction(symbol, functionsByName, module.Name, module.Imports, expressionTypes, resolvedCalls);
             }
             catch (SemanticException exception) when (diagnostics is not null)
             {
@@ -327,6 +339,7 @@ public sealed class SemanticAnalyzer
 
         _logger.Information("Analyzed {FunctionCount} function(s).", functions.Count);
         _sourceName = null;
+        _functionSymbols = null;
         var modules = functionsByName
             .GroupBy(pair => pair.Key[..pair.Key.LastIndexOf('.')], StringComparer.Ordinal)
             .ToDictionary(
@@ -368,7 +381,8 @@ public sealed class SemanticAnalyzer
             declaration,
             moduleName,
             declaration.Visibility,
-            CInterop: ParseCInterop(declaration));
+            CInterop: ParseCInterop(declaration),
+            GenericParameters: declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray());
     }
 
     private static CInteropFunctionMetadata? ParseCInterop(FunctionDeclaration declaration)
@@ -504,6 +518,8 @@ public sealed class SemanticAnalyzer
 
         if (syntax.NamedType is not null)
         {
+            if (_genericTypes.TryGetValue(syntax.NamedType, out var generic))
+                return syntax.IsPointer ? SemanticType.PointerTo(generic) : generic;
             if (_enumsByName.ContainsKey(syntax.NamedType))
             {
                 if (syntax.IsPointer)
@@ -905,8 +921,8 @@ public sealed class SemanticAnalyzer
         var type = expression switch
         {
             IdentifierExpression identifier => scope.Lookup(identifier.Name, identifier.Location).Type,
-            IntegerLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.I32),
-            FloatingPointLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.F64),
+            IntegerLiteralExpression integer => SemanticType.FromPrimitive(ParseNumericLiteralType(integer.Lexeme, false)),
+            FloatingPointLiteralExpression floating => SemanticType.FromPrimitive(ParseNumericLiteralType(floating.Lexeme, true)),
             StringLiteralExpression => SemanticType.String,
             BooleanLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.Bool),
             StructLiteralExpression literal => AnalyzeStructLiteral(
@@ -916,6 +932,7 @@ public sealed class SemanticAnalyzer
             MemberAccessExpression member => AnalyzeMemberAccess(
                 member, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             CastExpression cast => AnalyzeCast(cast, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            SizeOfExpression sizeOf => AnalyzeSizeOf(sizeOf, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             UnionConstructionExpression construction => AnalyzeUnionConstruction(construction, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
@@ -926,6 +943,25 @@ public sealed class SemanticAnalyzer
         expressionTypes[expression] = type;
         return type;
     }
+
+    private SemanticType AnalyzeSizeOf(
+        SizeOfExpression expression, Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName,
+        IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types,
+        IDictionary<CallExpression, FunctionSymbol> calls)
+    {
+        var target = expression.TargetType is not null
+            ? ResolveType(expression.TargetType)
+            : expression.Operand is not null
+                ? AnalyzeExpression(expression.Operand, scope, functions, moduleName, imports, types, calls)
+                : throw Error("sizeof requires a type or expression", expression.Location);
+        if (!IsSized(target))
+            throw Error($"Type {target} cannot be used with sizeof", expression.Location);
+        return SemanticType.FromPrimitive(PrimitiveType.U64);
+    }
+
+    private static bool IsSized(SemanticType type) =>
+        !type.IsVoid && !type.IsGenericParameter;
 
     private SemanticType AnalyzeUnionConstruction(
         UnionConstructionExpression construction, Scope scope,
@@ -1050,6 +1086,8 @@ public sealed class SemanticAnalyzer
                 throw Error("Cannot dereference a null pointer", expression.Location);
             if (!operandType.IsPointer)
                 throw Error("The '*' operator requires a pointer operand", expression.Location);
+            if (operandType.IsOpaquePointer)
+                throw Error("Cannot dereference an opaque void pointer; cast it to a typed pointer first", expression.Location);
             return operandType.Pointee!;
         }
 
@@ -1119,6 +1157,13 @@ public sealed class SemanticAnalyzer
 
         if (left != right)
         {
+            if (left.IsNumeric && right.IsNumeric)
+            {
+                if (!CanAssign(left, expression.Right, right) && !CanAssign(right, expression.Left, left))
+                    throw Error($"Binary operator '{expression.Operator}' requires matching operand types", expression.Location);
+                return isComparison ? SemanticType.FromPrimitive(PrimitiveType.Bool)
+                    : CanAssign(left, expression.Right, right) ? left : right;
+            }
             throw Error($"Binary operator '{expression.Operator}' requires matching operand types", expression.Location);
         }
 
@@ -1182,8 +1227,44 @@ public sealed class SemanticAnalyzer
         var argumentTypes = call.Arguments
             .Select(argument => AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls))
             .ToList();
+        if (call.ExplicitTypeArguments.Count != 0)
+        {
+            var generic = overloads.Where(candidate => candidate.IsGeneric).ToList();
+            if (generic.Count == 0)
+                throw Error($"Function '{call.Name}' does not accept explicit type arguments", call.Location);
+            if (generic.Count > 1)
+                throw Error($"Function '{call.Name}' has ambiguous generic overloads", call.Location);
+            var genericFunction = generic[0];
+            if (call.ExplicitTypeArguments.Count != genericFunction.DeclaredGenericParameters.Count)
+                throw Error(
+                    $"Function '{call.Name}' expects {genericFunction.DeclaredGenericParameters.Count} type argument(s), got {call.ExplicitTypeArguments.Count}",
+                    call.Location);
+            var substitutions = genericFunction.DeclaredGenericParameters
+                .Select((name, index) => (name, type: ResolveType(call.ExplicitTypeArguments[index])))
+                .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
+            var specialized = SpecializeFunction(genericFunction, substitutions, functions);
+            // Analyze the cloned body in the generic declaration's module so
+            // private helpers used by the generic remain visible.
+            AnalyzeFunction(specialized, functions, genericFunction.ModuleName, imports, expressionTypes, resolvedCalls);
+            overloads = [specialized];
+        }
+        else
+        {
+            var inferred = overloads
+                .Where(candidate => candidate.IsGeneric && candidate.Parameters.Count == argumentTypes.Count)
+                .Select(candidate => (candidate, substitutions: InferGenericSubstitutions(candidate, argumentTypes)))
+                .Where(item => item.substitutions is not null)
+                .ToList();
+            if (inferred.Count == 1)
+            {
+                var specialized = SpecializeFunction(inferred[0].candidate, inferred[0].substitutions!, functions);
+                AnalyzeFunction(specialized, functions, inferred[0].candidate.ModuleName, imports, expressionTypes, resolvedCalls);
+                overloads = overloads.Append(specialized).ToList();
+            }
+        }
         var candidates = overloads
             .Where(function => function.Parameters.Count == argumentTypes.Count)
+            .Where(function => !function.IsGeneric)
             .ToList();
 
         if (candidates.Count == 0)
@@ -1237,8 +1318,268 @@ public sealed class SemanticAnalyzer
         return function.ReturnType;
     }
 
-    private static bool CanAssign(SemanticType target, Expression value, SemanticType actual) =>
-        target == actual || (target.IsPointer && value is IntegerLiteralExpression { Lexeme: "0" } && actual.IsNumeric);
+    private static bool CanAssign(SemanticType target, Expression value, SemanticType actual)
+    {
+        if (target == actual)
+            return true;
+        if (target.IsPointer && actual.IsNumeric && TryGetConstantInteger(value, out var nullValue) && nullValue == 0)
+            return true;
+        if (!target.IsNumeric || !actual.IsNumeric)
+            return false;
+        if (IsImplicitlySafeNumericConversion(actual, target))
+            return true;
+        return TryGetConstantNumber(value, out var constant) && IsRepresentable(constant, target);
+    }
+
+    private static bool IsPointerInteger(SemanticType type) =>
+        type.Primitive is PrimitiveType.USize or PrimitiveType.ISize;
+
+    private static bool IsImplicitlySafeNumericConversion(SemanticType source, SemanticType target)
+    {
+        if (source.Primitive == target.Primitive)
+            return true;
+        if (source.Primitive == PrimitiveType.F32 && target.Primitive == PrimitiveType.F64)
+            return true;
+        if (source.Primitive is not ({ } sourcePrimitive) || target.Primitive is not ({ } targetPrimitive))
+            return false;
+        if (!IsInteger(sourcePrimitive) || !IsInteger(targetPrimitive))
+            return false;
+
+        var sourceBits = IntegerBitWidth(sourcePrimitive);
+        var targetBits = IntegerBitWidth(targetPrimitive);
+        var sourceUnsigned = IsUnsigned(sourcePrimitive);
+        var targetUnsigned = IsUnsigned(targetPrimitive);
+        return sourceUnsigned == targetUnsigned
+            ? targetBits >= sourceBits
+            : !sourceUnsigned && !targetUnsigned
+                ? targetBits >= sourceBits
+                : sourceUnsigned && !targetUnsigned && targetBits > sourceBits;
+    }
+
+    private static bool IsInteger(PrimitiveType type) =>
+        type is PrimitiveType.I8 or PrimitiveType.I16 or PrimitiveType.I32 or PrimitiveType.I64
+            or PrimitiveType.U8 or PrimitiveType.U16 or PrimitiveType.U32 or PrimitiveType.U64
+            or PrimitiveType.USize or PrimitiveType.ISize;
+
+    private static bool IsUnsigned(PrimitiveType type) =>
+        type is PrimitiveType.U8 or PrimitiveType.U16 or PrimitiveType.U32 or PrimitiveType.U64 or PrimitiveType.USize;
+
+    private static int IntegerBitWidth(PrimitiveType type) =>
+        type is PrimitiveType.I8 or PrimitiveType.U8 ? 8
+        : type is PrimitiveType.I16 or PrimitiveType.U16 ? 16
+        : type is PrimitiveType.I32 or PrimitiveType.U32 ? 32
+        : 64;
+
+    private static PrimitiveType ParseNumericLiteralType(string lexeme, bool floating)
+    {
+        var suffix = lexeme.TrimStart('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.');
+        if (suffix.Length != 0)
+            return suffix switch
+            {
+                "f32" => PrimitiveType.F32,
+                "f64" => PrimitiveType.F64,
+                "i8" => PrimitiveType.I8,
+                "i16" => PrimitiveType.I16,
+                "i32" => PrimitiveType.I32,
+                "i64" => PrimitiveType.I64,
+                "u8" => PrimitiveType.U8,
+                "u16" => PrimitiveType.U16,
+                "u32" => PrimitiveType.U32,
+                "u64" => PrimitiveType.U64,
+                "usize" => PrimitiveType.USize,
+                "isize" => PrimitiveType.ISize,
+                _ => floating ? PrimitiveType.F64 : PrimitiveType.I32
+            };
+        return floating ? PrimitiveType.F64 : PrimitiveType.I32;
+    }
+
+    private static bool TryGetConstantNumber(Expression expression, out double value)
+    {
+        static string WithoutSuffix(string lexeme)
+        {
+            foreach (var suffix in new[] { "usize", "isize", "f32", "f64", "i16", "i32", "i64", "u16", "u32", "u64", "i8", "u8" })
+                if (lexeme.EndsWith(suffix, StringComparison.Ordinal))
+                    return lexeme[..^suffix.Length];
+            return lexeme;
+        }
+        switch (expression)
+        {
+            case IntegerLiteralExpression integer:
+                return double.TryParse(WithoutSuffix(integer.Lexeme),
+                    System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value);
+            case FloatingPointLiteralExpression floating:
+                return double.TryParse(WithoutSuffix(floating.Lexeme),
+                    System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
+            case UnaryExpression { Operator: TokenKind.Minus, Operand: var operand } when TryGetConstantNumber(operand, out var negated):
+                value = -negated; return true;
+            case UnaryExpression { Operator: TokenKind.Plus, Operand: var operand }:
+                return TryGetConstantNumber(operand, out value);
+            case BinaryExpression binary when TryGetConstantNumber(binary.Left, out var left)
+                && TryGetConstantNumber(binary.Right, out var right):
+                value = binary.Operator switch
+                {
+                    TokenKind.Plus => left + right, TokenKind.Minus => left - right,
+                    TokenKind.Star => left * right, TokenKind.Slash when right != 0 => left / right,
+                    TokenKind.Percent when right != 0 => left % right, _ => double.NaN
+                };
+                return !double.IsNaN(value);
+            default:
+                value = 0; return false;
+        }
+    }
+
+    private static bool TryGetConstantInteger(Expression expression, out int value)
+    {
+        if (TryGetConstantNumber(expression, out var number)
+            && number >= int.MinValue && number <= int.MaxValue
+            && number == Math.Truncate(number))
+        {
+            value = (int)number;
+            return true;
+        }
+        value = 0;
+        return false;
+    }
+
+    private static bool IsRepresentable(double value, SemanticType target)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+            return false;
+        return target.Primitive switch
+        {
+            PrimitiveType.I8 => value >= sbyte.MinValue && value <= sbyte.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.U8 => value >= byte.MinValue && value <= byte.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.I16 => value >= short.MinValue && value <= short.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.U16 => value >= ushort.MinValue && value <= ushort.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.I32 => value >= int.MinValue && value <= int.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.U32 => value >= uint.MinValue && value <= uint.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.I64 => value >= long.MinValue && value <= long.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.U64 => value >= 0 && value <= ulong.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.ISize => value >= long.MinValue && value <= long.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.USize => value >= 0 && value <= ulong.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.F32 => value >= -float.MaxValue && value <= float.MaxValue,
+            PrimitiveType.F64 => true,
+            _ => false
+        };
+    }
+
+    private static IReadOnlyDictionary<string, SemanticType>? InferGenericSubstitutions(
+        FunctionSymbol generic,
+        IReadOnlyList<SemanticType> argumentTypes)
+    {
+        var substitutions = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
+        for (var index = 0; index < generic.Parameters.Count; index++)
+        {
+            var syntax = generic.Declaration.Parameters[index].Type;
+            var actual = argumentTypes[index];
+            while (syntax.IsPointer)
+            {
+                if (!actual.IsPointer || actual.Pointee is null || syntax.Pointee is null)
+                    return null;
+
+                syntax = syntax.Pointee;
+                actual = actual.Pointee;
+            }
+
+            if (syntax.NamedType is null || !generic.DeclaredGenericParameters.Contains(syntax.NamedType))
+                return null;
+            if (substitutions.TryGetValue(syntax.NamedType, out var existing) && existing != actual)
+                return null;
+            substitutions[syntax.NamedType] = actual;
+        }
+
+        return substitutions.Count == generic.DeclaredGenericParameters.Count ? substitutions : null;
+    }
+
+    private FunctionSymbol SpecializeFunction(
+        FunctionSymbol generic,
+        IReadOnlyDictionary<string, SemanticType> substitutions,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions)
+    {
+        var declaration = CloneFunction(generic.Declaration, substitutions);
+        var previous = _genericTypes;
+        _genericTypes = substitutions;
+        var specializationArguments = generic.DeclaredGenericParameters
+            .Select(parameter => substitutions[parameter])
+            .ToArray();
+        var symbol = new FunctionSymbol(
+            generic.Name,
+            ResolveType(declaration.ReturnType),
+            declaration.Parameters.Select(parameter =>
+                new ParameterSymbol(parameter.Name, ResolveType(parameter.Type), parameter)).ToArray(),
+            declaration, generic.ModuleName, generic.Visibility, generic.NativeName, false, generic.CInterop, [],
+            specializationArguments);
+        _genericTypes = previous;
+        var mutable = (Dictionary<string, List<FunctionSymbol>>)functions;
+        var list = mutable[generic.QualifiedName];
+        var existing = list.FirstOrDefault(candidate =>
+            candidate.IsSpecialized
+            && candidate.SpecializationArguments!.SequenceEqual(specializationArguments)
+            && HasSameParameterTypes(candidate, symbol));
+        if (existing is not null)
+            return existing;
+        list.Add(symbol);
+        _functionSymbols?.Add(symbol.Declaration, symbol);
+        _usedFunctions.Add(generic);
+        return symbol;
+    }
+
+    private static FunctionDeclaration CloneFunction(
+        FunctionDeclaration source, IReadOnlyDictionary<string, SemanticType> substitutions)
+    {
+        var types = substitutions;
+        TypeSyntax FromSemantic(SemanticType value, SourceLocation location) =>
+            value.IsPointer
+                ? new TypeSyntax(null, false, location, Pointee: FromSemantic(value.Pointee!, location))
+                : value.Kind == SemanticTypeKind.Primitive
+                    ? new TypeSyntax(value.Primitive, false, location)
+                    : value.Kind == SemanticTypeKind.String
+                        ? new TypeSyntax(null, false, location, IsString: true)
+                        : new TypeSyntax(null, false, location, NamedType: value.StructName ?? value.EnumName ?? value.GenericParameterName);
+        TypeSyntax Type(TypeSyntax syntax) =>
+            syntax.NamedType is not null && types.TryGetValue(syntax.NamedType, out var substituted)
+                ? FromSemantic(substituted, syntax.Location)
+                : syntax with
+                {
+                    Pointee = syntax.Pointee is null ? null : Type(syntax.Pointee),
+                    ElementType = syntax.ElementType is null ? null : Type(syntax.ElementType)
+                };
+        Expression Expr(Expression expression) => expression switch
+        {
+            UnaryExpression e => e with { Operand = Expr(e.Operand) },
+            BinaryExpression e => e with { Left = Expr(e.Left), Right = Expr(e.Right) },
+            CallExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray(), TypeArguments = e.TypeArguments?.Select(Type).ToArray() },
+            CastExpression e => e with { TargetType = Type(e.TargetType), Operand = Expr(e.Operand) },
+            SizeOfExpression e => e with { TargetType = e.TargetType is null ? null : Type(e.TargetType), Operand = e.Operand is null ? null : Expr(e.Operand) },
+            LengthExpression e => e with { Target = Expr(e.Target) },
+            MemberAccessExpression e => e with { Target = Expr(e.Target) },
+            IndexExpression e => e with { Target = Expr(e.Target), Index = Expr(e.Index) },
+            ArrayLiteralExpression e => e with { Elements = e.Elements.Select(Expr).ToArray() },
+            StructLiteralExpression e => e with { Fields = e.Fields.Select(f => f with { Value = Expr(f.Value) }).ToArray() },
+            UnionConstructionExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray() },
+            _ => expression
+        };
+        Statement Stmt(Statement statement) => statement switch
+        {
+            BlockStatement s => s with { Statements = s.Statements.Select(Stmt).ToArray() },
+            VariableDeclarationStatement s => s with { Type = Type(s.Type), Initializer = s.Initializer is null ? null : Expr(s.Initializer) },
+            AssignmentStatement s => s with { Target = Expr(s.Target), Value = Expr(s.Value) },
+            ReturnStatement s => s with { Value = s.Value is null ? null : Expr(s.Value) },
+            ExpressionStatement s => s with { Expression = Expr(s.Expression) },
+            IfStatement s => s with { Condition = Expr(s.Condition), Then = Stmt(s.Then), Else = s.Else is null ? null : Stmt(s.Else) },
+            WhileStatement s => s with { Condition = Expr(s.Condition), Body = Stmt(s.Body) },
+            ForStatement s => s with { Initializer = s.Initializer is null ? null : Stmt(s.Initializer), Condition = s.Condition is null ? null : Expr(s.Condition), Increment = s.Increment is null ? null : Stmt(s.Increment), Body = Stmt(s.Body) },
+            SwitchStatement s => s with { Value = Expr(s.Value), Cases = s.Cases.Select(c => c with { Body = Stmt(c.Body) }).ToArray() },
+            _ => statement
+        };
+        return source with
+        {
+            ReturnType = Type(source.ReturnType),
+            Parameters = source.Parameters.Select(p => p with { Type = Type(p.Type) }).ToArray(),
+            Body = (BlockStatement)Stmt(source.Body),
+            TypeParameters = []
+        };
+    }
 
     private static bool IsAddressable(Expression expression, Scope scope) =>
         expression switch

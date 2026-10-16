@@ -12,8 +12,9 @@ The output and marshaling helpers use the compiler's `{ ptr, i64 length }`
 string layout. The output functions receive a pointer to this structure to
 keep the C ABI explicit across platforms. Output writes exactly the supplied number of bytes, so embedded
 NUL bytes are supported.
-The Oxygen-to-C conversion allocates a NUL-terminated copy and intentionally
-leaves ownership with the runtime until a future deallocator is added.
+The Oxygen-to-C conversion allocates a NUL-terminated copy. Generic
+`stdlib.memory` allocation uses `oxygen_alloc` and `oxygen_free`; ownership of
+those allocations belongs to the Oxygen caller.
 
 From the repository root:
 

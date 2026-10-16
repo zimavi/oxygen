@@ -32,6 +32,8 @@ public sealed class Tokenizer
             ["u16"] = TokenKind.U16,
             ["u32"] = TokenKind.U32,
             ["u64"] = TokenKind.U64,
+            ["usize"] = TokenKind.USize,
+            ["isize"] = TokenKind.ISize,
             ["f32"] = TokenKind.F32,
             ["f64"] = TokenKind.F64,
             ["bool"] = TokenKind.Bool,
@@ -41,7 +43,9 @@ public sealed class Tokenizer
             ["enum"] = TokenKind.Enum,
             ["union"] = TokenKind.Union,
             ["switch"] = TokenKind.Switch,
-            ["case"] = TokenKind.Case
+            ["case"] = TokenKind.Case,
+            ["cast"] = TokenKind.Cast,
+            ["sizeof"] = TokenKind.SizeOf
         };
 
     private readonly ILogger _logger;
@@ -190,7 +194,18 @@ public sealed class Tokenizer
 
         if (IsIdentifierStart(Peek(source, position)))
         {
-            throw new LexicalException("Invalid character after numeric literal", new SourceLocation(line, column));
+            var suffixStart = position;
+            while (position < source.Length && IsIdentifierPart(source[position]))
+                Advance(source[position], ref position, ref line, ref column);
+            var suffix = source[suffixStart..position];
+            if (suffix is "f32" or "f64")
+                kind = TokenKind.FloatingPointLiteral;
+            var valid = kind == TokenKind.FloatingPointLiteral
+                ? suffix is "f32" or "f64"
+                : suffix is "i8" or "i16" or "i32" or "i64" or "u8" or "u16" or "u32" or "u64"
+                    or "usize" or "isize";
+            if (!valid)
+                throw new LexicalException("Invalid numeric literal suffix", new SourceLocation(line, column));
         }
 
         return new Token(kind, source[start..position], location);
