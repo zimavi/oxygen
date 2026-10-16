@@ -52,6 +52,14 @@ is not present yet, so the dynamic dependency list is empty by default. Use
 select another optimization level with `--optimization O0`, `--optimization
 O1`, or `--optimization O2`.
 
+To emit textual LLVM IR without compiling or linking a native executable, use
+`--emit-ir`:
+
+```powershell
+dotnet run --project .\src\Oxygen.Cli -- build .\main.oxy `
+  --emit-ir .\artifacts\program.ll
+```
+
 For example:
 
 ```powershell

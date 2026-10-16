@@ -28,6 +28,10 @@ var outputOption = new Option<FileInfo?>("--output", "-o")
     Description = "Path of the native executable to produce",
     DefaultValueFactory = _ => new FileInfo("program")
 };
+var emitIrOption = new Option<FileInfo?>("--emit-ir")
+{
+    Description = "Write textual LLVM IR to this path instead of building a native executable"
+};
 var clangOption = new Option<string>("--clang", "-c")
 {
     Description = "LLVM compiler driver used for object generation and linking",
@@ -55,13 +59,14 @@ var buildCommand = new Command("build", "Build the project")
 {
     sourcesArgument,
     outputOption,
+    emitIrOption,
     clangOption,
     debugOption,
     optimizationOption,
     runtimeOption,
     standardLibraryOption
 };
-buildCommand.SetAction((CommandParseResult result) =>
+buildCommand.SetAction(result =>
 {
     FileInfo[]? paths = result.GetValue(sourcesArgument);
     var sources = paths!.Select(file => new SourceText(file.FullName, File.ReadAllText(file.FullName))).ToList();
@@ -98,7 +103,17 @@ buildCommand.SetAction((CommandParseResult result) =>
     }
 
     using var generated = new LlvmModuleGenerator().Generate("program", semanticResult.Model!);
-    File.WriteAllText("output.ll", generated.ToString());
+    var irOutput = result.GetValue(emitIrOption);
+    if (irOutput is not null)
+    {
+        var irOutputPath = Path.GetFullPath(irOutput.FullName);
+        var irOutputDirectory = Path.GetDirectoryName(irOutputPath);
+        if (!string.IsNullOrEmpty(irOutputDirectory))
+            Directory.CreateDirectory(irOutputDirectory);
+
+        File.WriteAllText(irOutputPath, generated.ToString());
+        return;
+    }
 
     var runtimePath = result.GetValue(runtimeOption)?.FullName
         ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? "./",
