@@ -11,6 +11,28 @@ public sealed class LexerTests
     private readonly Tokenizer _lexer = new(Log.Logger);
 
     [Fact]
+    public void TokenizesControlFlowKeywords()
+    {
+        var kinds = _lexer.Tokenize("if else while for break continue")
+            .Select(token => token.Kind)
+            .ToArray();
+
+        Assert.Equal(
+            [TokenKind.If, TokenKind.Else, TokenKind.While, TokenKind.For, TokenKind.Break, TokenKind.Continue,
+                TokenKind.EndOfFile],
+            kinds);
+    }
+
+    [Fact]
+    public void TokenizesEnumKeyword()
+    {
+        Assert.Equal(
+            [TokenKind.Enum, TokenKind.Identifier, TokenKind.Colon, TokenKind.I32, TokenKind.OpenBrace,
+                TokenKind.Identifier, TokenKind.CloseBrace, TokenKind.EndOfFile],
+            _lexer.Tokenize("enum Color : i32 { Red }").Select(token => token.Kind));
+    }
+
+    [Fact]
     public void TokenizesMainFunctionAndExpression()
     {
         var tokens = _lexer.Tokenize("i32 main() { return 1 + 2; }");

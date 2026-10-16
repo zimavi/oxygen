@@ -26,6 +26,33 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesEnumsAndExplicitCasts()
+    {
+        var unit = Parse("enum Color : i32 { Red, Green = 4, Blue } i32 main() { return (i32) Color.Blue; }");
+
+        var enumeration = Assert.Single(unit.Enums);
+        Assert.Equal("Color", enumeration.Name);
+        Assert.Equal(PrimitiveType.I32, enumeration.UnderlyingType);
+        Assert.Equal(["Red", "Green", "Blue"], enumeration.Members.Select(member => member.Name));
+        var cast = Assert.IsType<CastExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(Assert.Single(unit.Functions).Body.Statements)).Value);
+        Assert.Equal(PrimitiveType.I32, cast.TargetType.Primitive);
+    }
+
+    [Fact]
+    public void ParsesTaggedUnionsAndSwitchCases()
+    {
+        var unit = Parse(
+            "union Result { Ok(i32); Error(i32); Empty; } i32 main() { Result value = Result.Ok(42); switch (value) { case Ok(number): return number; case Error(code): return code; case Empty: return 0; } }");
+
+        var union = Assert.Single(unit.Unions);
+        Assert.Equal(["Ok", "Error", "Empty"], union.Cases.Select(item => item.Name));
+        var switchStatement = Assert.IsType<SwitchStatement>(unit.Functions[0].Body.Statements[1]);
+        Assert.Equal("number", switchStatement.Cases[0].BindingName);
+        Assert.Null(switchStatement.Cases[2].BindingName);
+    }
+
+    [Fact]
     public void ParsesParametersDeclarationsAssignmentsAndCalls()
     {
         var unit = Parse("i32 add(i32 left, i32 right) { var result = left + right; result = print(result); return result; }");
@@ -69,6 +96,48 @@ public sealed class ParserTests
         Assert.Equal(["extern", "calling_convention"], annotations.Select(annotation => annotation.Name));
         Assert.Equal(["\"puts\""], annotations[0].Arguments);
         Assert.Equal(["c"], annotations[1].Arguments);
+    }
+
+    [Fact]
+    public void ParsesMultipleExternDeclarationsWithAnnotations()
+    {
+        var unit = Parse(
+            """
+            module std.io;
+            @extern("oxygen_write_stdout")
+            public extern void write_stdout(string value);
+            @extern("oxygen_write_stderr")
+            public extern void write_stderr(string value);
+            public void print(string value) {
+                write_stdout(value);
+            }
+            """);
+
+        Assert.Equal(3, unit.Functions.Count);
+        Assert.True(unit.Functions[0].IsExternalDeclaration);
+        Assert.True(unit.Functions[1].IsExternalDeclaration);
+    }
+
+    [Fact]
+    public void ParsesMultipleExternDeclarationsWithDiagnostics()
+    {
+        var result = new Parser(
+                _tokenizer.Tokenize(
+                    """
+                    module std.io;
+                    @extern("oxygen_write_stdout")
+                    public extern void write_stdout(string value);
+                    @extern("oxygen_write_stderr")
+                    public extern void write_stderr(string value);
+                    public void print(string value) {
+                        write_stdout(value);
+                    }
+                    """),
+                Log.Logger)
+            .ParseWithDiagnostics("std/io.oxy");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Unit.Functions.Count);
     }
 
     [Fact]
@@ -117,6 +186,49 @@ public sealed class ParserTests
         Assert.IsType<StructLiteralExpression>(declaration.Initializer);
         Assert.IsType<MemberAccessExpression>(
             Assert.IsType<AssignmentStatement>(unit.Functions[0].Body.Statements[1]).Target);
+    }
+
+    [Fact]
+    public void ParsesFixedArrayTypesLiteralsAndIndexing()
+    {
+        var unit = Parse("i32 main() { i32[3] values = { 1, 2, 3 }; values[1] = 4; return values[1]; }");
+
+        var declaration = Assert.IsType<VariableDeclarationStatement>(unit.Functions[0].Body.Statements[0]);
+        Assert.True(declaration.Type.IsArray);
+        Assert.Equal(3, declaration.Type.ArrayLength);
+        Assert.IsType<ArrayLiteralExpression>(declaration.Initializer);
+        var assignment = Assert.IsType<AssignmentStatement>(unit.Functions[0].Body.Statements[1]);
+        Assert.IsType<IndexExpression>(assignment.Target);
+    }
+
+    [Fact]
+    public void ParsesControlFlowStatements()
+    {
+        var unit = Parse(
+            "i32 main() { i32 value = 0; while (value < 10) { if (value == 5) { continue; } value = value + 1; } for (i32 i = 0; i < 3; i = i + 1) { if (i == 2) break; } return value; }");
+
+        var body = unit.Functions[0].Body.Statements;
+        Assert.IsType<WhileStatement>(body[1]);
+        var loop = Assert.IsType<ForStatement>(body[2]);
+        Assert.IsType<VariableDeclarationStatement>(loop.Initializer);
+        Assert.IsType<AssignmentStatement>(loop.Increment);
+        var whileBody = Assert.IsType<BlockStatement>(Assert.IsType<WhileStatement>(body[1]).Body);
+        Assert.IsType<IfStatement>(whileBody.Statements[0]);
+    }
+
+    [Fact]
+    public void ParsesPostfixIncrementAndVarAfterForLoop()
+    {
+        var unit = Parse(
+            "i32 main() { i32[2] arr = { 34, 35 }; for (i32 i = 0; i < length(arr); i++) { } var ret = arr[1]; return ret; }");
+
+        var body = unit.Functions[0].Body.Statements;
+        var loop = Assert.IsType<ForStatement>(body[1]);
+        var increment = Assert.IsType<AssignmentStatement>(loop.Increment);
+        Assert.Equal("i", Assert.IsType<IdentifierExpression>(increment.Target).Name);
+        Assert.IsType<BinaryExpression>(increment.Value);
+        var inferred = Assert.IsType<VariableDeclarationStatement>(body[2]);
+        Assert.True(inferred.Type.IsInferred);
     }
 
     private CompilationUnit Parse(string source) =>

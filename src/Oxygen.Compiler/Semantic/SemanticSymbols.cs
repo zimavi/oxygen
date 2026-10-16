@@ -18,6 +18,27 @@ public sealed record StructSymbol(
     public string QualifiedName => $"{ModuleName}.{Name}";
 }
 
+public sealed record EnumMemberSymbol(string Name, int Value, EnumMemberDeclaration Declaration);
+
+public sealed record EnumSymbol(
+    string Name,
+    PrimitiveType UnderlyingType,
+    IReadOnlyList<EnumMemberSymbol> Members,
+    EnumDeclaration Declaration,
+    Visibility Visibility)
+{
+    public IReadOnlyDictionary<string, EnumMemberSymbol> MembersByName =>
+        Members.ToDictionary(member => member.Name, StringComparer.Ordinal);
+}
+
+public sealed record UnionCaseSymbol(string Name, SemanticType? PayloadType, UnionCaseDeclaration Declaration);
+public sealed record UnionSymbol(
+    string Name, IReadOnlyList<UnionCaseSymbol> Cases, UnionDeclaration Declaration, Visibility Visibility)
+{
+    public IReadOnlyDictionary<string, UnionCaseSymbol> CasesByName =>
+        Cases.ToDictionary(item => item.Name, StringComparer.Ordinal);
+}
+
 public sealed record CInteropFunctionMetadata(
     string? ExternalName = null,
     string CallingConvention = "c");
@@ -44,7 +65,9 @@ public sealed class SemanticModel
         FunctionSymbol? mainFunction,
         IReadOnlyDictionary<string, IReadOnlyList<FunctionSymbol>> modules,
         IReadOnlyDictionary<CallExpression, FunctionSymbol> resolvedCalls,
-        IReadOnlyDictionary<string, StructSymbol> structs)
+        IReadOnlyDictionary<string, StructSymbol> structs,
+        IReadOnlyDictionary<string, EnumSymbol> enums,
+        IReadOnlyDictionary<string, UnionSymbol>? unions = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -52,6 +75,8 @@ public sealed class SemanticModel
         Modules = modules;
         ResolvedCalls = resolvedCalls;
         Structs = structs;
+        Enums = enums;
+        Unions = unions ?? new Dictionary<string, UnionSymbol>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -65,4 +90,6 @@ public sealed class SemanticModel
     public IReadOnlyDictionary<CallExpression, FunctionSymbol> ResolvedCalls { get; }
 
     public IReadOnlyDictionary<string, StructSymbol> Structs { get; }
+    public IReadOnlyDictionary<string, EnumSymbol> Enums { get; }
+    public IReadOnlyDictionary<string, UnionSymbol> Unions { get; }
 }

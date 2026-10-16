@@ -14,3 +14,49 @@ public void println(string value) {
     write_stdout(value);
     write_stdout("\n");
 }
+
+@extern("oxygen_print_i8")
+public extern void print(i8 value);
+@extern("oxygen_print_i16")
+public extern void print(i16 value);
+@extern("oxygen_print_i32")
+public extern void print(i32 value);
+@extern("oxygen_print_i64")
+public extern void print(i64 value);
+@extern("oxygen_print_u8")
+public extern void print(u8 value);
+@extern("oxygen_print_u16")
+public extern void print(u16 value);
+@extern("oxygen_print_u32")
+public extern void print(u32 value);
+@extern("oxygen_print_u64")
+public extern void print(u64 value);
+@extern("oxygen_print_f32")
+public extern void print(f32 value);
+@extern("oxygen_print_f64")
+public extern void print(f64 value);
+@extern("oxygen_print_bool")
+public extern void print(bool value);
+
+@extern("oxygen_println_i8")
+public extern void println(i8 value);
+@extern("oxygen_println_i16")
+public extern void println(i16 value);
+@extern("oxygen_println_i32")
+public extern void println(i32 value);
+@extern("oxygen_println_i64")
+public extern void println(i64 value);
+@extern("oxygen_println_u8")
+public extern void println(u8 value);
+@extern("oxygen_println_u16")
+public extern void println(u16 value);
+@extern("oxygen_println_u32")
+public extern void println(u32 value);
+@extern("oxygen_println_u64")
+public extern void println(u64 value);
+@extern("oxygen_println_f32")
+public extern void println(f32 value);
+@extern("oxygen_println_f64")
+public extern void println(f64 value);
+@extern("oxygen_println_bool")
+public extern void println(bool value);

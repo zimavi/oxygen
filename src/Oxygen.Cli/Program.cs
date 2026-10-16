@@ -89,7 +89,12 @@ buildCommand.SetAction(result =>
     var compilationUnits = resolved.Units;
     if (resolved.Diagnostics.Count > 0)
     {
-        DisplayDiagnostics(resolved.Diagnostics, sources.Count > 0 ? sources : rootSources, formatter, useColor);
+        DisplayDiagnostics(
+            resolved.Diagnostics,
+            sources.Concat(rootSources).GroupBy(source => source.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First()).ToList(),
+            formatter,
+            useColor);
         return;
     }
 

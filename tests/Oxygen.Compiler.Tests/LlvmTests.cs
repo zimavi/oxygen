@@ -222,6 +222,26 @@ public sealed class LlvmTests
         Assert.Contains("hello", ir);
     }
 
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsArrayElementPassedToAFunction()
+    {
+        var model = Analyze(
+            """
+            void print(i32 value) { return; }
+            i32 main() {
+                i32[2] values = { 34, 35 };
+                print(values[1]);
+                return 0;
+            }
+            """);
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("getelementptr [2 x i32]", ir);
+        Assert.Contains("array.element", ir);
+    }
+
     [Fact]
     public void EmbedsAndReadsNativeMetadataFromAnArtifact()
     {
@@ -318,6 +338,40 @@ public sealed class LlvmTests
 
         Assert.Contains("@_Ox_v0_m7program_f3add_p1_i32", ir);
         Assert.Contains("@_Ox_v0_m7program_f3add_p1_f64", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsControlFlowBlocksAndLoopBranches()
+    {
+        var model = Analyze(
+            """
+            i32 main() {
+                i32 value = 0;
+                while (value < 3) {
+                    if (value == 1) {
+                        continue;
+                    }
+                    value = value + 1;
+                    if (value == 2) {
+                        break;
+                    }
+                }
+                for (i32 index = 0; index < 2; index = index + 1) {
+                    value = value + index;
+                }
+                return value;
+            }
+            """);
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("while.cond", ir);
+        Assert.Contains("while.body", ir);
+        Assert.Contains("while.end", ir);
+        Assert.Contains("for.cond", ir);
+        Assert.Contains("for.increment", ir);
+        Assert.Contains("br i1", ir);
     }
 
     private static SemanticModel Analyze(string source)

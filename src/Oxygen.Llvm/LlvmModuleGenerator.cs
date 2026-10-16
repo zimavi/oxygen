@@ -22,6 +22,7 @@ public static class OxygenNameMangler
 
     public static string EncodeType(SemanticType type) => type.Kind == SemanticTypeKind.String
         ? "s"
+        : type.IsArray ? $"a{type.ArrayLength}_{EncodeType(type.ElementType!)}"
         : type.Primitive switch
         {
             PrimitiveType.I8 => "i8", PrimitiveType.I16 => "i16", PrimitiveType.I32 => "i32",
@@ -29,12 +30,17 @@ public static class OxygenNameMangler
             PrimitiveType.U32 => "u32", PrimitiveType.U64 => "u64", PrimitiveType.F32 => "f32",
             PrimitiveType.F64 => "f64", PrimitiveType.Bool => "b", PrimitiveType.Void => "v",
             _ when type.Kind == SemanticTypeKind.Pointer => "p" + EncodeType(type.Pointee!),
+            _ when type.Kind == SemanticTypeKind.Enum => "e" + type.EnumName!.Length + type.EnumName,
+            _ when type.Kind == SemanticTypeKind.Union => "u" + type.EnumName!.Length + type.EnumName,
             _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
         };
 }
 
 public sealed class LlvmModuleGenerator
 {
+    private static LLVMValueRef _arrayBoundsFailure;
+    private static LLVMValueRef _enumCastFailure;
+    private static LLVMValueRef _currentFunction;
     private static LLVMTypeRef ToLlvmStringType() =>
         LLVMTypeRef.CreateStruct([LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int64], false);
 
@@ -56,6 +62,12 @@ public sealed class LlvmModuleGenerator
                 var functionType = ToLlvmFunctionType(symbol, model);
                 llvmFunctions[symbol] = module.AddFunction(OxygenNameMangler.Mangle(symbol.ModuleName, symbol), functionType);
             }
+            var boundsFailureType = LLVMTypeRef.CreateFunction(
+                LLVMTypeRef.Void, [LLVMTypeRef.Int64, LLVMTypeRef.Int64], false);
+            _arrayBoundsFailure = module.AddFunction("__oxygen_runtime_array_bounds_failure", boundsFailureType);
+            _enumCastFailure = module.AddFunction(
+                "__oxygen_runtime_enum_cast_failure",
+                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [LLVMTypeRef.Int64], false));
 
             foreach (var symbol in symbols)
             {
@@ -139,6 +151,7 @@ public sealed class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        _currentFunction = function;
         var entry = function.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
         var values = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
@@ -164,11 +177,13 @@ public sealed class LlvmModuleGenerator
 
         var emittedReturnType = symbol.ReturnType;
         var returned = false;
+        var loops = new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue)>();
         foreach (var statement in symbol.Declaration.Body.Statements)
         {
-            EmitStatement(
+            returned = EmitStatement(
                 context,
                 builder,
+                function,
                 statement,
                 values,
                 storage,
@@ -176,7 +191,9 @@ public sealed class LlvmModuleGenerator
                 model,
                 llvmFunctions,
                 emittedReturnType,
-                ref returned);
+                loops);
+            if (returned)
+                break;
         }
 
         if (!returned)
@@ -188,9 +205,10 @@ public sealed class LlvmModuleGenerator
         }
     }
 
-    private static void EmitStatement(
+    private static bool EmitStatement(
         LLVMContextRef context,
         LLVMBuilderRef builder,
+        LLVMValueRef function,
         Statement statement,
         Dictionary<string, LLVMValueRef> values,
         Dictionary<string, LLVMValueRef> storage,
@@ -198,7 +216,7 @@ public sealed class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
         SemanticType emittedReturnType,
-        ref bool returned)
+        Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue)> loops)
     {
         switch (statement)
         {
@@ -206,7 +224,7 @@ public sealed class LlvmModuleGenerator
                 var declaredType = declaration.Initializer is not null && model.ExpressionTypes.TryGetValue(
                     declaration.Initializer, out var initializerType)
                     ? initializerType
-                    : FromTypeSyntax(declaration.Type);
+                    : FromTypeSyntax(declaration.Type, model);
                 if (declaration.Initializer is not null)
                 {
                     var initializer = EmitExpression(
@@ -237,7 +255,7 @@ public sealed class LlvmModuleGenerator
                         declaration.Name + ".addr");
                     storage[declaration.Name] = declarationStorage;
                 }
-                break;
+                return false;
             case AssignmentStatement assignment:
                 var assigned = EmitExpression(context, builder, assignment.Value, values, storage, model, llvmFunctions);
                 if (assignment.Target is IdentifierExpression identifier)
@@ -257,9 +275,11 @@ public sealed class LlvmModuleGenerator
                 }
                 else if (assignment.Target is UnaryExpression { Operator: TokenKind.Star, Operand: var operand })
                     builder.BuildStore(assigned, EmitExpression(context, builder, operand, values, storage, model, llvmFunctions));
+                else if (assignment.Target is IndexExpression index)
+                    builder.BuildStore(assigned, EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions));
                 else
                     throw new InvalidOperationException("Unsupported assignment target.");
-                break;
+                return false;
             case ReturnStatement returnStatement:
                 if (returnStatement.Value is null)
                 {
@@ -270,16 +290,16 @@ public sealed class LlvmModuleGenerator
                 }
                 else
                     builder.BuildRet(EmitExpression(context, builder, returnStatement.Value, values, storage, model, llvmFunctions));
-                returned = true;
-                break;
+                return true;
             case ExpressionStatement expression:
                 EmitExpression(context, builder, expression.Expression, values, storage, model, llvmFunctions);
-                break;
+                return false;
             case BlockStatement block:
                 foreach (var nested in block.Statements)
-                    EmitStatement(
+                    if (EmitStatement(
                         context,
                         builder,
+                        function,
                         nested,
                         values,
                         storage,
@@ -287,12 +307,119 @@ public sealed class LlvmModuleGenerator
                         model,
                         llvmFunctions,
                         emittedReturnType,
-                        ref returned);
-                break;
+                        loops))
+                        return true;
+                return false;
+            case IfStatement conditional:
+            {
+                var thenBlock = function.AppendBasicBlock("if.then");
+                var elseBlock = function.AppendBasicBlock("if.else");
+                var mergeBlock = function.AppendBasicBlock("if.end");
+                var condition = EmitExpression(context, builder, conditional.Condition, values, storage, model, llvmFunctions);
+                builder.BuildCondBr(condition, thenBlock, elseBlock);
+                builder.PositionAtEnd(thenBlock);
+                var thenTerminated = EmitStatement(context, builder, function, conditional.Then, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                if (!thenTerminated) builder.BuildBr(mergeBlock);
+                builder.PositionAtEnd(elseBlock);
+                var elseTerminated = conditional.Else is not null
+                    && EmitStatement(context, builder, function, conditional.Else, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                if (!elseTerminated) builder.BuildBr(mergeBlock);
+                if (thenTerminated && elseTerminated) return true;
+                builder.PositionAtEnd(mergeBlock);
+                return false;
+            }
+            case SwitchStatement switchStatement:
+            {
+                var value = EmitExpression(context, builder, switchStatement.Value, values, storage, model, llvmFunctions);
+                var union = model.Unions[model.ExpressionTypes[switchStatement.Value].EnumName!];
+                var end = function.AppendBasicBlock("switch.end");
+                var next = function.AppendBasicBlock("switch.case0");
+                builder.BuildBr(next);
+                var terminated = true;
+                for (var index = 0; index < switchStatement.Cases.Count; index++)
+                {
+                    var item = switchStatement.Cases[index];
+                    var caseBlock = next;
+                    next = index + 1 < switchStatement.Cases.Count
+                        ? function.AppendBasicBlock($"switch.case{index + 1}")
+                        : end;
+                    builder.PositionAtEnd(caseBlock);
+                    var tag = builder.BuildExtractValue(value, 0, "union.tag");
+                    var caseIndex = union.Cases.Select((candidate, candidateIndex) => (candidate, candidateIndex))
+                        .First(pair => pair.candidate.Name == item.CaseName).candidateIndex;
+                    var match = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, tag,
+                        LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)caseIndex, false), "union.match");
+                    var bodyBlock = function.AppendBasicBlock($"switch.body{index}");
+                    builder.BuildCondBr(match, bodyBlock, next);
+                    builder.PositionAtEnd(bodyBlock);
+                    if (item.BindingName is not null)
+                    {
+                        var payload = builder.BuildExtractValue(value, 1, "union.payload");
+                        values[item.BindingName] = payload;
+                    }
+                    var bodyTerminated = EmitStatement(context, builder, function, item.Body, values, storage,
+                        storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                    terminated &= bodyTerminated;
+                    if (!bodyTerminated) builder.BuildBr(end);
+                }
+                builder.PositionAtEnd(end);
+                return terminated;
+            }
+            case WhileStatement whileStatement:
+            {
+                var conditionBlock = function.AppendBasicBlock("while.cond");
+                var bodyBlock = function.AppendBasicBlock("while.body");
+                var endBlock = function.AppendBasicBlock("while.end");
+                builder.BuildBr(conditionBlock);
+                builder.PositionAtEnd(conditionBlock);
+                var condition = EmitExpression(context, builder, whileStatement.Condition, values, storage, model, llvmFunctions);
+                builder.BuildCondBr(condition, bodyBlock, endBlock);
+                builder.PositionAtEnd(bodyBlock);
+                loops.Push((endBlock, conditionBlock));
+                var bodyTerminated = EmitStatement(context, builder, function, whileStatement.Body, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                loops.Pop();
+                if (!bodyTerminated) builder.BuildBr(conditionBlock);
+                builder.PositionAtEnd(endBlock);
+                return false;
+            }
+            case ForStatement forStatement:
+            {
+                if (forStatement.Initializer is not null
+                    && EmitStatement(context, builder, function, forStatement.Initializer, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops))
+                    return true;
+                var conditionBlock = function.AppendBasicBlock("for.cond");
+                var bodyBlock = function.AppendBasicBlock("for.body");
+                var incrementBlock = function.AppendBasicBlock("for.increment");
+                var endBlock = function.AppendBasicBlock("for.end");
+                builder.BuildBr(conditionBlock);
+                builder.PositionAtEnd(conditionBlock);
+                var condition = forStatement.Condition is null
+                    ? LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, 1, false)
+                    : EmitExpression(context, builder, forStatement.Condition, values, storage, model, llvmFunctions);
+                builder.BuildCondBr(condition, bodyBlock, endBlock);
+                builder.PositionAtEnd(bodyBlock);
+                loops.Push((endBlock, incrementBlock));
+                var bodyTerminated = EmitStatement(context, builder, function, forStatement.Body, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                loops.Pop();
+                if (!bodyTerminated) builder.BuildBr(incrementBlock);
+                builder.PositionAtEnd(incrementBlock);
+                var incrementTerminated = forStatement.Increment is not null
+                    && EmitStatement(context, builder, function, forStatement.Increment, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                if (!incrementTerminated) builder.BuildBr(conditionBlock);
+                builder.PositionAtEnd(endBlock);
+                return false;
+            }
+            case BreakStatement:
+                builder.BuildBr(loops.Peek().Break);
+                return true;
+            case ContinueStatement:
+                builder.BuildBr(loops.Peek().Continue);
+                return true;
             default:
                 throw new InvalidOperationException($"Unsupported statement '{statement.GetType().Name}'.");
         }
     }
+
 
     private static LLVMValueRef EmitExpression(
         LLVMContextRef context,
@@ -317,12 +444,76 @@ public sealed class LlvmModuleGenerator
             StringLiteralExpression literal => EmitStringLiteral(builder, literal),
             BooleanLiteralExpression boolean => LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, boolean.Value ? 1UL : 0UL, false),
             StructLiteralExpression literal => EmitStructLiteral(context, builder, literal, values, storage, model, llvmFunctions),
+            ArrayLiteralExpression literal => EmitArrayLiteral(context, builder, literal, values, storage, model, llvmFunctions),
+            UnionConstructionExpression construction => EmitUnionConstruction(context, builder, construction, values, storage, model, llvmFunctions),
+            IndexExpression index => builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[index], model),
+                EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions), "array.element"),
+            CallExpression { Name: "length", Arguments: [var target] } => LLVMValueRef.CreateConstInt(
+                LLVMTypeRef.Int32, (ulong)model.ExpressionTypes[target].ArrayLength, false),
             MemberAccessExpression member => EmitMemberAccess(context, builder, member, values, storage, model, llvmFunctions),
+            CastExpression cast => EmitCast(context, builder, cast, values, storage, model, llvmFunctions),
             BinaryExpression binary => EmitBinary(context, builder, binary, values, storage, model, llvmFunctions),
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
             CallExpression call => EmitCall(context, builder, call, values, storage, model, llvmFunctions),
             _ => throw new InvalidOperationException($"Unsupported expression '{expression.GetType().Name}'.")
         };
+
+    private static LLVMValueRef EmitUnionConstruction(
+        LLVMContextRef context, LLVMBuilderRef builder, UnionConstructionExpression construction,
+        IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var union = model.Unions[construction.UnionName];
+        var index = union.Cases.Select((item, i) => (item, i)).First(pair => pair.item.Name == construction.CaseName).i;
+        var result = LLVMValueRef.CreateConstNull(ToLlvmType(SemanticType.Union(construction.UnionName), model));
+        result = builder.BuildInsertValue(result,
+            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)index, false), 0, "union.tag");
+        if (construction.Arguments.Count == 1)
+            result = builder.BuildInsertValue(result,
+                EmitExpression(context, builder, construction.Arguments[0], values, storage, model, llvmFunctions), 1, "union.payload");
+        return result;
+    }
+
+    private static LLVMValueRef EmitArrayLiteral(LLVMContextRef context, LLVMBuilderRef builder, ArrayLiteralExpression literal,
+        IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var result = LLVMValueRef.CreateConstNull(ToLlvmType(model.ExpressionTypes[literal], model));
+        for (var i = 0; i < literal.Elements.Count; i++)
+            result = builder.BuildInsertValue(result, EmitExpression(context, builder, literal.Elements[i], values, storage, model, llvmFunctions), (uint)i, "array.element");
+        return result;
+    }
+
+    private static LLVMValueRef EmitArrayAddress(LLVMContextRef context, LLVMBuilderRef builder, IndexExpression index,
+        IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var arrayType = model.ExpressionTypes[index.Target];
+        LLVMValueRef pointer;
+        if (index.Target is IdentifierExpression identifier && storage.TryGetValue(identifier.Name, out var identifierStorage))
+            pointer = identifierStorage;
+        else if (index.Target is IndexExpression nested)
+            pointer = EmitArrayAddress(context, builder, nested, values, storage, model, llvmFunctions);
+        else
+            throw new InvalidOperationException("Array indexing requires addressable storage.");
+        var llvmIndex = EmitExpression(context, builder, index.Index, values, storage, model, llvmFunctions);
+        if (model.ExpressionTypes[index.Index].Primitive != PrimitiveType.I64)
+            llvmIndex = builder.BuildSExt(llvmIndex, LLVMTypeRef.Int64, "array.index");
+        var length = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)arrayType.ArrayLength, false);
+        var negative = builder.BuildICmp(LLVMIntPredicate.LLVMIntSLT, llvmIndex,
+            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false), "array.negative");
+        var tooLarge = builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, llvmIndex, length, "array.too.large");
+        var invalid = builder.BuildOr(negative, tooLarge, "array.invalid");
+        var failureBlock = _currentFunction.AppendBasicBlock("array.bounds.failure");
+        var continueBlock = _currentFunction.AppendBasicBlock("array.bounds.continue");
+        builder.BuildCondBr(invalid, failureBlock, continueBlock);
+        builder.PositionAtEnd(failureBlock);
+        builder.BuildCall2(_arrayBoundsFailure.FunctionType, _arrayBoundsFailure, [llvmIndex, length]);
+        builder.BuildUnreachable();
+        builder.PositionAtEnd(continueBlock);
+        return builder.BuildGEP2(ToLlvmType(arrayType, model), pointer,
+            new LLVMValueRef[] { LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false), llvmIndex }, (ReadOnlySpan<char>)"array.address");
+    }
 
     private static LLVMValueRef EmitStructLiteral(
         LLVMContextRef context,
@@ -357,12 +548,61 @@ public sealed class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        if (member.Target is IdentifierExpression enumIdentifier
+            && model.Enums.TryGetValue(enumIdentifier.Name, out var enumSymbol))
+        {
+            var value = enumSymbol.Members.First(candidate => candidate.Name == member.MemberName).Value;
+            return LLVMValueRef.CreateConstInt(
+                ToLlvmType(SemanticType.Enum(enumSymbol.Name), model),
+                unchecked((ulong)value),
+                false);
+        }
         var target = EmitExpression(context, builder, member.Target, values, storage, model, llvmFunctions);
         var targetType = model.ExpressionTypes[member.Target];
         var index = model.Structs[targetType.StructName!].Fields
             .Select((field, index) => (field, index))
             .First(pair => pair.field.Name == member.MemberName).index;
         return builder.BuildExtractValue(target, (uint)index, $"struct.{member.MemberName}");
+    }
+
+    private static LLVMValueRef EmitCast(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        CastExpression cast,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var operand = EmitExpression(context, builder, cast.Operand, values, storage, model, llvmFunctions);
+        var targetType = model.ExpressionTypes[cast];
+        if (!targetType.IsEnum)
+            return operand;
+
+        if (cast.Operand is IntegerLiteralExpression)
+            return operand;
+
+        var enumSymbol = model.Enums[targetType.EnumName!];
+        var enumLlvmType = ToLlvmType(targetType, model);
+        LLVMValueRef valid = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, 0, false);
+        foreach (var member in enumSymbol.Members)
+        {
+            var candidate = LLVMValueRef.CreateConstInt(enumLlvmType, unchecked((ulong)member.Value), false);
+            var match = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, operand, candidate, "enum.member");
+            valid = builder.BuildOr(valid, match, "enum.valid");
+        }
+        var invalid = builder.BuildNot(valid, "enum.invalid");
+        var failureBlock = _currentFunction.AppendBasicBlock("enum.cast.failure");
+        var continueBlock = _currentFunction.AppendBasicBlock("enum.cast.continue");
+        builder.BuildCondBr(invalid, failureBlock, continueBlock);
+        builder.PositionAtEnd(failureBlock);
+        var failureValue = enumSymbol.UnderlyingType is PrimitiveType.I64 or PrimitiveType.U64
+            ? operand
+            : builder.BuildZExt(operand, LLVMTypeRef.Int64, "enum.value");
+        builder.BuildCall2(_enumCastFailure.FunctionType, _enumCastFailure, [failureValue]);
+        builder.BuildUnreachable();
+        builder.PositionAtEnd(continueBlock);
+        return operand;
     }
 
     private static HashSet<string> CollectStorageRequirements(BlockStatement body)
@@ -382,6 +622,8 @@ public sealed class LlvmModuleGenerator
                     requirements.Add(identifier.Name);
                 else if (assignment.Target is MemberAccessExpression { Target: IdentifierExpression memberIdentifier })
                     requirements.Add(memberIdentifier.Name);
+                else if (assignment.Target is IndexExpression { Target: IdentifierExpression indexedIdentifier })
+                    requirements.Add(indexedIdentifier.Name);
                 CollectStorageRequirements(assignment.Target, requirements);
                 CollectStorageRequirements(assignment.Value, requirements);
                 break;
@@ -397,6 +639,25 @@ public sealed class LlvmModuleGenerator
             case BlockStatement block:
                 foreach (var nested in block.Statements)
                     CollectStorageRequirements(nested, requirements);
+                break;
+            case IfStatement conditional:
+                CollectStorageRequirements(conditional.Condition, requirements);
+                CollectStorageRequirements(conditional.Then, requirements);
+                if (conditional.Else is not null) CollectStorageRequirements(conditional.Else, requirements);
+                break;
+            case WhileStatement loop:
+                CollectStorageRequirements(loop.Condition, requirements);
+                CollectStorageRequirements(loop.Body, requirements);
+                break;
+            case ForStatement loop:
+                if (loop.Initializer is not null) CollectStorageRequirements(loop.Initializer, requirements);
+                if (loop.Condition is not null) CollectStorageRequirements(loop.Condition, requirements);
+                if (loop.Increment is not null) CollectStorageRequirements(loop.Increment, requirements);
+                CollectStorageRequirements(loop.Body, requirements);
+                break;
+            case SwitchStatement switchStatement:
+                CollectStorageRequirements(switchStatement.Value, requirements);
+                foreach (var item in switchStatement.Cases) CollectStorageRequirements(item.Body, requirements);
                 break;
         }
     }
@@ -418,6 +679,18 @@ public sealed class LlvmModuleGenerator
             case CallExpression call:
                 foreach (var argument in call.Arguments)
                     CollectStorageRequirements(argument, requirements);
+                break;
+            case MemberAccessExpression member:
+                CollectStorageRequirements(member.Target, requirements);
+                break;
+            case IndexExpression index:
+                if (index.Target is IdentifierExpression arrayIdentifier)
+                    requirements.Add(arrayIdentifier.Name);
+                CollectStorageRequirements(index.Target, requirements);
+                CollectStorageRequirements(index.Index, requirements);
+                break;
+            case CastExpression cast:
+                CollectStorageRequirements(cast.Operand, requirements);
                 break;
         }
     }
@@ -464,6 +737,38 @@ public sealed class LlvmModuleGenerator
                     new LLVMValueRef[] { builder.BuildNeg(index, "ptr.neg") }, (ReadOnlySpan<char>)"ptr.sub");
         }
         var isFloatingPoint = model.ExpressionTypes[expression].Primitive is PrimitiveType.F32 or PrimitiveType.F64;
+        if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals
+            or TokenKind.LessThan or TokenKind.LessThanOrEquals
+            or TokenKind.GreaterThan or TokenKind.GreaterThanOrEquals)
+        {
+            if (isFloatingPoint)
+            {
+                var predicate = expression.Operator switch
+                {
+                    TokenKind.EqualsEquals => LLVMRealPredicate.LLVMRealOEQ,
+                    TokenKind.BangEquals => LLVMRealPredicate.LLVMRealONE,
+                    TokenKind.LessThan => LLVMRealPredicate.LLVMRealOLT,
+                    TokenKind.LessThanOrEquals => LLVMRealPredicate.LLVMRealOLE,
+                    TokenKind.GreaterThan => LLVMRealPredicate.LLVMRealOGT,
+                    _ => LLVMRealPredicate.LLVMRealOGE
+                };
+                return builder.BuildFCmp(predicate, left, right, "fcmp");
+            }
+            var intPredicate = expression.Operator switch
+            {
+                TokenKind.EqualsEquals => LLVMIntPredicate.LLVMIntEQ,
+                TokenKind.BangEquals => LLVMIntPredicate.LLVMIntNE,
+                TokenKind.LessThan => LLVMIntPredicate.LLVMIntSLT,
+                TokenKind.LessThanOrEquals => LLVMIntPredicate.LLVMIntSLE,
+                TokenKind.GreaterThan => LLVMIntPredicate.LLVMIntSGT,
+                _ => LLVMIntPredicate.LLVMIntSGE
+            };
+            return builder.BuildICmp(intPredicate, left, right, "icmp");
+        }
+        if (expression.Operator is TokenKind.AmpersandAmpersand or TokenKind.PipePipe)
+            return expression.Operator == TokenKind.AmpersandAmpersand
+                ? builder.BuildAnd(left, right, "and")
+                : builder.BuildOr(left, right, "or");
         return expression.Operator switch
         {
             TokenKind.Plus when isFloatingPoint => builder.BuildFAdd(left, right, "fadd"),
@@ -501,6 +806,17 @@ public sealed class LlvmModuleGenerator
 
     private static LLVMValueRef EmitCall(LLVMContextRef context, LLVMBuilderRef builder, CallExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        var parts = expression.Name.Split('.');
+        if (parts.Length == 2 && model.Unions.TryGetValue(parts[0], out var union))
+        {
+            var index = union.Cases.Select((item, i) => (item, i)).First(pair => pair.item.Name == parts[1]).i;
+            var result = LLVMValueRef.CreateConstNull(ToLlvmType(SemanticType.Union(parts[0]), model));
+            result = builder.BuildInsertValue(result, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)index, false), 0, "union.tag");
+            if (expression.Arguments.Count == 1)
+                result = builder.BuildInsertValue(result,
+                    EmitExpression(context, builder, expression.Arguments[0], values, storage, model, llvmFunctions), 1, "union.payload");
+            return result;
+        }
         var function = model.ResolvedCalls[expression];
         var arguments = new LLVMValueRef[expression.Arguments.Count];
         for (var index = 0; index < expression.Arguments.Count; index++)
@@ -550,15 +866,25 @@ public sealed class LlvmModuleGenerator
             model.Structs[type.StructName!].Fields.Select(field => ToLlvmType(field.Type, model)).ToArray(),
             model.Structs[type.StructName!].IsPacked),
         _ when type.Kind == SemanticTypeKind.String => ToLlvmStringType(),
+        _ when type.Kind == SemanticTypeKind.Array => LLVMTypeRef.CreateArray(ToLlvmType(type.ElementType!, model), (uint)type.ArrayLength),
+        _ when type.Kind == SemanticTypeKind.Enum => ToLlvmType(
+            SemanticType.FromPrimitive(model.Enums[type.EnumName!].UnderlyingType), model),
+        _ when type.Kind == SemanticTypeKind.Union => LLVMTypeRef.CreateStruct([LLVMTypeRef.Int32, LLVMTypeRef.Int32], false),
         _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
     };
 
-    private static SemanticType FromTypeSyntax(TypeSyntax syntax)
+    private static SemanticType FromTypeSyntax(TypeSyntax syntax, SemanticModel model)
     {
         if (syntax.IsString)
             return syntax.IsPointer
-                ? SemanticType.PointerTo(FromTypeSyntax(syntax.Pointee!))
+                ? SemanticType.PointerTo(FromTypeSyntax(syntax.Pointee!, model))
                 : SemanticType.String;
+        if (syntax.NamedType is not null)
+            return syntax.IsPointer
+                ? SemanticType.PointerTo(model.Unions.ContainsKey(syntax.NamedType)
+                    ? SemanticType.Union(syntax.NamedType) : SemanticType.Enum(syntax.NamedType))
+                : model.Unions.ContainsKey(syntax.NamedType)
+                    ? SemanticType.Union(syntax.NamedType) : SemanticType.Enum(syntax.NamedType);
         if (syntax.Primitive is null)
             throw new InvalidOperationException("Inferred variable type is missing.");
         var type = SemanticType.FromPrimitive(syntax.Primitive.Value);

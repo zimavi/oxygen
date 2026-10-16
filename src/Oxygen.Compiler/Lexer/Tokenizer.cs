@@ -11,6 +11,12 @@ public sealed class Tokenizer
             ["true"] = TokenKind.True,
             ["false"] = TokenKind.False,
             ["return"] = TokenKind.Return,
+            ["if"] = TokenKind.If,
+            ["else"] = TokenKind.Else,
+            ["while"] = TokenKind.While,
+            ["for"] = TokenKind.For,
+            ["break"] = TokenKind.Break,
+            ["continue"] = TokenKind.Continue,
             ["module"] = TokenKind.Module,
             ["import"] = TokenKind.Import,
             ["public"] = TokenKind.Public,
@@ -31,7 +37,11 @@ public sealed class Tokenizer
             ["bool"] = TokenKind.Bool,
             ["void"] = TokenKind.Void,
             ["string"] = TokenKind.String,
-            ["struct"] = TokenKind.Struct
+            ["struct"] = TokenKind.Struct,
+            ["enum"] = TokenKind.Enum,
+            ["union"] = TokenKind.Union,
+            ["switch"] = TokenKind.Switch,
+            ["case"] = TokenKind.Case
         };
 
     private readonly ILogger _logger;
@@ -236,6 +246,8 @@ public sealed class Tokenizer
             {
                 '(' => TokenKind.OpenParenthesis,
                 ')' => TokenKind.CloseParenthesis,
+                '[' => TokenKind.OpenBracket,
+                ']' => TokenKind.CloseBracket,
                 '@' => TokenKind.At,
                 '{' => TokenKind.OpenBrace,
                 '}' => TokenKind.CloseBrace,

@@ -40,6 +40,50 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AnalyzesEnumMembersAndCheckedCasts()
+    {
+        var model = Analyze(
+            """
+            enum Color : i32 { Red, Green = 4, Blue }
+            i32 main() {
+                Color color = (Color) 4;
+                return (i32) color;
+            }
+            """);
+
+        Assert.Equal(3, model.Enums["Color"].Members.Count);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), model.ExpressionTypes.Values.Last());
+    }
+
+    [Fact]
+    public void AnalyzesTaggedUnionConstructionAndExhaustiveSwitch()
+    {
+        var model = Analyze(
+            "union Result { Ok(i32); Error(i32); Empty; } i32 main() { Result value = Result.Ok(42); switch (value) { case Ok(number): return number; case Error(code): return code; case Empty: return 0; } }");
+
+        Assert.Equal(3, model.Unions["Result"].Cases.Count);
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Union("Result"));
+    }
+
+    [Fact]
+    public void RejectsNonExhaustiveUnionSwitch()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("union Result { Ok(i32); Empty; } i32 main() { Result value = Result.Ok(1); switch (value) { case Ok(number): return number; } }"));
+
+        Assert.Contains("must handle every case", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsInvalidConstantEnumCast()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("enum Color : i32 { Red, Green } i32 main() { return (i32) (Color) 5; }"));
+
+        Assert.Contains("is not a member of enum 'Color'", exception.Message);
+    }
+
+    [Fact]
     public void FindsVoidMainFunction()
     {
         var model = Analyze("void main() { return; }");
@@ -164,6 +208,22 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ChecksFixedArrayLiteralLengthAndConstantIndices()
+    {
+        var model = Analyze("i32 main() { i32[2] values = { 1, 2 }; values[1] = 3; return values[0]; }");
+
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), model.ExpressionTypes.Values.Last());
+
+        var lengthError = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32[2] values = { 1 }; return 0; }"));
+        Assert.Contains("expects 2 element(s)", lengthError.Message);
+
+        var indexError = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32[2] values = { 1, 2 }; return values[2]; }"));
+        Assert.Contains("out of bounds", indexError.Message);
+    }
+
+    [Fact]
     public void ReportsUnusedDeclarationsAndUnreachableStatementsAsWarnings()
     {
         var result = AnalyzeWithDiagnostics(
@@ -223,6 +283,22 @@ public sealed class SemanticTests
             result.Diagnostics,
             diagnostic => diagnostic.Message.Contains("Function 'api_function' is never called"));
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RequiresBooleanControlFlowConditionsAndValidLoopJumps()
+    {
+        var model = Analyze(
+            "i32 main() { i32 value = 0; for (var i = 0; i < 3; i = i + 1) { if (i == 1) continue; value = value + 1; } while (value < 4) { break; } return value; }");
+        Assert.NotNull(model.MainFunction);
+
+        var conditionError = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { while (1) { break; } return 0; }"));
+        Assert.Contains("conditions must be bool", conditionError.Message);
+
+        var jumpError = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { break; return 0; }"));
+        Assert.Contains("only valid inside a loop", jumpError.Message);
     }
 
     [Fact]
@@ -297,6 +373,43 @@ public sealed class SemanticTests
 
         Assert.Contains(model.ResolvedCalls.Values, symbol => symbol.QualifiedName == "stdlib.io.print");
         Assert.Contains(model.ResolvedCalls.Values, symbol => symbol.QualifiedName == "stdlib.io.println");
+    }
+
+    [Fact]
+    public void ResolvesStandardIoPrimitiveOverloads()
+    {
+        var main = Parse(
+            """
+            import stdlib.io;
+            i32 main() {
+                io.print(42);
+                io.println(2.5);
+                io.print(true);
+                return 0;
+            }
+            """);
+        var library = Parse(
+            """
+            public module stdlib.io;
+            @extern("oxygen_print_i32")
+            public extern void print(i32 value);
+            @extern("oxygen_println_f64")
+            public extern void println(f64 value);
+            @extern("oxygen_print_bool")
+            public extern void print(bool value);
+            """);
+
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([main, library]);
+
+        Assert.Contains(model.ResolvedCalls.Values, symbol =>
+            symbol.QualifiedName == "stdlib.io.print" &&
+            symbol.Parameters.Single().Type == SemanticType.FromPrimitive(PrimitiveType.I32));
+        Assert.Contains(model.ResolvedCalls.Values, symbol =>
+            symbol.QualifiedName == "stdlib.io.println" &&
+            symbol.Parameters.Single().Type == SemanticType.FromPrimitive(PrimitiveType.F64));
+        Assert.Contains(model.ResolvedCalls.Values, symbol =>
+            symbol.QualifiedName == "stdlib.io.print" &&
+            symbol.Parameters.Single().Type == SemanticType.FromPrimitive(PrimitiveType.Bool));
     }
 
     [Fact]

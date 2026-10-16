@@ -15,6 +15,9 @@ public sealed class SemanticAnalyzer
     private readonly List<VariableSymbol> _declaredVariables = [];
     private string? _sourceName;
     private readonly Dictionary<string, StructSymbol> _structsByName = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, UnionSymbol> _unionsByName = new(StringComparer.Ordinal);
+    private int _loopDepth;
 
     public SemanticAnalyzer(ILogger? logger = null)
     {
@@ -23,6 +26,60 @@ public sealed class SemanticAnalyzer
             .WriteTo.Console()
             .CreateLogger();
     }
+
+    private SemanticType AnalyzeCast(
+        CastExpression cast,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        var target = ResolveType(cast.TargetType);
+        var operand = AnalyzeExpression(cast.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        if (target.IsEnum)
+        {
+            var enumSymbol = _enumsByName[target.EnumName!];
+            var underlying = SemanticType.FromPrimitive(enumSymbol.UnderlyingType);
+            if (operand != underlying)
+                throw Error($"Cannot cast {operand} to {target}; expected {underlying}", cast.Operand.Location);
+            if (TryGetConstantInteger(cast.Operand, out var value)
+                && !enumSymbol.Members.Any(member => member.Value == value))
+                throw Error($"Value {value} is not a member of enum '{enumSymbol.Name}'", cast.Operand.Location);
+            return target;
+        }
+
+        if (operand.IsEnum)
+        {
+            var enumSymbol = _enumsByName[operand.EnumName!];
+            if (target != SemanticType.FromPrimitive(enumSymbol.UnderlyingType))
+                throw Error($"Enum '{enumSymbol.Name}' can only be cast to {enumSymbol.UnderlyingType}", cast.TargetType.Location);
+            return target;
+        }
+
+        throw Error($"Unsupported cast from {operand} to {target}", cast.Location);
+    }
+
+    private static bool TryGetConstantInteger(Expression expression, out int value)
+    {
+        if (expression is IntegerLiteralExpression literal && int.TryParse(literal.Lexeme, out value))
+            return true;
+        value = 0;
+        return false;
+    }
+
+    private static bool FitsUnderlying(int value, PrimitiveType underlying) =>
+        underlying switch
+        {
+            PrimitiveType.I8 => value is >= sbyte.MinValue and <= sbyte.MaxValue,
+            PrimitiveType.U8 => value is >= byte.MinValue and <= byte.MaxValue,
+            PrimitiveType.I16 => value is >= short.MinValue and <= short.MaxValue,
+            PrimitiveType.U16 => value is >= ushort.MinValue and <= ushort.MaxValue,
+            PrimitiveType.I32 or PrimitiveType.U32 or PrimitiveType.I64 or PrimitiveType.U64 => value >= 0
+                || underlying is PrimitiveType.I32 or PrimitiveType.I64,
+            _ => false
+        };
 
     public SemanticModel Analyze(IReadOnlyList<CompilationUnit> compilationUnits)
         => AnalyzeCore(compilationUnits, null, null);
@@ -45,11 +102,58 @@ public sealed class SemanticAnalyzer
         _usedFunctions.Clear();
         _declaredVariables.Clear();
         _structsByName.Clear();
+        _enumsByName.Clear();
+        _unionsByName.Clear();
+        _loopDepth = 0;
 
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
         foreach (var unit in compilationUnits)
         {
             var moduleName = unit.ModuleName ?? "program";
+            foreach (var declaration in unit.Enums)
+            {
+                if (_enumsByName.ContainsKey(declaration.Name) || _structsByName.ContainsKey(declaration.Name))
+                    throw Error($"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
+                var members = new List<EnumMemberSymbol>();
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                var values = new HashSet<int>();
+                var next = 0;
+                foreach (var member in declaration.Members)
+                {
+                    if (!names.Add(member.Name))
+                        throw Error($"Enum '{declaration.Name}' contains duplicate member '{member.Name}'", member.Location, member.Name.Length);
+                    var value = member.ExplicitValue ?? next;
+                    if (!FitsUnderlying(value, declaration.UnderlyingType))
+                        throw Error($"Enum member value {value} does not fit underlying type {declaration.UnderlyingType}",
+                            member.Location);
+                    if (!values.Add(value))
+                        throw Error($"Enum '{declaration.Name}' contains duplicate value {value}", member.Location);
+                    members.Add(new EnumMemberSymbol(member.Name, value, member));
+                    if (value == int.MaxValue && member != declaration.Members[^1])
+                        throw Error($"Enum '{declaration.Name}' member values overflow", member.Location);
+                    next = value + 1;
+                }
+                _enumsByName.Add(declaration.Name,
+                    new EnumSymbol(declaration.Name, declaration.UnderlyingType, members, declaration, declaration.Visibility));
+            }
+            foreach (var declaration in unit.Unions)
+            {
+                if (_enumsByName.ContainsKey(declaration.Name) || _structsByName.ContainsKey(declaration.Name)
+                    || _unionsByName.ContainsKey(declaration.Name))
+                    throw Error($"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                var cases = new List<UnionCaseSymbol>();
+                foreach (var item in declaration.Cases)
+                {
+                    if (!names.Add(item.Name))
+                        throw Error($"Union '{declaration.Name}' contains duplicate case '{item.Name}'", item.Location);
+                    var payloadType = item.PayloadType is null ? null : ResolveType(item.PayloadType);
+                    if (payloadType is not null && payloadType != SemanticType.FromPrimitive(PrimitiveType.I32))
+                        throw Error("Union payloads currently support only i32", item.Location);
+                    cases.Add(new UnionCaseSymbol(item.Name, payloadType, item));
+                }
+                _unionsByName.Add(declaration.Name, new UnionSymbol(declaration.Name, cases, declaration, declaration.Visibility));
+            }
             foreach (var declaration in unit.Structs)
             {
                 if (_structsByName.ContainsKey(declaration.Name))
@@ -229,7 +333,7 @@ public sealed class SemanticAnalyzer
                 group => group.Key,
                 group => (IReadOnlyList<FunctionSymbol>)group.SelectMany(pair => pair.Value).ToList(),
                 StringComparer.Ordinal);
-        return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName);
+        return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName, _enumsByName, _unionsByName);
     }
 
     public SemanticResult AnalyzeWithDiagnostics(
@@ -391,6 +495,8 @@ public sealed class SemanticAnalyzer
             throw Error("Type inference is not valid in this context", syntax.Location);
         }
 
+        if (syntax.IsArray)
+            return SemanticType.ArrayOf(ResolveType(syntax.ElementType!), syntax.ArrayLength!.Value);
         if (syntax.IsString)
             return syntax.IsPointer
                 ? SemanticType.PointerTo(ResolveType(syntax.Pointee!))
@@ -398,6 +504,18 @@ public sealed class SemanticAnalyzer
 
         if (syntax.NamedType is not null)
         {
+            if (_enumsByName.ContainsKey(syntax.NamedType))
+            {
+                if (syntax.IsPointer)
+                    return SemanticType.PointerTo(SemanticType.Enum(syntax.NamedType));
+                return SemanticType.Enum(syntax.NamedType);
+            }
+            if (_unionsByName.ContainsKey(syntax.NamedType))
+            {
+                if (syntax.IsPointer)
+                    return SemanticType.PointerTo(SemanticType.Union(syntax.NamedType));
+                return SemanticType.Union(syntax.NamedType);
+            }
             if (!_structsByName.ContainsKey(syntax.NamedType))
                 throw Error($"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
             var named = SemanticType.Struct(syntax.NamedType);
@@ -468,6 +586,7 @@ public sealed class SemanticAnalyzer
             _declaredVariables.Add(variable);
         }
 
+        _loopDepth = 0;
         var hasReturn = AnalyzeBlock(function.Declaration.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (!function.ReturnType.IsVoid && !hasReturn)
         {
@@ -538,6 +657,65 @@ public sealed class SemanticAnalyzer
         {
             case BlockStatement block:
                 return AnalyzeBlock(block, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            case IfStatement conditional:
+                var conditionType = AnalyzeExpression(conditional.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                RequireBoolean(conditionType, conditional.Condition.Location);
+                var thenReturns = AnalyzeStatement(conditional.Then, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                var elseReturns = conditional.Else is not null
+                    && AnalyzeStatement(conditional.Else, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                return conditional.Else is not null && thenReturns && elseReturns;
+            case WhileStatement whileStatement:
+                var whileType = AnalyzeExpression(whileStatement.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                RequireBoolean(whileType, whileStatement.Condition.Location);
+                _loopDepth++;
+                AnalyzeStatement(whileStatement.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                _loopDepth--;
+                return false;
+            case ForStatement forStatement:
+                var loopScope = new Scope(scope, MarkVariableUsed);
+                if (forStatement.Initializer is not null)
+                    AnalyzeStatement(forStatement.Initializer, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                if (forStatement.Condition is not null)
+                {
+                    var forType = AnalyzeExpression(forStatement.Condition, loopScope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                    RequireBoolean(forType, forStatement.Condition.Location);
+                }
+                _loopDepth++;
+                AnalyzeStatement(forStatement.Body, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                if (forStatement.Increment is not null)
+                    AnalyzeStatement(forStatement.Increment, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                _loopDepth--;
+                return false;
+            case SwitchStatement switchStatement:
+            {
+                var valueType = AnalyzeExpression(switchStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                if (!valueType.IsUnion)
+                    throw Error($"Switch requires a union value, got {valueType}", switchStatement.Value.Location);
+                var union = _unionsByName[valueType.EnumName!];
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                var allReturn = true;
+                foreach (var item in switchStatement.Cases)
+                {
+                    if (!seen.Add(item.CaseName) || !union.CasesByName.TryGetValue(item.CaseName, out var unionCase))
+                        throw Error($"Unknown or duplicate union case '{item.CaseName}'", item.Location);
+                    if ((item.BindingName is null) != (unionCase.PayloadType is null))
+                        throw Error($"Union case '{item.CaseName}' {(unionCase.PayloadType is null ? "does not have" : "requires")} a payload binding", item.Location);
+                    var caseScope = new Scope(scope, MarkVariableUsed);
+                    if (item.BindingName is not null)
+                        caseScope.Declare(item.BindingName, new VariableSymbol(unionCase.PayloadType!, false, item, false));
+                    allReturn &= AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                }
+                if (seen.Count != union.Cases.Count)
+                    throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
+                return allReturn;
+            }
+            case BreakStatement breakStatement when _loopDepth == 0:
+                throw Error("'break' is only valid inside a loop", breakStatement.Location);
+            case ContinueStatement continueStatement when _loopDepth == 0:
+                throw Error("'continue' is only valid inside a loop", continueStatement.Location);
+            case BreakStatement:
+            case ContinueStatement:
+                return false;
             case VariableDeclarationStatement declaration:
                 AnalyzeVariableDeclaration(declaration, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return false;
@@ -561,6 +739,12 @@ public sealed class SemanticAnalyzer
             default:
                 throw new InvalidOperationException($"Unsupported statement type {statement.GetType().Name}.");
         }
+    }
+
+    private void RequireBoolean(SemanticType type, SourceLocation location)
+    {
+        if (type.Primitive != PrimitiveType.Bool || type.Kind != SemanticTypeKind.Primitive)
+            throw Error($"Loop and conditional conditions must be bool, got {type}", location);
     }
 
     private void AnalyzeVariableDeclaration(
@@ -592,6 +776,14 @@ public sealed class SemanticAnalyzer
         if (type.IsVoid)
         {
             throw Error($"Variable '{declaration.Name}' cannot have type void", declaration.Location, declaration.Name.Length);
+        }
+
+        if (initializerType is { IsArray: true } && type.IsArray
+            && initializerType.ArrayLength != type.ArrayLength)
+        {
+            throw Error(
+                $"Array initializer for '{declaration.Name}' expects {type.ArrayLength} element(s), got {initializerType.ArrayLength}",
+                declaration.Initializer!.Location);
         }
 
         if (initializerType is not null && !CanAssign(type, declaration.Initializer!, initializerType))
@@ -639,7 +831,14 @@ public sealed class SemanticAnalyzer
                 throw Error($"Cannot assign to a field of const variable '{memberIdentifier.Name}'", assignment.Location,
                     memberIdentifier.Name.Length);
         }
-        else if (assignment.Target is not UnaryExpression { Operator: TokenKind.Star })
+        else if (assignment.Target is IndexExpression index
+                 && index.Target is IdentifierExpression indexIdentifier
+                 && scope.Lookup(indexIdentifier.Name, indexIdentifier.Location).IsConst)
+        {
+            throw Error($"Cannot assign to an element of const variable '{indexIdentifier.Name}'", assignment.Location,
+                indexIdentifier.Name.Length);
+        }
+        else if (assignment.Target is not (UnaryExpression { Operator: TokenKind.Star } or IndexExpression))
         {
             throw Error("Assignment target is not addressable", assignment.Target.Location);
         }
@@ -712,8 +911,12 @@ public sealed class SemanticAnalyzer
             BooleanLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.Bool),
             StructLiteralExpression literal => AnalyzeStructLiteral(
                 literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            ArrayLiteralExpression literal => AnalyzeArrayLiteral(literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            IndexExpression index => AnalyzeIndex(index, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             MemberAccessExpression member => AnalyzeMemberAccess(
                 member, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            CastExpression cast => AnalyzeCast(cast, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            UnionConstructionExpression construction => AnalyzeUnionConstruction(construction, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, allowVoid),
@@ -722,6 +925,52 @@ public sealed class SemanticAnalyzer
 
         expressionTypes[expression] = type;
         return type;
+    }
+
+    private SemanticType AnalyzeUnionConstruction(
+        UnionConstructionExpression construction, Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName,
+        IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types,
+        IDictionary<CallExpression, FunctionSymbol> calls)
+    {
+        if (!_unionsByName.TryGetValue(construction.UnionName, out var union))
+            throw Error($"Union '{construction.UnionName}' is not declared", construction.Location);
+        if (!union.CasesByName.TryGetValue(construction.CaseName, out var item))
+            throw Error($"Union '{construction.UnionName}' has no case '{construction.CaseName}'", construction.Location);
+        if (item.PayloadType is null && construction.Arguments.Count != 0
+            || item.PayloadType is not null && construction.Arguments.Count != 1)
+            throw Error($"Union case '{construction.CaseName}' has invalid argument count", construction.Location);
+        if (item.PayloadType is not null)
+        {
+            var actual = AnalyzeExpression(construction.Arguments[0], scope, functions, moduleName, imports, types, calls);
+            if (!CanAssign(item.PayloadType, construction.Arguments[0], actual))
+                throw Error($"Union case '{construction.CaseName}' expects {item.PayloadType}, got {actual}", construction.Location);
+        }
+        return SemanticType.Union(union.Name);
+    }
+
+    private SemanticType AnalyzeArrayLiteral(ArrayLiteralExpression literal, Scope scope, IReadOnlyDictionary<string,List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression,SemanticType> types, IDictionary<CallExpression,FunctionSymbol> calls)
+    {
+        if (literal.Elements.Count == 0) throw Error("Array literals cannot be empty", literal.Location);
+        var element = AnalyzeExpression(literal.Elements[0], scope, functions, moduleName, imports, types, calls);
+        foreach (var value in literal.Elements.Skip(1))
+        {
+            var actual = AnalyzeExpression(value, scope, functions, moduleName, imports, types, calls);
+            if (actual != element) throw Error("Array literal elements must have matching types", value.Location);
+        }
+        return SemanticType.ArrayOf(element, literal.Elements.Count);
+    }
+
+    private SemanticType AnalyzeIndex(IndexExpression index, Scope scope, IReadOnlyDictionary<string,List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression,SemanticType> types, IDictionary<CallExpression,FunctionSymbol> calls)
+    {
+        var target = AnalyzeExpression(index.Target, scope, functions, moduleName, imports, types, calls);
+        var indexType = AnalyzeExpression(index.Index, scope, functions, moduleName, imports, types, calls);
+        if (!indexType.IsNumeric) throw Error("Array index must be numeric", index.Index.Location);
+        if (!target.IsArray) throw Error("Indexing requires an array", index.Target.Location);
+        if (index.Index is IntegerLiteralExpression constant && long.TryParse(constant.Lexeme, out var value)
+            && (value < 0 || value >= target.ArrayLength))
+            throw Error($"Array index {value} is out of bounds for length {target.ArrayLength}", index.Index.Location);
+        return target.ElementType!;
     }
 
     private SemanticType AnalyzeStructLiteral(
@@ -760,6 +1009,14 @@ public sealed class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
+        if (member.Target is IdentifierExpression enumIdentifier
+            && _enumsByName.TryGetValue(enumIdentifier.Name, out var enumSymbol))
+        {
+            var memberSymbol = enumSymbol.Members.FirstOrDefault(candidate => candidate.Name == member.MemberName)
+                ?? throw Error($"Enum '{enumSymbol.Name}' has no member named '{member.MemberName}'", member.Location, member.MemberName.Length);
+            return SemanticType.Enum(enumSymbol.Name);
+        }
+
         var targetType = AnalyzeExpression(member.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (!targetType.IsStruct)
             throw Error($"Member access requires a struct value, got {targetType}", member.Location);
@@ -893,6 +1150,29 @@ public sealed class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
         bool allowVoid)
     {
+        var unionParts = call.Name.Split('.');
+        if (unionParts.Length == 2 && _unionsByName.TryGetValue(unionParts[0], out var union))
+        {
+            if (!union.CasesByName.TryGetValue(unionParts[1], out var item))
+                throw Error($"Union '{union.Name}' has no case '{unionParts[1]}'", call.Location);
+            if ((item.PayloadType is null && call.Arguments.Count != 0)
+                || (item.PayloadType is not null && call.Arguments.Count != 1))
+                throw Error($"Union case '{item.Name}' has invalid argument count", call.Location);
+            if (item.PayloadType is not null)
+            {
+                var actual = AnalyzeExpression(call.Arguments[0], scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                if (!CanAssign(item.PayloadType, call.Arguments[0], actual))
+                    throw Error($"Union case '{item.Name}' expects {item.PayloadType}, got {actual}", call.Location);
+            }
+            return SemanticType.Union(union.Name);
+        }
+        if (call.Name == "length")
+        {
+            if (call.Arguments.Count != 1) throw Error("length(array) expects one argument", call.Location);
+            var argumentType = AnalyzeExpression(call.Arguments[0], scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            if (!argumentType.IsArray) throw Error("length() requires an array", call.Arguments[0].Location);
+            return SemanticType.FromPrimitive(PrimitiveType.I32);
+        }
         var overloads = ResolveFunctions(call.Name, moduleName, imports, functions);
         if (overloads.Count == 0)
         {
@@ -964,6 +1244,7 @@ public sealed class SemanticAnalyzer
         expression switch
         {
             IdentifierExpression identifier => scope.Lookup(identifier.Name, identifier.Location) is not null,
+            IndexExpression => true,
             UnaryExpression { Operator: TokenKind.Star, Operand: var operand } =>
                 true,
             _ => false

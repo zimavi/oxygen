@@ -1,0 +1,30 @@
+# Fixed-size arrays
+
+Oxygen fixed-size arrays are inline value types written with a postfix type
+suffix:
+
+```oxygen
+i32[3] values = { 10, 20, 30 };
+```
+
+The length is part of the type. Array literals must contain exactly as many
+elements as the declared length, and every element must have the same type.
+Array element types may be primitive types, pointers, strings, structs, or
+other fixed-size arrays.
+
+Indexing uses `array[index]` and can be used as either a value or an
+assignment target:
+
+```oxygen
+values[1] = 42;
+return values[1];
+```
+
+Constant indices are checked by the compiler. Dynamic indices are checked at
+runtime; an invalid index reports an error and terminates the process through
+the runtime bounds-failure primitive. `length(array)` is a compiler intrinsic
+that produces the array's fixed length and does not allocate.
+
+Arrays are not heap allocated, resized, or implicitly converted to pointers.
+Passing or returning an array uses the array value type directly. Arrays must
+be fully initialized before use.
