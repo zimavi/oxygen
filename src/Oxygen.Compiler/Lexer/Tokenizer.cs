@@ -1,0 +1,287 @@
+﻿using Serilog;
+
+namespace Oxygen.Compiler.Lexer;
+
+public sealed class Tokenizer
+{
+    private static readonly IReadOnlyDictionary<string, TokenKind> Keywords =
+        new Dictionary<string, TokenKind>(StringComparer.Ordinal)
+        {
+            ["true"] = TokenKind.True,
+            ["false"] = TokenKind.False,
+            ["return"] = TokenKind.Return,
+            ["var"] = TokenKind.Var,
+            ["const"] = TokenKind.Const,
+            ["i8"] = TokenKind.I8,
+            ["i16"] = TokenKind.I16,
+            ["i32"] = TokenKind.I32,
+            ["i64"] = TokenKind.I64,
+            ["u8"] = TokenKind.U8,
+            ["u16"] = TokenKind.U16,
+            ["u32"] = TokenKind.U32,
+            ["u64"] = TokenKind.U64,
+            ["f32"] = TokenKind.F32,
+            ["f64"] = TokenKind.F64,
+            ["bool"] = TokenKind.Bool,
+            ["void"] = TokenKind.Void
+        };
+
+    private readonly ILogger _logger;
+
+    public Tokenizer(ILogger? logger = null)
+    {
+        _logger = logger ?? new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.Console()
+            .CreateLogger();
+    }
+
+    public IReadOnlyList<Token> Tokenize(string source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        try
+        {
+            return TokenizeCore(source);
+        }
+        catch (LexicalException exception)
+        {
+            _logger.Error(exception, "Lexical error at {Line}:{Column}", exception.Location.Line,
+                exception.Location.Column);
+            throw;
+        }
+    }
+
+    private IReadOnlyList<Token> TokenizeCore(string source)
+    {
+        var tokens = new List<Token>();
+        var position = 0;
+        var line = 1;
+        var column = 1;
+
+        while (position < source.Length)
+        {
+            if (char.IsWhiteSpace(source[position]))
+            {
+                Advance(source[position], ref position, ref line, ref column);
+                continue;
+            }
+
+            var location = new SourceLocation(line, column);
+
+            if (source[position] == '/' && Peek(source, position + 1) == '/')
+            {
+                SkipLineComment(source, ref position, ref line, ref column);
+                continue;
+            }
+
+            if (source[position] == '/' && Peek(source, position + 1) == '*')
+            {
+                SkipBlockComment(source, ref position, ref line, ref column, location);
+                continue;
+            }
+
+            Token token;
+            if (IsIdentifierStart(source[position]))
+            {
+                token = ReadIdentifierOrKeyword(source, ref position, ref line, ref column, location);
+            }
+            else if (char.IsDigit(source[position]))
+            {
+                token = ReadNumber(source, ref position, ref line, ref column, location);
+            }
+            else if (source[position] == '"')
+            {
+                token = ReadString(source, ref position, ref line, ref column, location);
+            }
+            else
+            {
+                token = ReadOperatorOrPunctuation(source, ref position, ref line, ref column, location);
+            }
+
+            tokens.Add(token);
+            _logger.Debug("Lexed {TokenKind} '{Lexeme}' at {Line}:{Column}", token.Kind, token.Lexeme,
+                token.Location.Line, token.Location.Column);
+        }
+
+        var end = new Token(TokenKind.EndOfFile, string.Empty, new SourceLocation(line, column));
+        tokens.Add(end);
+        _logger.Information("Lexed {TokenCount} tokens.", tokens.Count - 1);
+        return tokens;
+    }
+
+    private Token ReadIdentifierOrKeyword(
+        string source, ref int position, ref int line, ref int column, SourceLocation location)
+    {
+        var start = position;
+        while (position < source.Length && IsIdentifierPart(source[position]))
+        {
+            Advance(source[position], ref position, ref line, ref column);
+        }
+
+        var lexeme = source[start..position];
+        return new Token(Keywords.GetValueOrDefault(lexeme, TokenKind.Identifier), lexeme, location);
+    }
+
+    private static Token ReadNumber(
+        string source, ref int position, ref int line, ref int column, SourceLocation location)
+    {
+        var start = position;
+        while (position < source.Length && char.IsDigit(source[position]))
+        {
+            Advance(source[position], ref position, ref line, ref column);
+        }
+
+        var kind = TokenKind.IntegerLiteral;
+        if (Peek(source, position) == '.')
+        {
+            kind = TokenKind.FloatingPointLiteral;
+            Advance(source[position], ref position, ref line, ref column);
+            if (!char.IsDigit(Peek(source, position)))
+            {
+                throw new LexicalException("A floating-point literal requires digits after the decimal point", location);
+            }
+
+            while (position < source.Length && char.IsDigit(source[position]))
+            {
+                Advance(source[position], ref position, ref line, ref column);
+            }
+        }
+
+        if (IsIdentifierStart(Peek(source, position)))
+        {
+            throw new LexicalException("Invalid character after numeric literal", new SourceLocation(line, column));
+        }
+
+        return new Token(kind, source[start..position], location);
+    }
+
+    private static Token ReadString(
+        string source, ref int position, ref int line, ref int column, SourceLocation location)
+    {
+        var start = position;
+        Advance(source[position], ref position, ref line, ref column);
+        while (position < source.Length && source[position] != '"')
+        {
+            if (source[position] is '\r' or '\n')
+            {
+                throw new LexicalException("Unterminated string literal", location);
+            }
+
+            if (source[position] == '\\')
+            {
+                Advance(source[position], ref position, ref line, ref column);
+                if (position >= source.Length)
+                {
+                    throw new LexicalException("Unterminated string literal", location);
+                }
+            }
+
+            Advance(source[position], ref position, ref line, ref column);
+        }
+
+        if (position >= source.Length)
+        {
+            throw new LexicalException("Unterminated string literal", location);
+        }
+
+        Advance(source[position], ref position, ref line, ref column);
+        return new Token(TokenKind.StringLiteral, source[start..position], location);
+    }
+
+    private static Token ReadOperatorOrPunctuation(
+        string source, ref int position, ref int line, ref int column, SourceLocation location)
+    {
+        var first = source[position];
+        var second = Peek(source, position + 1);
+        var kind = (first, second) switch
+        {
+            ('=', '=') => TokenKind.EqualsEquals,
+            ('!', '=') => TokenKind.BangEquals,
+            ('<', '=') => TokenKind.LessThanOrEquals,
+            ('>', '=') => TokenKind.GreaterThanOrEquals,
+            ('&', '&') => TokenKind.AmpersandAmpersand,
+            ('|', '|') => TokenKind.PipePipe,
+            _ => first switch
+            {
+                '(' => TokenKind.OpenParenthesis,
+                ')' => TokenKind.CloseParenthesis,
+                '{' => TokenKind.OpenBrace,
+                '}' => TokenKind.CloseBrace,
+                ',' => TokenKind.Comma,
+                ';' => TokenKind.Semicolon,
+                '+' => TokenKind.Plus,
+                '-' => TokenKind.Minus,
+                '*' => TokenKind.Star,
+                '/' => TokenKind.Slash,
+                '%' => TokenKind.Percent,
+                '=' => TokenKind.Equals,
+                '!' => TokenKind.Bang,
+                '<' => TokenKind.LessThan,
+                '>' => TokenKind.GreaterThan,
+                _ => throw new LexicalException($"Unexpected character '{first}'", location)
+            }
+        };
+
+        Advance(first, ref position, ref line, ref column);
+        if (kind is TokenKind.EqualsEquals or TokenKind.BangEquals or TokenKind.LessThanOrEquals
+            or TokenKind.GreaterThanOrEquals or TokenKind.AmpersandAmpersand or TokenKind.PipePipe)
+        {
+            Advance(second, ref position, ref line, ref column);
+        }
+
+        var length = kind is TokenKind.EqualsEquals or TokenKind.BangEquals or TokenKind.LessThanOrEquals
+            or TokenKind.GreaterThanOrEquals or TokenKind.AmpersandAmpersand or TokenKind.PipePipe
+            ? 2
+            : 1;
+        return new Token(kind, source[(position - length)..position], location);
+    }
+
+    private static void SkipLineComment(string source, ref int position, ref int line, ref int column)
+    {
+        while (position < source.Length && source[position] is not '\r' and not '\n')
+        {
+            Advance(source[position], ref position, ref line, ref column);
+        }
+    }
+
+    private static void SkipBlockComment(
+        string source, ref int position, ref int line, ref int column, SourceLocation location)
+    {
+        Advance(source[position], ref position, ref line, ref column);
+        Advance(source[position], ref position, ref line, ref column);
+        while (position < source.Length && !(source[position] == '*' && Peek(source, position + 1) == '/'))
+        {
+            Advance(source[position], ref position, ref line, ref column);
+        }
+
+        if (position >= source.Length)
+        {
+            throw new LexicalException("Unterminated block comment", location);
+        }
+
+        Advance(source[position], ref position, ref line, ref column);
+        Advance(source[position], ref position, ref line, ref column);
+    }
+
+    private static bool IsIdentifierStart(char value) => char.IsLetter(value) || value == '_';
+
+    private static bool IsIdentifierPart(char value) => char.IsLetterOrDigit(value) || value == '_';
+
+    private static char Peek(string source, int position) =>
+        position < source.Length ? source[position] : '\0';
+
+    private static void Advance(char value, ref int position, ref int line, ref int column)
+    {
+        position++;
+        if (value == '\n')
+        {
+            line++;
+            column = 1;
+        }
+        else
+        {
+            column++;
+        }
+    }
+}
