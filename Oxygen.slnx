@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Oxygen.Cli/Oxygen.Cli.csproj" />
+    <Project Path="src/Oxygen.Compiler/Oxygen.Compiler.csproj" />
+    <Project Path="src/Oxygen.Llvm/Oxygen.Llvm.csproj" />
+  </Folder>
+</Solution>
