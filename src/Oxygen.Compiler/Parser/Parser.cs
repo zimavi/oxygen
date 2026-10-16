@@ -50,14 +50,18 @@ public sealed class Parser
             var location = Current.Location;
             var module = ParseModuleDeclaration();
             var imports = ParseImports();
+            var structs = new List<StructDeclaration>();
             var functions = new List<FunctionDeclaration>();
             while (!Check(TokenKind.EndOfFile))
             {
-                functions.Add(ParseFunction());
+                if (IsStructDeclarationStart())
+                    structs.Add(ParseStruct());
+                else
+                    functions.Add(ParseFunction());
             }
 
             _logger.Information("Parsed {FunctionCount} function(s).", functions.Count);
-            return new CompilationUnit(module.Name, module.Visibility, imports, functions, location);
+            return new CompilationUnit(module.Name, module.Visibility, imports, functions, location) { Structs = structs };
         }
         catch (ParseException exception)
         {
@@ -72,6 +76,7 @@ public sealed class Parser
         var diagnostics = new DiagnosticBag();
         var module = (Name: (string?)null, Visibility: Visibility.Private);
         var imports = new List<ImportDeclaration>();
+        var structs = new List<StructDeclaration>();
         try
         {
             module = ParseModuleDeclaration();
@@ -95,7 +100,10 @@ public sealed class Parser
         {
             try
             {
-                functions.Add(ParseFunction());
+                if (IsStructDeclarationStart())
+                    structs.Add(ParseStruct());
+                else
+                    functions.Add(ParseFunction());
             }
             catch (ParseException exception)
             {
@@ -109,7 +117,36 @@ public sealed class Parser
             }
         }
 
-        return new ParseResult(new CompilationUnit(module.Name, module.Visibility, imports, functions, location), diagnostics.Diagnostics);
+        return new ParseResult(new CompilationUnit(module.Name, module.Visibility, imports, functions, location)
+        {
+            Structs = structs
+        }, diagnostics.Diagnostics);
+    }
+
+    private StructDeclaration ParseStruct()
+    {
+        var location = Current.Location;
+        var annotations = ParseAnnotations();
+        var visibility = Visibility.Private;
+        if (Match(TokenKind.Public))
+            visibility = Visibility.Public;
+        else
+            Match(TokenKind.Private);
+        Consume(TokenKind.Struct, "Expected 'struct'.");
+        var name = Consume(TokenKind.Identifier, "Expected a struct name.").Lexeme;
+        Consume(TokenKind.OpenBrace, "Expected '{' after struct name.");
+        var fields = new List<StructFieldDeclaration>();
+        while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
+        {
+            var fieldLocation = Current.Location;
+            var type = ParseType(allowInferred: false);
+            var fieldName = Consume(TokenKind.Identifier, "Expected a field name.").Lexeme;
+            Consume(TokenKind.Semicolon, "Expected ';' after struct field.");
+            fields.Add(new StructFieldDeclaration(type, fieldName, fieldLocation));
+        }
+        Consume(TokenKind.CloseBrace, "Expected '}' after struct declaration.");
+        Match(TokenKind.Semicolon);
+        return new StructDeclaration(name, fields, visibility, location, annotations);
     }
 
     private (string? Name, Visibility Visibility) ParseModuleDeclaration()
@@ -239,7 +276,8 @@ public sealed class Parser
             return ParseReturn();
         }
 
-        if (Check(TokenKind.Const) || Check(TokenKind.Var) || IsType(Current.Kind))
+        if (Check(TokenKind.Const) || Check(TokenKind.Var) || IsType(Current.Kind)
+            || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier))
         {
             return ParseVariableDeclaration();
         }
@@ -330,23 +368,59 @@ public sealed class Parser
         {
             case TokenKind.Identifier:
                 var name = token.Lexeme;
+                var qualifiedParts = new List<string> { name };
                 while (Match(TokenKind.Dot))
-                    name += "." + Consume(TokenKind.Identifier, "Expected an identifier after '.'.").Lexeme;
+                    qualifiedParts.Add(Consume(TokenKind.Identifier, "Expected an identifier after '.'.").Lexeme);
+                name = string.Join(".", qualifiedParts);
 
-                if (!Match(TokenKind.OpenParenthesis))
-                    return new IdentifierExpression(name, token.Location);
-
-                var arguments = new List<Expression>();
-                if (!Check(TokenKind.CloseParenthesis))
+                if (Match(TokenKind.OpenParenthesis))
                 {
-                    do
+                    var arguments = new List<Expression>();
+                    if (!Check(TokenKind.CloseParenthesis))
                     {
-                        arguments.Add(ParseExpression());
-                    } while (Match(TokenKind.Comma));
+                        do
+                        {
+                            arguments.Add(ParseExpression());
+                        } while (Match(TokenKind.Comma));
+                    }
+
+                    Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+                    return new CallExpression(name, arguments, token.Location);
                 }
 
-                Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
-                return new CallExpression(name, arguments, token.Location);
+                if (Check(TokenKind.OpenBrace))
+                {
+                    Advance();
+                    var fields = new List<StructLiteralField>();
+                    if (!Check(TokenKind.CloseBrace))
+                    {
+                        do
+                        {
+                            var field = Consume(TokenKind.Identifier, "Expected a struct field name.");
+                            Consume(TokenKind.Colon, "Expected ':' after struct field name.");
+                            fields.Add(new StructLiteralField(field.Lexeme, ParseExpression(), field.Location));
+                        } while (Match(TokenKind.Comma));
+                    }
+
+                    Consume(TokenKind.CloseBrace, "Expected '}' after struct literal.");
+                    Expression literal = new StructLiteralExpression(name, fields, token.Location);
+                    while (Match(TokenKind.Dot))
+                    {
+                        var member = Consume(TokenKind.Identifier, "Expected an identifier after '.'.");
+                        literal = new MemberAccessExpression(literal, member.Lexeme, literal.Location);
+                    }
+                    return literal;
+                }
+
+                if (qualifiedParts.Count > 1)
+                {
+                    Expression member = new IdentifierExpression(qualifiedParts[0], token.Location);
+                    foreach (var part in qualifiedParts.Skip(1))
+                        member = new MemberAccessExpression(member, part, token.Location);
+                    return member;
+                }
+
+                return new IdentifierExpression(name, token.Location);
             case TokenKind.IntegerLiteral:
                 return new IntegerLiteralExpression(token.Lexeme, token.Location);
             case TokenKind.FloatingPointLiteral:
@@ -383,6 +457,12 @@ public sealed class Parser
             return ParsePointerSuffix(type);
         }
 
+        if (Check(TokenKind.Identifier))
+        {
+            var token = Advance();
+            return ParsePointerSuffix(new TypeSyntax(null, false, token.Location, NamedType: token.Lexeme));
+        }
+
         throw Error(
             $"{(allowInferred ? "Expected a primitive type, string, or 'var'" : "Expected a primitive type or string")}, but found {Describe(Current)}.",
             Current);
@@ -417,6 +497,32 @@ public sealed class Parser
     };
 
     private bool IsType(TokenKind kind) => PrimitiveTypes.ContainsKey(kind) || kind == TokenKind.String;
+
+    private bool IsStructDeclarationStart()
+    {
+        var index = _position;
+        while (index < _tokens.Count && _tokens[index].Kind == TokenKind.At)
+        {
+            index++;
+            if (index >= _tokens.Count || _tokens[index].Kind is not (TokenKind.Identifier or TokenKind.Extern))
+                return false;
+            index++;
+            if (index < _tokens.Count && _tokens[index].Kind == TokenKind.OpenParenthesis)
+            {
+                var depth = 1;
+                index++;
+                while (index < _tokens.Count && depth > 0)
+                {
+                    if (_tokens[index].Kind == TokenKind.OpenParenthesis) depth++;
+                    if (_tokens[index].Kind == TokenKind.CloseParenthesis) depth--;
+                    index++;
+                }
+            }
+        }
+        if (index < _tokens.Count && _tokens[index].Kind is TokenKind.Public or TokenKind.Private)
+            index++;
+        return index < _tokens.Count && _tokens[index].Kind == TokenKind.Struct;
+    }
 
     private Token Consume(TokenKind kind, string message)
     {

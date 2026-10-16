@@ -14,6 +14,7 @@ public sealed class SemanticAnalyzer
     private readonly HashSet<FunctionSymbol> _usedFunctions = [];
     private readonly List<VariableSymbol> _declaredVariables = [];
     private string? _sourceName;
+    private readonly Dictionary<string, StructSymbol> _structsByName = new(StringComparer.Ordinal);
 
     public SemanticAnalyzer(ILogger? logger = null)
     {
@@ -43,8 +44,37 @@ public sealed class SemanticAnalyzer
         _definitelyNullVariables.Clear();
         _usedFunctions.Clear();
         _declaredVariables.Clear();
+        _structsByName.Clear();
 
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
+        foreach (var unit in compilationUnits)
+        {
+            var moduleName = unit.ModuleName ?? "program";
+            foreach (var declaration in unit.Structs)
+            {
+                if (_structsByName.ContainsKey(declaration.Name))
+                    throw Error($"A struct named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
+                var annotations = ParseStructLayout(declaration);
+                _structsByName.Add(declaration.Name,
+                    new StructSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
+                        annotations.IsPacked, annotations.Alignment));
+            }
+        }
+        foreach (var unit in compilationUnits)
+        {
+            foreach (var declaration in unit.Structs)
+            {
+                var fields = declaration.Fields
+                    .Select(field => new StructFieldSymbol(field.Name, ResolveType(field.Type), field))
+                    .ToArray();
+                if (fields.Select(field => field.Name).Distinct(StringComparer.Ordinal).Count() != fields.Length)
+                    throw Error($"Struct '{declaration.Name}' contains duplicate fields", declaration.Location,
+                        declaration.Name.Length);
+                _structsByName[declaration.Name] = _structsByName[declaration.Name] with { Fields = fields };
+            }
+        }
+        foreach (var structure in _structsByName.Values)
+            ValidateStructLayout(structure, []);
         var functionsByName = new Dictionary<string, List<FunctionSymbol>>(StringComparer.Ordinal);
         var functionSources = new Dictionary<FunctionSymbol, string?>();
         var functionModules = new Dictionary<FunctionSymbol, (string Name, IReadOnlyList<ImportDeclaration> Imports)>();
@@ -75,7 +105,7 @@ public sealed class SemanticAnalyzer
                         external.Name,
                         external.ReturnType,
                         declaration.Parameters.Select(parameter =>
-                            new ParameterSymbol(parameter.Name, GetType(parameter.Type), parameter)).ToArray(),
+                            new ParameterSymbol(parameter.Name, ResolveType(parameter.Type), parameter)).ToArray(),
                         declaration,
                         externalModule.ModuleName,
                         external.Visibility,
@@ -199,7 +229,7 @@ public sealed class SemanticAnalyzer
                 group => group.Key,
                 group => (IReadOnlyList<FunctionSymbol>)group.SelectMany(pair => pair.Value).ToList(),
                 StringComparer.Ordinal);
-        return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls);
+        return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName);
     }
 
     public SemanticResult AnalyzeWithDiagnostics(
@@ -211,9 +241,9 @@ public sealed class SemanticAnalyzer
         return new SemanticResult(AnalyzeCore(compilationUnits, diagnostics, sourceNames, externalModules), diagnostics.Diagnostics);
     }
 
-    private static FunctionSymbol CreateFunctionSymbol(FunctionDeclaration declaration, string moduleName)
+    private FunctionSymbol CreateFunctionSymbol(FunctionDeclaration declaration, string moduleName)
     {
-        var returnType = GetType(declaration.ReturnType);
+        var returnType = ResolveType(declaration.ReturnType);
         var parameters = new List<ParameterSymbol>();
         var names = new HashSet<string>(StringComparer.Ordinal);
 
@@ -224,7 +254,7 @@ public sealed class SemanticAnalyzer
                 throw Error($"Parameter '{parameter.Name}' is declared more than once", parameter.Location, parameter.Name.Length);
             }
 
-            parameters.Add(new ParameterSymbol(parameter.Name, GetType(parameter.Type), parameter));
+            parameters.Add(new ParameterSymbol(parameter.Name, ResolveType(parameter.Type), parameter));
         }
 
         return new FunctionSymbol(
@@ -354,7 +384,7 @@ public sealed class SemanticAnalyzer
         diagnostics.Add(DiagnosticPhase.Semantic, message, location, length, sourceName);
     }
 
-    private static SemanticType GetType(TypeSyntax syntax)
+    private SemanticType ResolveType(TypeSyntax syntax)
     {
         if (syntax.IsInferred)
         {
@@ -363,16 +393,61 @@ public sealed class SemanticAnalyzer
 
         if (syntax.IsString)
             return syntax.IsPointer
-                ? SemanticType.PointerTo(GetType(syntax.Pointee!))
+                ? SemanticType.PointerTo(ResolveType(syntax.Pointee!))
                 : SemanticType.String;
+
+        if (syntax.NamedType is not null)
+        {
+            if (!_structsByName.ContainsKey(syntax.NamedType))
+                throw Error($"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
+            var named = SemanticType.Struct(syntax.NamedType);
+            return syntax.IsPointer ? SemanticType.PointerTo(named) : named;
+        }
 
         if (syntax.Primitive is null)
             return syntax.IsPointer
-                ? SemanticType.PointerTo(GetType(syntax.Pointee!))
+                ? SemanticType.PointerTo(ResolveType(syntax.Pointee!))
                 : SemanticType.String;
 
         var type = SemanticType.FromPrimitive(syntax.Primitive.Value);
         return syntax.IsPointer ? SemanticType.PointerTo(type) : type;
+    }
+
+    private static (bool IsPacked, uint? Alignment) ParseStructLayout(StructDeclaration declaration)
+    {
+        var packed = false;
+        uint? alignment = null;
+        foreach (var annotation in declaration.DeclaredAnnotations)
+        {
+            switch (annotation.Name)
+            {
+                case "packed" when annotation.Arguments.Count == 0:
+                    packed = true;
+                    break;
+                case "align" when annotation.Arguments.Count == 1
+                    && uint.TryParse(annotation.Arguments[0], out var value)
+                    && value > 0 && (value & (value - 1)) == 0 && value <= 4096:
+                    alignment = value;
+                    break;
+                case "packed":
+                    throw Error("Annotation '@packed' does not accept arguments", annotation.Location);
+                case "align":
+                    throw Error("Annotation '@align' expects one power-of-two byte alignment from 1 through 4096", annotation.Location);
+                default:
+                    throw Error($"Unknown struct annotation '@{annotation.Name}'", annotation.Location);
+            }
+        }
+        return (packed, alignment);
+    }
+
+    private void ValidateStructLayout(StructSymbol structure, HashSet<string> active)
+    {
+        if (!active.Add(structure.Name))
+            throw Error($"Struct '{structure.Name}' contains a recursive by-value field", structure.Declaration.Location,
+                structure.Name.Length);
+        foreach (var field in structure.Fields.Where(field => field.Type.IsStruct))
+            ValidateStructLayout(_structsByName[field.Type.StructName!], active);
+        active.Remove(structure.Name);
     }
 
     private void AnalyzeFunction(
@@ -512,7 +587,7 @@ public sealed class SemanticAnalyzer
             : AnalyzeExpression(declaration.Initializer, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         var type = declaration.Type.IsInferred
             ? initializerType!
-            : GetType(declaration.Type);
+            : ResolveType(declaration.Type);
 
         if (type.IsVoid)
         {
@@ -556,6 +631,13 @@ public sealed class SemanticAnalyzer
             var variable = scope.Lookup(identifier.Name, identifier.Location);
             if (variable.IsConst)
                 throw Error($"Cannot assign to const variable '{identifier.Name}'", assignment.Location, identifier.Name.Length);
+        }
+        else if (assignment.Target is MemberAccessExpression member)
+        {
+            if (member.Target is IdentifierExpression memberIdentifier
+                && scope.Lookup(memberIdentifier.Name, memberIdentifier.Location).IsConst)
+                throw Error($"Cannot assign to a field of const variable '{memberIdentifier.Name}'", assignment.Location,
+                    memberIdentifier.Name.Length);
         }
         else if (assignment.Target is not UnaryExpression { Operator: TokenKind.Star })
         {
@@ -628,6 +710,10 @@ public sealed class SemanticAnalyzer
             FloatingPointLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.F64),
             StringLiteralExpression => SemanticType.String,
             BooleanLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.Bool),
+            StructLiteralExpression literal => AnalyzeStructLiteral(
+                literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            MemberAccessExpression member => AnalyzeMemberAccess(
+                member, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, allowVoid),
@@ -636,6 +722,50 @@ public sealed class SemanticAnalyzer
 
         expressionTypes[expression] = type;
         return type;
+    }
+
+    private SemanticType AnalyzeStructLiteral(
+        StructLiteralExpression literal,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        if (!_structsByName.TryGetValue(literal.TypeName, out var structure))
+            throw Error($"Struct '{literal.TypeName}' is not declared", literal.Location, literal.TypeName.Length);
+        var fields = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var field in literal.Fields)
+        {
+            if (!fields.Add(field.Name))
+                throw Error($"Struct field '{field.Name}' is specified more than once", field.Location, field.Name.Length);
+            var declaration = structure.Fields.FirstOrDefault(candidate => candidate.Name == field.Name)
+                ?? throw Error($"Struct '{literal.TypeName}' has no field named '{field.Name}'", field.Location, field.Name.Length);
+            var valueType = AnalyzeExpression(field.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            if (!CanAssign(declaration.Type, field.Value, valueType))
+                throw Error($"Cannot initialize field '{field.Name}' with {valueType}; expected {declaration.Type}", field.Value.Location);
+        }
+        if (fields.Count != structure.Fields.Count)
+            throw Error($"Struct literal '{literal.TypeName}' must initialize every field", literal.Location, literal.TypeName.Length);
+        return SemanticType.Struct(literal.TypeName);
+    }
+
+    private SemanticType AnalyzeMemberAccess(
+        MemberAccessExpression member,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        var targetType = AnalyzeExpression(member.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        if (!targetType.IsStruct)
+            throw Error($"Member access requires a struct value, got {targetType}", member.Location);
+        var structure = _structsByName[targetType.StructName!];
+        return structure.Fields.FirstOrDefault(field => field.Name == member.MemberName)?.Type
+            ?? throw Error($"Struct '{targetType.StructName}' has no field named '{member.MemberName}'", member.Location, member.MemberName.Length);
     }
 
     private SemanticType AnalyzeUnary(

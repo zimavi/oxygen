@@ -432,10 +432,44 @@ public sealed class SemanticTests
                 pointer = 0;
                 return 0;
             }
+
             """);
 
         Assert.Contains(model.Functions.Values, function => function.Parameters.Any(parameter =>
             parameter.Type.IsPointer && parameter.Type.Pointee == SemanticType.FromPrimitive(PrimitiveType.I32)));
+    }
+
+    [Fact]
+    public void AnalyzesDataOnlyStructsAndFieldAssignments()
+    {
+        var model = Analyze(
+            """
+            struct Point { i32 x; i32 y; }
+            struct Line { Point start; Point end; }
+            i32 main() {
+                Line line = Line {
+                    start: Point { x: 1, y: 2 },
+                    end: Point { x: 3, y: 4 }
+                };
+                line.start.x = 10;
+                return line.end.y;
+            }
+            """);
+
+        Assert.Equal(2, model.Structs.Count);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), model.ExpressionTypes.Values.Last());
+    }
+
+    [Fact]
+    public void RejectsIncompleteStructLiteralsAndRecursiveLayouts()
+    {
+        var incomplete = Assert.Throws<SemanticException>(() =>
+            Analyze("struct Point { i32 x; i32 y; } i32 main() { return Point { x: 1 }.x; }"));
+        Assert.Contains("must initialize every field", incomplete.Message);
+
+        var recursive = Assert.Throws<SemanticException>(() =>
+            Analyze("struct Node { Node next; } i32 main() { return 0; }"));
+        Assert.Contains("recursive by-value field", recursive.Message);
     }
 
     [Fact]

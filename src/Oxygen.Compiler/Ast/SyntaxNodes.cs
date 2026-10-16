@@ -20,7 +20,25 @@ public sealed record CompilationUnit(
     Visibility ModuleVisibility,
     IReadOnlyList<ImportDeclaration> Imports,
     IReadOnlyList<FunctionDeclaration> Functions,
+    SourceLocation Location) : SyntaxNode(Location)
+{
+    public IReadOnlyList<StructDeclaration> Structs { get; init; } = [];
+}
+
+public sealed record StructFieldDeclaration(
+    TypeSyntax Type,
+    string Name,
     SourceLocation Location) : SyntaxNode(Location);
+
+public sealed record StructDeclaration(
+    string Name,
+    IReadOnlyList<StructFieldDeclaration> Fields,
+    Visibility Visibility,
+    SourceLocation Location,
+    IReadOnlyList<AnnotationSyntax>? Annotations = null) : SyntaxNode(Location)
+{
+    public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+}
 
 public sealed record AnnotationSyntax(
     string Name,
@@ -70,7 +88,8 @@ public sealed record TypeSyntax(
     bool IsInferred,
     SourceLocation Location,
     bool IsString = false,
-    TypeSyntax? Pointee = null) : SyntaxNode(Location)
+    TypeSyntax? Pointee = null,
+    string? NamedType = null) : SyntaxNode(Location)
 {
     public bool IsPointer => Pointee is not null;
 }
@@ -137,4 +156,19 @@ public sealed record BinaryExpression(
 public sealed record CallExpression(
     string Name,
     IReadOnlyList<Expression> Arguments,
+    SourceLocation Location) : Expression(Location);
+
+public sealed record StructLiteralExpression(
+    string TypeName,
+    IReadOnlyList<StructLiteralField> Fields,
+    SourceLocation Location) : Expression(Location);
+
+public sealed record StructLiteralField(
+    string Name,
+    Expression Value,
+    SourceLocation Location);
+
+public sealed record MemberAccessExpression(
+    Expression Target,
+    string MemberName,
     SourceLocation Location) : Expression(Location);

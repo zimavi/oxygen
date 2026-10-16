@@ -53,7 +53,7 @@ public sealed class LlvmModuleGenerator
         {
             foreach (var symbol in symbols)
             {
-                var functionType = ToLlvmFunctionType(symbol);
+                var functionType = ToLlvmFunctionType(symbol, model);
                 llvmFunctions[symbol] = module.AddFunction(OxygenNameMangler.Mangle(symbol.ModuleName, symbol), functionType);
             }
 
@@ -151,7 +151,7 @@ public sealed class LlvmModuleGenerator
             if (storageRequirements.Contains(symbol.Parameters[index].Name))
             {
                 var parameterStorage = builder.BuildAlloca(
-                    ToLlvmType(symbol.Parameters[index].Type),
+                    ToLlvmType(symbol.Parameters[index].Type, model),
                     parameter.Name + ".addr");
                 builder.BuildStore(parameter, parameterStorage);
                 storage.Add(symbol.Parameters[index].Name, parameterStorage);
@@ -184,7 +184,7 @@ public sealed class LlvmModuleGenerator
             if (emittedReturnType.IsVoid)
                 builder.BuildRetVoid();
             else
-                builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType), 0, false));
+                builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType, model), 0, false));
         }
     }
 
@@ -220,7 +220,7 @@ public sealed class LlvmModuleGenerator
                     if (storageRequirements.Contains(declaration.Name))
                     {
                         var declarationStorage = builder.BuildAlloca(
-                            ToLlvmType(declaredType),
+                            ToLlvmType(declaredType, model),
                             declaration.Name + ".addr");
                         builder.BuildStore(initializer, declarationStorage);
                         storage[declaration.Name] = declarationStorage;
@@ -233,7 +233,7 @@ public sealed class LlvmModuleGenerator
                 else
                 {
                     var declarationStorage = builder.BuildAlloca(
-                        ToLlvmType(declaredType),
+                        ToLlvmType(declaredType, model),
                         declaration.Name + ".addr");
                     storage[declaration.Name] = declarationStorage;
                 }
@@ -242,6 +242,19 @@ public sealed class LlvmModuleGenerator
                 var assigned = EmitExpression(context, builder, assignment.Value, values, storage, model, llvmFunctions);
                 if (assignment.Target is IdentifierExpression identifier)
                     builder.BuildStore(assigned, storage[identifier.Name]);
+                else if (assignment.Target is MemberAccessExpression member
+                    && member.Target is IdentifierExpression targetIdentifier)
+                {
+                    var current = builder.BuildLoad2(
+                        ToLlvmType(model.ExpressionTypes[member.Target], model),
+                        storage[targetIdentifier.Name],
+                        targetIdentifier.Name);
+                    var fieldIndex = model.Structs[model.ExpressionTypes[member.Target].StructName!].Fields
+                        .Select((field, index) => (field, index))
+                        .First(pair => pair.field.Name == member.MemberName).index;
+                    var updated = builder.BuildInsertValue(current, assigned, (uint)fieldIndex, "struct.update");
+                    builder.BuildStore(updated, storage[targetIdentifier.Name]);
+                }
                 else if (assignment.Target is UnaryExpression { Operator: TokenKind.Star, Operand: var operand })
                     builder.BuildStore(assigned, EmitExpression(context, builder, operand, values, storage, model, llvmFunctions));
                 else
@@ -253,7 +266,7 @@ public sealed class LlvmModuleGenerator
                     if (emittedReturnType.IsVoid)
                         builder.BuildRetVoid();
                     else
-                        builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType), 0, false));
+                        builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType, model), 0, false));
                 }
                 else
                     builder.BuildRet(EmitExpression(context, builder, returnStatement.Value, values, storage, model, llvmFunctions));
@@ -293,21 +306,64 @@ public sealed class LlvmModuleGenerator
         {
             IdentifierExpression identifier when values.TryGetValue(identifier.Name, out var value) => value,
             IdentifierExpression identifier => builder.BuildLoad2(
-                ToLlvmType(model.ExpressionTypes[identifier]),
+                ToLlvmType(model.ExpressionTypes[identifier], model),
                 storage[identifier.Name],
                 identifier.Name),
             IntegerLiteralExpression integer when model.ExpressionTypes[integer].IsPointer =>
-                LLVMValueRef.CreateConstNull(ToLlvmType(model.ExpressionTypes[integer])),
+                LLVMValueRef.CreateConstNull(ToLlvmType(model.ExpressionTypes[integer], model)),
             IntegerLiteralExpression integer => LLVMValueRef.CreateConstInt(
                 LLVMTypeRef.Int32, ulong.Parse(integer.Lexeme, CultureInfo.InvariantCulture), false),
             FloatingPointLiteralExpression floating => LLVMValueRef.CreateConstRealOfString(LLVMTypeRef.Double, floating.Lexeme),
             StringLiteralExpression literal => EmitStringLiteral(builder, literal),
             BooleanLiteralExpression boolean => LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, boolean.Value ? 1UL : 0UL, false),
+            StructLiteralExpression literal => EmitStructLiteral(context, builder, literal, values, storage, model, llvmFunctions),
+            MemberAccessExpression member => EmitMemberAccess(context, builder, member, values, storage, model, llvmFunctions),
             BinaryExpression binary => EmitBinary(context, builder, binary, values, storage, model, llvmFunctions),
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
             CallExpression call => EmitCall(context, builder, call, values, storage, model, llvmFunctions),
             _ => throw new InvalidOperationException($"Unsupported expression '{expression.GetType().Name}'.")
         };
+
+    private static LLVMValueRef EmitStructLiteral(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        StructLiteralExpression literal,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var result = LLVMValueRef.CreateConstNull(ToLlvmType(SemanticType.Struct(literal.TypeName), model));
+        var structure = model.Structs[literal.TypeName];
+        foreach (var field in literal.Fields)
+        {
+            var index = structure.Fields.Select((candidate, index) => (candidate, index))
+                .First(pair => pair.candidate.Name == field.Name).index;
+            result = builder.BuildInsertValue(
+                result,
+                EmitExpression(context, builder, field.Value, values, storage, model, llvmFunctions),
+                (uint)index,
+                $"struct.{field.Name}");
+        }
+        return result;
+    }
+
+    private static LLVMValueRef EmitMemberAccess(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        MemberAccessExpression member,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var target = EmitExpression(context, builder, member.Target, values, storage, model, llvmFunctions);
+        var targetType = model.ExpressionTypes[member.Target];
+        var index = model.Structs[targetType.StructName!].Fields
+            .Select((field, index) => (field, index))
+            .First(pair => pair.field.Name == member.MemberName).index;
+        return builder.BuildExtractValue(target, (uint)index, $"struct.{member.MemberName}");
+    }
 
     private static HashSet<string> CollectStorageRequirements(BlockStatement body)
     {
@@ -324,6 +380,8 @@ public sealed class LlvmModuleGenerator
             case AssignmentStatement assignment:
                 if (assignment.Target is IdentifierExpression identifier)
                     requirements.Add(identifier.Name);
+                else if (assignment.Target is MemberAccessExpression { Target: IdentifierExpression memberIdentifier })
+                    requirements.Add(memberIdentifier.Name);
                 CollectStorageRequirements(assignment.Target, requirements);
                 CollectStorageRequirements(assignment.Value, requirements);
                 break;
@@ -399,7 +457,7 @@ public sealed class LlvmModuleGenerator
             var index = right;
             if (model.ExpressionTypes[expression.Right].Primitive != PrimitiveType.I64)
                 index = builder.BuildSExt(right, LLVMTypeRef.Int64, "ptr.index");
-            var pointee = ToLlvmType(model.ExpressionTypes[expression].Pointee!);
+            var pointee = ToLlvmType(model.ExpressionTypes[expression].Pointee!, model);
             return expression.Operator == TokenKind.Plus
                 ? builder.BuildGEP2(pointee, left, new LLVMValueRef[] { index }, (ReadOnlySpan<char>)"ptr.add")
                 : builder.BuildGEP2(pointee, left,
@@ -432,7 +490,7 @@ public sealed class LlvmModuleGenerator
         }
         var operand = EmitExpression(context, builder, expression.Operand, values, storage, model, llvmFunctions);
         if (expression.Operator == TokenKind.Star)
-            return builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[expression]), operand, "deref");
+            return builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[expression], model), operand, "deref");
         var isFloatingPoint = model.ExpressionTypes[expression].Primitive is PrimitiveType.F32 or PrimitiveType.F64;
         return expression.Operator == TokenKind.Minus
             ? isFloatingPoint
@@ -463,21 +521,21 @@ public sealed class LlvmModuleGenerator
         return builder.BuildCall2(llvmFunctions[function].FunctionType, llvmFunctions[function], arguments, resultName);
     }
 
-    private static LLVMTypeRef ToLlvmFunctionType(FunctionSymbol symbol)
+    private static LLVMTypeRef ToLlvmFunctionType(FunctionSymbol symbol, SemanticModel model)
     {
         var parameterTypes = symbol.Parameters
             .Select(parameter => UsesPointerStringAbi(symbol) && parameter.Type.Kind == SemanticTypeKind.String
                 ? LLVMTypeRef.CreatePointer(ToLlvmStringType(), 0)
-                : ToLlvmType(parameter.Type))
+                : ToLlvmType(parameter.Type, model))
             .ToArray();
-        return LLVMTypeRef.CreateFunction(ToLlvmType(symbol.ReturnType), parameterTypes, false);
+        return LLVMTypeRef.CreateFunction(ToLlvmType(symbol.ReturnType, model), parameterTypes, false);
     }
 
     private static bool UsesPointerStringAbi(FunctionSymbol symbol) =>
         symbol.IsExternal &&
         symbol.NativeName is "oxygen_write_stdout" or "oxygen_write_stderr";
 
-    private static LLVMTypeRef ToLlvmType(SemanticType type) => type.Primitive switch
+    private static LLVMTypeRef ToLlvmType(SemanticType type, SemanticModel model) => type.Primitive switch
     {
         PrimitiveType.I8 or PrimitiveType.U8 => LLVMTypeRef.Int8,
         PrimitiveType.I16 or PrimitiveType.U16 => LLVMTypeRef.Int16,
@@ -487,7 +545,10 @@ public sealed class LlvmModuleGenerator
         PrimitiveType.F32 => LLVMTypeRef.Float,
         PrimitiveType.F64 => LLVMTypeRef.Double,
         PrimitiveType.Void => LLVMTypeRef.Void,
-        _ when type.Kind == SemanticTypeKind.Pointer => LLVMTypeRef.CreatePointer(ToLlvmType(type.Pointee!), 0),
+        _ when type.Kind == SemanticTypeKind.Pointer => LLVMTypeRef.CreatePointer(ToLlvmType(type.Pointee!, model), 0),
+        _ when type.Kind == SemanticTypeKind.Struct => LLVMTypeRef.CreateStruct(
+            model.Structs[type.StructName!].Fields.Select(field => ToLlvmType(field.Type, model)).ToArray(),
+            model.Structs[type.StructName!].IsPacked),
         _ when type.Kind == SemanticTypeKind.String => ToLlvmStringType(),
         _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
     };

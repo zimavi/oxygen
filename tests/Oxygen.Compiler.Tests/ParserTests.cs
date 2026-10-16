@@ -103,6 +103,22 @@ public sealed class ParserTests
         Assert.IsType<UnaryExpression>(assignment.Target);
     }
 
+    [Fact]
+    public void ParsesStructDeclarationsLiteralsAndMembers()
+    {
+        var unit = Parse(
+            "struct Point { i32 x; i32 y; } i32 main() { Point point = Point { x: 1, y: 2 }; point.x = 3; return point.y; }");
+
+        var structure = Assert.Single(unit.Structs);
+        Assert.Equal("Point", structure.Name);
+        Assert.Equal(["x", "y"], structure.Fields.Select(field => field.Name));
+        var declaration = Assert.IsType<VariableDeclarationStatement>(unit.Functions[0].Body.Statements[0]);
+        Assert.Equal("Point", declaration.Type.NamedType);
+        Assert.IsType<StructLiteralExpression>(declaration.Initializer);
+        Assert.IsType<MemberAccessExpression>(
+            Assert.IsType<AssignmentStatement>(unit.Functions[0].Body.Statements[1]).Target);
+    }
+
     private CompilationUnit Parse(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
 }

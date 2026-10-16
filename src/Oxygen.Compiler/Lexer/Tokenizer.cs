@@ -30,7 +30,8 @@ public sealed class Tokenizer
             ["f64"] = TokenKind.F64,
             ["bool"] = TokenKind.Bool,
             ["void"] = TokenKind.Void,
-            ["string"] = TokenKind.String
+            ["string"] = TokenKind.String,
+            ["struct"] = TokenKind.Struct
         };
 
     private readonly ILogger _logger;
@@ -239,6 +240,7 @@ public sealed class Tokenizer
                 '{' => TokenKind.OpenBrace,
                 '}' => TokenKind.CloseBrace,
                 ',' => TokenKind.Comma,
+                ':' => TokenKind.Colon,
                 '.' => TokenKind.Dot,
                 ';' => TokenKind.Semicolon,
                 '+' => TokenKind.Plus,
