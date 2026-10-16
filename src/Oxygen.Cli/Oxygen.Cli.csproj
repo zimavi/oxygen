@@ -9,12 +9,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Serilog" Version="4.4.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="System.CommandLine" Version="2.0.13" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Oxygen.Compiler\Oxygen.Compiler.csproj" />
+    <ProjectReference Include="..\Oxygen.Llvm\Oxygen.Llvm.csproj" />
   </ItemGroup>
 
 </Project>

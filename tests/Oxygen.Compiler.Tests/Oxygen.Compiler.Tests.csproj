@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Oxygen.Compiler\Oxygen.Compiler.csproj" />
+    <ProjectReference Include="..\..\src\Oxygen.Llvm\Oxygen.Llvm.csproj" />
   </ItemGroup>
 
 </Project>

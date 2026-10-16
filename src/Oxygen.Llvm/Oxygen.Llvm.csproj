@@ -4,6 +4,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LLVMSharp" Version="22.1.8" />
+    <PackageReference Include="libLLVM" Version="23.1.0" />
+    <ProjectReference Include="..\Oxygen.Compiler\Oxygen.Compiler.csproj" />
+  </ItemGroup>
 
 </Project>

@@ -5,7 +5,7 @@ namespace Oxygen.Compiler.Parsing;
 public sealed class ParseException : Exception
 {
     public ParseException(string message, Token token)
-        : base($"{message} at {token.Location.Line}:{token.Location.Column}.")
+        : base(message)
     {
         Token = token;
     }

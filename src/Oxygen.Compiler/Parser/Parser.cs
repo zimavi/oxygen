@@ -1,4 +1,5 @@
 using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
 using Serilog;
 
@@ -62,6 +63,33 @@ public sealed class Parser
                 exception.Token.Location.Column);
             throw;
         }
+    }
+
+    public ParseResult ParseWithDiagnostics(string? sourceName = null)
+    {
+        var diagnostics = new DiagnosticBag();
+        var functions = new List<FunctionDeclaration>();
+        var location = Current.Location;
+
+        while (!Check(TokenKind.EndOfFile))
+        {
+            try
+            {
+                functions.Add(ParseFunction());
+            }
+            catch (ParseException exception)
+            {
+                diagnostics.Add(
+                    DiagnosticPhase.Parsing,
+                    exception.Message,
+                    exception.Token.Location,
+                    Math.Max(1, exception.Token.Lexeme.Length),
+                    sourceName);
+                Synchronize();
+            }
+        }
+
+        return new ParseResult(new CompilationUnit(functions, location), diagnostics.Diagnostics);
     }
 
     private FunctionDeclaration ParseFunction()
@@ -225,7 +253,7 @@ public sealed class Parser
                 Consume(TokenKind.CloseParenthesis, "Expected ')' after expression.");
                 return expression;
             default:
-                throw Error("Expected an expression.", token);
+                throw Error($"Expected an expression, but found {Describe(token)}.", token);
         }
     }
 
@@ -242,9 +270,9 @@ public sealed class Parser
             return new TypeSyntax(primitive, false, token.Location);
         }
 
-        throw Error(allowInferred
-            ? "Expected a primitive type or 'var'."
-            : "Expected a primitive type.", Current);
+        throw Error(
+            $"{(allowInferred ? "Expected a primitive type or 'var'" : "Expected a primitive type")}, but found {Describe(Current)}.",
+            Current);
     }
 
     private static int GetPrecedence(TokenKind kind) => kind switch
@@ -268,7 +296,7 @@ public sealed class Parser
             return Advance();
         }
 
-        throw Error(message, Current);
+        throw Error($"{message} Found {Describe(Current)} instead.", Current);
     }
 
     private bool Match(TokenKind kind)
@@ -303,4 +331,27 @@ public sealed class Parser
     private Token Previous => _tokens[Math.Max(0, _position - 1)];
 
     private static ParseException Error(string message, Token token) => new(message, token);
+
+    private static string Describe(Token token) =>
+        token.Kind == TokenKind.EndOfFile
+            ? "the end of the file"
+            : $"'{token.Lexeme}' ({token.Kind})";
+
+    private void Synchronize()
+    {
+        while (!Check(TokenKind.EndOfFile))
+        {
+            if (Match(TokenKind.CloseBrace))
+            {
+                return;
+            }
+
+            if (IsType(Current.Kind) || Check(TokenKind.Void))
+            {
+                return;
+            }
+
+            Advance();
+        }
+    }
 }

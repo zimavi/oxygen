@@ -1,4 +1,5 @@
-﻿using Serilog;
+using Oxygen.Compiler.Diagnostics;
+using Serilog;
 
 namespace Oxygen.Compiler.Lexer;
 
@@ -52,7 +53,18 @@ public sealed class Tokenizer
         }
     }
 
-    private IReadOnlyList<Token> TokenizeCore(string source)
+    public TokenizationResult TokenizeWithDiagnostics(string source, string? sourceName = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var diagnostics = new DiagnosticBag();
+        return new TokenizationResult(TokenizeCore(source, diagnostics, sourceName), diagnostics.Diagnostics);
+    }
+
+    private IReadOnlyList<Token> TokenizeCore(
+        string source,
+        DiagnosticBag? diagnostics = null,
+        string? sourceName = null)
     {
         var tokens = new List<Token>();
         var position = 0;
@@ -81,27 +93,38 @@ public sealed class Tokenizer
                 continue;
             }
 
-            Token token;
-            if (IsIdentifierStart(source[position]))
+            try
             {
-                token = ReadIdentifierOrKeyword(source, ref position, ref line, ref column, location);
-            }
-            else if (char.IsDigit(source[position]))
-            {
-                token = ReadNumber(source, ref position, ref line, ref column, location);
-            }
-            else if (source[position] == '"')
-            {
-                token = ReadString(source, ref position, ref line, ref column, location);
-            }
-            else
-            {
-                token = ReadOperatorOrPunctuation(source, ref position, ref line, ref column, location);
-            }
+                Token token;
+                if (IsIdentifierStart(source[position]))
+                {
+                    token = ReadIdentifierOrKeyword(source, ref position, ref line, ref column, location);
+                }
+                else if (char.IsDigit(source[position]))
+                {
+                    token = ReadNumber(source, ref position, ref line, ref column, location);
+                }
+                else if (source[position] == '"')
+                {
+                    token = ReadString(source, ref position, ref line, ref column, location);
+                }
+                else
+                {
+                    token = ReadOperatorOrPunctuation(source, ref position, ref line, ref column, location);
+                }
 
-            tokens.Add(token);
-            _logger.Debug("Lexed {TokenKind} '{Lexeme}' at {Line}:{Column}", token.Kind, token.Lexeme,
-                token.Location.Line, token.Location.Column);
+                tokens.Add(token);
+                _logger.Debug("Lexed {TokenKind} '{Lexeme}' at {Line}:{Column}", token.Kind, token.Lexeme,
+                    token.Location.Line, token.Location.Column);
+            }
+            catch (LexicalException exception) when (diagnostics is not null)
+            {
+                diagnostics.Add(DiagnosticPhase.Lexing, exception.Message, exception.Location, sourceName: sourceName);
+                if (position < source.Length)
+                {
+                    Advance(source[position], ref position, ref line, ref column);
+                }
+            }
         }
 
         var end = new Token(TokenKind.EndOfFile, string.Empty, new SourceLocation(line, column));
