@@ -21,10 +21,18 @@ if [ -z "$ARCHIVER" ]; then
 fi
 
 mkdir -p "$OUTPUT_DIRECTORY"
-OBJECT="$OUTPUT_DIRECTORY/oxygen_runtime.o"
-LIBRARY="$OUTPUT_DIRECTORY/liboxygen_runtime.a"
+for variant in release debug; do
+    suffix=""
+    flags="-O2"
+    if [ "$variant" = "debug" ]; then
+        suffix="_debug"
+        flags="-O0 -g"
+    fi
 
-"$CLANG" -std=c17 -O2 -I "$INCLUDE_DIRECTORY" -c "$SOURCE" -o "$OBJECT"
-"$ARCHIVER" rcs "$LIBRARY" "$OBJECT"
-
-printf '%s\n' "$LIBRARY"
+    object="$OUTPUT_DIRECTORY/oxygen_runtime${suffix}.o"
+    library="$OUTPUT_DIRECTORY/liboxygen_runtime${suffix}.a"
+    # shellcheck disable=SC2086
+    "$CLANG" -std=c17 $flags -I "$INCLUDE_DIRECTORY" -c "$SOURCE" -o "$object"
+    "$ARCHIVER" rcs "$library" "$object"
+    printf '%s\n' "$library"
+done

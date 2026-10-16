@@ -23,9 +23,43 @@ var sourcesArgument = new Argument<FileInfo[]>("sources")
     Description = "The source files to process",
     Arity = ArgumentArity.OneOrMore
 };
+var outputOption = new Option<FileInfo?>("--output", "-o")
+{
+    Description = "Path of the native executable to produce",
+    DefaultValueFactory = _ => new FileInfo("program")
+};
+var clangOption = new Option<string>("--clang", "-c")
+{
+    Description = "LLVM compiler driver used for object generation and linking",
+    DefaultValueFactory = _ => "clang"
+};
+var debugOption = new Option<bool>("--debug")
+{
+    Description = "Generate debug symbols and use the debug runtime"
+};
+var optimizationOption = new Option<string>("--optimization", "-O")
+{
+    Description = "Clang optimization level, for example O0 or O2",
+    DefaultValueFactory = _ => "2"
+};
+var runtimeOption = new Option<FileInfo?>("--runtime", "-r")
+{
+    Description = "Static Oxygen runtime library to link"
+};
+var standardLibraryOption = new Option<FileInfo[]>("--stdlib")
+{
+    Description = "Optional dynamic standard-library dependency",
+    Arity = ArgumentArity.ZeroOrMore
+};
 var buildCommand = new Command("build", "Build the project")
 {
-    sourcesArgument
+    sourcesArgument,
+    outputOption,
+    clangOption,
+    debugOption,
+    optimizationOption,
+    runtimeOption,
+    standardLibraryOption
 };
 buildCommand.SetAction((CommandParseResult result) =>
 {
@@ -64,8 +98,28 @@ buildCommand.SetAction((CommandParseResult result) =>
     }
 
     using var generated = new LlvmModuleGenerator().Generate("program", semanticResult.Model!);
-    
     File.WriteAllText("output.ll", generated.ToString());
+
+    var runtimePath = result.GetValue(runtimeOption)?.FullName
+        ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? "./",
+            result.GetValue(debugOption)
+                ? OperatingSystem.IsWindows() ? "oxygen_runtime_debug.lib" : "liboxygen_runtime_debug.a"
+                : OperatingSystem.IsWindows() ? "oxygen_runtime.lib" : "liboxygen_runtime.a");
+    var dependencies = new List<NativeDependency>
+    {
+        new(runtimePath, NativeDependencyKind.Static)
+    };
+    dependencies.AddRange((result.GetValue(standardLibraryOption) ?? [])
+        .Select(path => new NativeDependency(path.FullName, NativeDependencyKind.Dynamic)));
+
+    generated.BuildNative(new NativeBuildOptions
+    {
+        CompilerPath = result.GetValue(clangOption) ?? "clang",
+        OptimizationLevel = "O" + (result.GetValue(optimizationOption) ?? "O2"),
+        GenerateDebugSymbols = result.GetValue(debugOption),
+        OutputPath = result.GetValue(outputOption)?.FullName ?? "program",
+        Dependencies = dependencies
+    });
 });
 
 rootCommand.Add(buildCommand);

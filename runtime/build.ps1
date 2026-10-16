@@ -41,26 +41,36 @@ if ([string]::IsNullOrWhiteSpace($Archiver)) {
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-$object = Join-Path $OutputDirectory "oxygen_runtime.obj"
-if ($Format -eq "gnu") {
-    $object = Join-Path $OutputDirectory "oxygen_runtime.o"
-}
-$library = Join-Path $OutputDirectory $(if ($Format -eq "msvc") { "oxygen_runtime.lib" } else { "liboxygen_runtime.a" })
-
-& $Clang -std=c17 -O2 -I $includeDirectory -c $source -o $object
-if ($LASTEXITCODE -ne 0) {
-    throw "Clang failed to compile the Oxygen runtime."
-}
-
 $archiverName = [IO.Path]::GetFileNameWithoutExtension($Archiver)
-if ($archiverName -in @("llvm-lib", "lib")) {
-    & $Archiver /out:$library $object
-} else {
-    & $Archiver rcs $library $object
+$isMsvc = $Format -eq "msvc"
+$variants = @(
+    @{ Suffix = ""; Flags = @("-O2") },
+    @{ Suffix = "_debug"; Flags = @("-O0", "-g") }
+)
+$libraries = @()
+
+foreach ($variant in $variants) {
+    $objectExtension = if ($isMsvc) { ".obj" } else { ".o" }
+    $libraryName = if ($isMsvc) { "oxygen_runtime$($variant.Suffix).lib" } else { "liboxygen_runtime$($variant.Suffix).a" }
+    $object = Join-Path $OutputDirectory "oxygen_runtime$($variant.Suffix)$objectExtension"
+    $library = Join-Path $OutputDirectory $libraryName
+
+    & $Clang -std=c17 @($variant.Flags) -I $includeDirectory -c $source -o $object
+    if ($LASTEXITCODE -ne 0) {
+        throw "Clang failed to compile the Oxygen runtime variant '$($variant.Suffix)'."
+    }
+
+    if ($archiverName -in @("llvm-lib", "lib")) {
+        & $Archiver /out:$library $object
+    } else {
+        & $Archiver rcs $library $object
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "The static-library archiver failed to create '$library'."
+    }
+
+    $libraries += $library
 }
 
-if ($LASTEXITCODE -ne 0) {
-    throw "The static-library archiver failed to create '$library'."
-}
-
-Write-Output $library
+Write-Output $libraries

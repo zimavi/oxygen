@@ -46,11 +46,8 @@ public sealed class LlvmModuleGenerator
         {
             foreach (var symbol in symbols)
             {
-                var returnType = symbol == model.MainFunction && symbol.ReturnType.IsVoid
-                    ? SemanticType.FromPrimitive(PrimitiveType.I32)
-                    : symbol.ReturnType;
                 var parameterTypes = symbol.Parameters.Select(parameter => ToLlvmType(parameter.Type)).ToArray();
-                var functionType = LLVMTypeRef.CreateFunction(ToLlvmType(returnType), parameterTypes, false);
+                var functionType = LLVMTypeRef.CreateFunction(ToLlvmType(symbol.ReturnType), parameterTypes, false);
                 llvmFunctions[symbol] = module.AddFunction(OxygenNameMangler.Mangle(moduleName, symbol), functionType);
             }
 
@@ -93,16 +90,20 @@ public sealed class LlvmModuleGenerator
 
         var entry = nativeMain.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
-        builder.BuildCall2(runtimeInitializeType, runtimeInitialize, Array.Empty<LLVMValueRef>(), "runtime.init");
+        builder.BuildCall2(runtimeInitializeType, runtimeInitialize, []);
 
         var oxygenMain = model.MainFunction
             ?? throw new InvalidOperationException("Semantic model does not contain a main function.");
+        var oxygenMainType = llvmFunctions[oxygenMain].FunctionType;
         var result = builder.BuildCall2(
-            llvmFunctions[oxygenMain].FunctionType,
+            oxygenMainType,
             llvmFunctions[oxygenMain],
             Array.Empty<LLVMValueRef>(),
-            "oxygen.main");
-        builder.BuildRet(result);
+            oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
+        if (oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind)
+            builder.BuildRet(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false));
+        else
+            builder.BuildRet(result);
     }
 
     private static void EmitFunction(
@@ -123,9 +124,7 @@ public sealed class LlvmModuleGenerator
             values.Add(symbol.Parameters[index].Name, parameter);
         }
 
-        var emittedReturnType = symbol == model.MainFunction && symbol.ReturnType.IsVoid
-            ? SemanticType.FromPrimitive(PrimitiveType.I32)
-            : symbol.ReturnType;
+        var emittedReturnType = symbol.ReturnType;
         var returned = false;
         foreach (var statement in symbol.Declaration.Body.Statements)
         {
@@ -261,6 +260,9 @@ public sealed class GeneratedLlvmModule(LLVMContextRef context, LLVMModuleRef mo
 {
     public LLVMModuleRef Module => module;
     public override string ToString() => module.PrintToString();
+
+    public void BuildNative(NativeBuildOptions options, INativeToolRunner? toolRunner = null) =>
+        new NativeBuildPipeline(toolRunner).Build(this, options);
 
     public void Dispose()
     {
