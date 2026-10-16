@@ -11,8 +11,13 @@ public sealed class Tokenizer
             ["true"] = TokenKind.True,
             ["false"] = TokenKind.False,
             ["return"] = TokenKind.Return,
+            ["module"] = TokenKind.Module,
+            ["import"] = TokenKind.Import,
+            ["public"] = TokenKind.Public,
+            ["private"] = TokenKind.Private,
             ["var"] = TokenKind.Var,
             ["const"] = TokenKind.Const,
+            ["extern"] = TokenKind.Extern,
             ["i8"] = TokenKind.I8,
             ["i16"] = TokenKind.I16,
             ["i32"] = TokenKind.I32,
@@ -24,7 +29,8 @@ public sealed class Tokenizer
             ["f32"] = TokenKind.F32,
             ["f64"] = TokenKind.F64,
             ["bool"] = TokenKind.Bool,
-            ["void"] = TokenKind.Void
+            ["void"] = TokenKind.Void,
+            ["string"] = TokenKind.String
         };
 
     private readonly ILogger _logger;
@@ -229,12 +235,15 @@ public sealed class Tokenizer
             {
                 '(' => TokenKind.OpenParenthesis,
                 ')' => TokenKind.CloseParenthesis,
+                '@' => TokenKind.At,
                 '{' => TokenKind.OpenBrace,
                 '}' => TokenKind.CloseBrace,
                 ',' => TokenKind.Comma,
+                '.' => TokenKind.Dot,
                 ';' => TokenKind.Semicolon,
                 '+' => TokenKind.Plus,
                 '-' => TokenKind.Minus,
+                '&' => TokenKind.Ampersand,
                 '*' => TokenKind.Star,
                 '/' => TokenKind.Slash,
                 '%' => TokenKind.Percent,

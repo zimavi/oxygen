@@ -1,0 +1,7 @@
+module stdlib.strings;
+
+@extern("oxygen_string_to_c_string")
+public extern i8* to_c_string(string value);
+
+@extern("oxygen_c_string_to_string")
+public extern string from_c_string(i8* value);

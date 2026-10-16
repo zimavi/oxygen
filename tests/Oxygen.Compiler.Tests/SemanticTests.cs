@@ -49,6 +49,30 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AllowsVoidCallsAsExpressionStatements()
+    {
+        var model = Analyze(
+            """
+            void print() { return; }
+            i32 main() {
+                print();
+                return 0;
+            }
+            """);
+
+        Assert.Contains(model.ResolvedCalls.Values, function => function.Name == "print");
+    }
+
+    [Fact]
+    public void RejectsVoidCallsWhenAValueIsRequired()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("void print() { return; } i32 main() { return print(); }"));
+
+        Assert.Contains("cannot be used as an expression", exception.Message);
+    }
+
+    [Fact]
     public void ResolvesOverloadsByParameterTypes()
     {
         var model = Analyze(
@@ -179,6 +203,278 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void DoesNotReportUnusedPublicOrExternalFunctions()
+    {
+        var result = AnalyzeWithDiagnostics(
+            """
+            @extern("native_function") public extern void external_function();
+            public void api_function() {
+                return;
+            }
+            i32 main() {
+                return 0;
+            }
+            """);
+
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("Function 'external_function' is never called"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("Function 'api_function' is never called"));
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void ResolvesPublicFunctionsThroughImportedNestedModules()
+    {
+        var main = Parse("import math; i32 main() { return math.add(10, 32) + float.pow(20.4, 2.4); }");
+        var library = Parse("public module math; public i32 add(i32 left, i32 right) { return left + right; }");
+        var nested = Parse("public module math.float; public i32 pow(f64 value, f64 exponent) { return 1; }");
+
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([main, library, nested]);
+
+        Assert.Contains(model.ResolvedCalls.Values, symbol => symbol.QualifiedName == "math.add");
+        Assert.Contains(model.ResolvedCalls.Values, symbol => symbol.QualifiedName == "math.float.pow");
+    }
+
+    [Fact]
+    public void ResolvesStringMarshalingFunctionsThroughTheStdlibModule()
+    {
+        var main = Parse(
+            """
+            import stdlib.strings;
+            i32 main() {
+                i8* native = strings.to_c_string("hello");
+                string value = strings.from_c_string(native);
+                return 0;
+            }
+            """);
+        var library = Parse(
+            """
+            public module stdlib.strings;
+            @extern("oxygen_string_to_c_string")
+            public extern i8* to_c_string(string value);
+            @extern("oxygen_c_string_to_string")
+            public extern string from_c_string(i8* value);
+            """);
+
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([main, library]);
+
+        Assert.Contains(model.ResolvedCalls.Values, symbol => symbol.QualifiedName == "stdlib.strings.to_c_string");
+        Assert.Contains(model.ResolvedCalls.Values, symbol => symbol.QualifiedName == "stdlib.strings.from_c_string");
+    }
+
+    [Fact]
+    public void ResolvesStandardIoFunctionsThroughTheStdlibModule()
+    {
+        var main = Parse(
+            """
+            import stdlib.io;
+            i32 main() {
+                io.print("hello");
+                io.println("world");
+                return 0;
+            }
+            """);
+        var library = Parse(
+            """
+            public module stdlib.io;
+            @extern("oxygen_write_stdout")
+            public extern void write_stdout(string value);
+            @extern("oxygen_write_stderr")
+            public extern void write_stderr(string value);
+            public void print(string value) {
+                write_stdout(value);
+            }
+            public void println(string value) {
+                write_stdout(value);
+                write_stdout("\n");
+            }
+            """);
+
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([main, library]);
+
+        Assert.Contains(model.ResolvedCalls.Values, symbol => symbol.QualifiedName == "stdlib.io.print");
+        Assert.Contains(model.ResolvedCalls.Values, symbol => symbol.QualifiedName == "stdlib.io.println");
+    }
+
+    [Fact]
+    public void FullyQualifiedCallsDoNotRequireAnImport()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse("i32 main() { return math.add(10, 32); }"),
+            Parse("public module math; public i32 add(i32 left, i32 right) { return left + right; }")
+        ]);
+
+        Assert.Equal("math.add", model.ResolvedCalls.Values.Single().QualifiedName);
+    }
+
+    [Fact]
+    public void RejectsUnqualifiedImportedFunctions()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            new SemanticAnalyzer(Log.Logger).Analyze(
+            [
+                Parse("import math; i32 main() { return add(10, 32); }"),
+                Parse("public module math; public i32 add(i32 left, i32 right) { return left + right; }")
+            ]));
+
+        Assert.Contains("Function 'add' is not declared", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsPrivateFunctionsAcrossModules()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            new SemanticAnalyzer(Log.Logger).Analyze(
+            [
+                Parse("import foo.bar; i32 main() { return bar.value(); }"),
+                Parse("module foo.bar; i32 value() { return 42; }")
+            ]));
+
+        Assert.Contains("Function 'bar.value' is not declared", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsOneModuleToBeSplitAcrossMultipleCompilationUnits()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse("i32 main() { return math.add(10, 32); }"),
+            Parse("public module math; public i32 add(i32 left, i32 right) { return left + right; }"),
+            Parse("public module math; public i32 other() { return 1; }")
+        ]);
+
+        Assert.Contains(model.Functions.Values, symbol => symbol.QualifiedName == "math.add");
+        Assert.Contains(model.Functions.Values, symbol => symbol.QualifiedName == "math.other");
+    }
+
+    [Fact]
+    public void ResolvesFunctionsDeclaredByNativeModuleMetadata()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+            [Parse("import foo.bar; i32 main() { return bar.value(); }")],
+            [
+                new ExternalModuleDeclaration(
+                    "foo.bar",
+                    [new ExternalFunctionDeclaration(
+                        "value",
+                        SemanticType.FromPrimitive(PrimitiveType.I32),
+                        [],
+                        "_Ox_native_value")])
+            ]);
+
+        Assert.Equal("_Ox_native_value", model.ResolvedCalls.Values.Single().NativeName);
+        Assert.True(model.ResolvedCalls.Values.Single().IsExternal);
+    }
+
+    [Fact]
+    public void PreservesCInteropFunctionMetadata()
+    {
+        var model = Analyze("@extern(\"puts\") @calling_convention(c) i32 main() { return 0; }");
+
+        Assert.Equal(
+            new CInteropFunctionMetadata("puts", "c"),
+            model.MainFunction!.CInterop);
+    }
+
+    [Fact]
+    public void ResolvesCallsToExternCFunctions()
+    {
+        var model = Analyze(
+            """
+            @extern("puts") extern i32 puts(i32 value);
+            i32 main() { return puts(0); }
+            """);
+
+        var external = model.ResolvedCalls.Values.Single();
+        Assert.True(external.IsExternal);
+        Assert.Equal("puts", external.NativeName);
+        Assert.Equal("puts", external.CInterop!.ExternalName);
+    }
+
+    [Fact]
+    public void RejectsLayoutAnnotationsUntilStructsExist()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("@packed i32 main() { return 0; }"));
+
+        Assert.Contains("reserved for struct declarations", exception.Message);
+    }
+
+    [Fact]
+    public void InfersAndChecksImmutableStringValues()
+    {
+        var model = Analyze(
+            """
+            string echo(string value) { return value; }
+            i32 main() {
+                const string message = "hello";
+                return 0;
+            }
+            """);
+
+        Assert.Equal(SemanticType.String, model.Functions.Values.Single(function => function.Name == "echo").Parameters[0].Type);
+    }
+
+    [Fact]
+    public void AnalyzesRawPointersNullAndScaledArithmetic()
+    {
+        var model = Analyze(
+            """
+            i32 read(i32* value) { return *value; }
+            i32 main() {
+                i32 value = 41;
+                i32* pointer = &value;
+                pointer = pointer + 1;
+                pointer = 0;
+                return 0;
+            }
+            """);
+
+        Assert.Contains(model.Functions.Values, function => function.Parameters.Any(parameter =>
+            parameter.Type.IsPointer && parameter.Type.Pointee == SemanticType.FromPrimitive(PrimitiveType.I32)));
+    }
+
+    [Fact]
+    public void RejectsCompileTimeNullDereference()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { return *(0); }"));
+
+        Assert.Contains("Cannot dereference a null pointer", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsDereferenceOfPointerKnownToBeNull()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32* ptr = 0; *ptr = 10; return 0; }"));
+
+        Assert.Contains("Cannot dereference a null pointer", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsAssignmentToConstString()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { const string value = \"hello\"; value = \"world\"; return 0; }"));
+
+        Assert.Contains("Cannot assign to const variable 'value'", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsStringsInExternalCDeclarationsWithTheDefinedAbi()
+    {
+        var model = Analyze(
+            "@extern(\"oxygen_string_to_c_string\") extern i8* to_c_string(string value); i32 main() { return 0; }");
+
+        Assert.Contains(model.Functions.Values, symbol => symbol.Name == "to_c_string" && symbol.IsExternal);
+    }
+
+    [Fact]
     public void WarningsCanBePromotedToBlockingDiagnostics()
     {
         var bag = new DiagnosticBag();
@@ -193,6 +489,9 @@ public sealed class SemanticTests
         var unit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
         return new SemanticAnalyzer(Log.Logger).Analyze([unit]);
     }
+
+    private CompilationUnit Parse(string source) =>
+        new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
 
     private SemanticResult AnalyzeWithDiagnostics(string source)
     {

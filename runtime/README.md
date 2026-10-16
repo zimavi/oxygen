@@ -1,9 +1,17 @@
 # Oxygen runtime
 
 The runtime is compiled as a static library and linked after LLVM has generated
-the Oxygen object files. The archive exports the stable
-`__oxygen_runtime_initialize` ABI symbol used by the generated native entry
-point.
+the Oxygen object files. The archive exports the stable `__oxygen_runtime_initialize` ABI symbol used by
+the generated native entry point, string output symbols
+`oxygen_write_stdout` and `oxygen_write_stderr`, and the string marshaling
+symbols `oxygen_string_to_c_string` and `oxygen_c_string_to_string`.
+
+The output and marshaling helpers use the compiler's `{ ptr, i64 length }`
+string layout. The output functions receive a pointer to this structure to
+keep the C ABI explicit across platforms. Output writes exactly the supplied number of bytes, so embedded
+NUL bytes are supported.
+The Oxygen-to-C conversion allocates a NUL-terminated copy and intentionally
+leaves ownership with the runtime until a future deallocator is added.
 
 From the repository root:
 
@@ -46,8 +54,9 @@ The scripts require Clang and a compatible static-library archiver
 
 The output is a static archive, not a complete executable. The CLI native
 build passes this archive after the LLVM-generated object file and then links
-any optional `--stdlib` paths as dynamic dependencies. The standard library
-is not present yet, so the dynamic dependency list is empty by default. Use
+any optional `--stdlib` paths as dynamic dependencies. The source standard
+library includes `stdlib.io`, which provides `write_stdout`, `write_stderr`,
+`print`, and `println` over the runtime output primitives. Use
 `--debug` to generate debug symbols, use the debug runtime by default, and
 select another optimization level with `--optimization O0`, `--optimization
 O1`, or `--optimization O2`.

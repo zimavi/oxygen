@@ -14,6 +14,7 @@ public sealed record NativeDependency(string Path, NativeDependencyKind Kind);
 public sealed record NativeBuildOptions
 {
     public required string OutputPath { get; init; }
+    public string? MetadataPath { get; init; }
     public string CompilerPath { get; init; } = "clang";
     public string OptimizationLevel { get; init; } = "O2";
     public bool GenerateDebugSymbols { get; init; }
@@ -82,7 +83,32 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
     public void Build(GeneratedLlvmModule module, NativeBuildOptions options)
     {
         ArgumentNullException.ThrowIfNull(module);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!string.IsNullOrWhiteSpace(options.MetadataPath))
+        {
+            var metadata = module.Metadata with
+            {
+                Dependencies = options.Dependencies
+                    .Select(dependency => new NativeDependencyMetadata
+                    {
+                        Path = dependency.Path,
+                        Kind = dependency.Kind
+                    })
+                    .ToArray()
+            };
+            NativeModuleMetadataSerializer.Write(options.MetadataPath, metadata);
+            Build(module.ToString(), options);
+            EmbedMetadataIfOutputExists(options.OutputPath, metadata);
+            return;
+        }
         Build(module.ToString(), options);
+    }
+
+    private static void EmbedMetadataIfOutputExists(string outputPath, NativeModuleMetadata metadata)
+    {
+        var fullPath = Path.GetFullPath(outputPath);
+        if (File.Exists(fullPath))
+            NativeModuleMetadataSerializer.Embed(fullPath, metadata);
     }
 
     public void Build(string llvmIr, NativeBuildOptions options)

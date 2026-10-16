@@ -6,11 +6,11 @@ using Oxygen.Compiler.Parsing;
 using Oxygen.Compiler.Lexer;
 using Oxygen.Compiler.Semantic;
 using Oxygen.Llvm;
+using Oxygen.Cli;
 using Serilog;
-using CommandParseResult = System.CommandLine.ParseResult;
 
 Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
+    .MinimumLevel.Debug()
     .WriteTo.Console(outputTemplate: "[{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{ExceptionMessage}")
     .CreateLogger();
 
@@ -31,6 +31,10 @@ var outputOption = new Option<FileInfo?>("--output", "-o")
 var emitIrOption = new Option<FileInfo?>("--emit-ir")
 {
     Description = "Write textual LLVM IR to this path instead of building a native executable"
+};
+var emitMetadataOption = new Option<FileInfo?>("--emit-metadata")
+{
+    Description = "Write versioned native-module metadata (.oxmeta) to this path"
 };
 var clangOption = new Option<string>("--clang", "-c")
 {
@@ -64,6 +68,7 @@ var buildCommand = new Command("build", "Build the project")
     sourcesArgument,
     outputOption,
     emitIrOption,
+    emitMetadataOption,
     clangOption,
     debugOption,
     warningsAsErrorsOption,
@@ -74,33 +79,30 @@ var buildCommand = new Command("build", "Build the project")
 buildCommand.SetAction(result =>
 {
     FileInfo[]? paths = result.GetValue(sourcesArgument);
-    var sources = paths!.Select(file => new SourceText(file.FullName, File.ReadAllText(file.FullName))).ToList();
+    var rootSources = paths!.Select(file => new SourceText(file.FullName, File.ReadAllText(file.FullName))).ToList();
     var formatter = new DiagnosticFormatter();
     var useColor = !Console.IsErrorRedirected;
     var tokenizer = new Tokenizer(Log.Logger.ForContext("SourceContext", "Lexer"));
-    List<CompilationUnit> compilationUnits = [];
-
-    foreach (var source in sources)
+    var resolved = new SourceModuleResolver(tokenizer, Log.Logger.ForContext("SourceContext", "Resolver"))
+        .Resolve(rootSources);
+    var sources = resolved.Sources;
+    var compilationUnits = resolved.Units;
+    if (resolved.Diagnostics.Count > 0)
     {
-        var tokenization = tokenizer.TokenizeWithDiagnostics(source.Text, source.Name);
-        if (tokenization.Diagnostics.Count > 0)
-        {
-            DisplayDiagnostics(tokenization.Diagnostics, [source], formatter, useColor);
-            return;
-        }
-
-        var parser = new Parser(tokenization.Tokens, Log.Logger.ForContext("SourceContext", "Parser"));
-        var parsed = parser.ParseWithDiagnostics(source.Name);
-        compilationUnits.Add(parsed.Unit);
-        if (parsed.Diagnostics.Count > 0)
-        {
-            DisplayDiagnostics(parsed.Diagnostics, [source], formatter, useColor);
-            return;
-        }
+        DisplayDiagnostics(resolved.Diagnostics, sources.Count > 0 ? sources : rootSources, formatter, useColor);
+        return;
     }
 
+    var externalModules = (result.GetValue(standardLibraryOption) ?? [])
+        .Select(NativeModuleLoader.Load)
+        .Where(module => module is not null)
+        .Cast<ExternalModuleDeclaration>()
+        .ToList();
     var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
-        .AnalyzeWithDiagnostics(compilationUnits, sources.Select(source => (string?)source.Name).ToList());
+        .AnalyzeWithDiagnostics(
+            compilationUnits,
+            sources.Select(source => (string?)source.Name).ToList(),
+            externalModules);
     var warningsAsErrors = result.GetValue(warningsAsErrorsOption);
     if (semanticResult.Diagnostics.Count > 0)
     {
@@ -113,6 +115,9 @@ buildCommand.SetAction(result =>
 
     using var generated = new LlvmModuleGenerator().Generate("program", semanticResult.Model!);
     var irOutput = result.GetValue(emitIrOption);
+    var metadataOutput = result.GetValue(emitMetadataOption);
+    if (metadataOutput is not null)
+        generated.WriteMetadata(metadataOutput.FullName);
     if (irOutput is not null)
     {
         var irOutputPath = Path.GetFullPath(irOutput.FullName);
@@ -142,6 +147,8 @@ buildCommand.SetAction(result =>
         OptimizationLevel = "O" + (result.GetValue(optimizationOption) ?? "O2"),
         GenerateDebugSymbols = result.GetValue(debugOption),
         OutputPath = result.GetValue(outputOption)?.FullName ?? "program",
+        MetadataPath = metadataOutput?.FullName
+            ?? (result.GetValue(outputOption)?.FullName ?? "program") + ".oxmeta",
         Dependencies = dependencies
     });
 });
@@ -161,4 +168,5 @@ static void DisplayDiagnostics(
         var source = sources.FirstOrDefault(candidate => candidate.Name == diagnostic.SourceName) ?? sources[0];
         Console.Error.WriteLine(formatter.Format(diagnostic, source, useColor));
     }
+
 }

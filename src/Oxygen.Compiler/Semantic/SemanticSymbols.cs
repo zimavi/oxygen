@@ -4,22 +4,38 @@ namespace Oxygen.Compiler.Semantic;
 
 public sealed record ParameterSymbol(string Name, SemanticType Type, ParameterDeclaration Declaration);
 
+public sealed record CInteropFunctionMetadata(
+    string? ExternalName = null,
+    string CallingConvention = "c");
+
 public sealed record FunctionSymbol(
     string Name,
     SemanticType ReturnType,
     IReadOnlyList<ParameterSymbol> Parameters,
-    FunctionDeclaration Declaration);
+    FunctionDeclaration Declaration,
+    string ModuleName,
+    Visibility Visibility,
+    string? NativeName = null,
+    bool IsExternal = false,
+    CInteropFunctionMetadata? CInterop = null)
+{
+    public string QualifiedName => $"{ModuleName}.{Name}";
+}
 
 public sealed class SemanticModel
 {
     internal SemanticModel(
         IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> functions,
         IReadOnlyDictionary<Expression, SemanticType> expressionTypes,
-        FunctionSymbol? mainFunction)
+        FunctionSymbol? mainFunction,
+        IReadOnlyDictionary<string, IReadOnlyList<FunctionSymbol>> modules,
+        IReadOnlyDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
         MainFunction = mainFunction;
+        Modules = modules;
+        ResolvedCalls = resolvedCalls;
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -27,4 +43,8 @@ public sealed class SemanticModel
     public IReadOnlyDictionary<Expression, SemanticType> ExpressionTypes { get; }
 
     public FunctionSymbol? MainFunction { get; }
+
+    public IReadOnlyDictionary<string, IReadOnlyList<FunctionSymbol>> Modules { get; }
+
+    public IReadOnlyDictionary<CallExpression, FunctionSymbol> ResolvedCalls { get; }
 }

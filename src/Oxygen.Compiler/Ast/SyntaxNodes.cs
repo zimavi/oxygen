@@ -9,8 +9,26 @@ public interface ISyntaxNode
 
 public abstract record SyntaxNode(SourceLocation Location) : ISyntaxNode;
 
+public enum Visibility
+{
+    Private,
+    Public
+}
+
 public sealed record CompilationUnit(
+    string? ModuleName,
+    Visibility ModuleVisibility,
+    IReadOnlyList<ImportDeclaration> Imports,
     IReadOnlyList<FunctionDeclaration> Functions,
+    SourceLocation Location) : SyntaxNode(Location);
+
+public sealed record AnnotationSyntax(
+    string Name,
+    IReadOnlyList<string> Arguments,
+    SourceLocation Location) : SyntaxNode(Location);
+
+public sealed record ImportDeclaration(
+    string Name,
     SourceLocation Location) : SyntaxNode(Location);
 
 public sealed record FunctionDeclaration(
@@ -18,7 +36,13 @@ public sealed record FunctionDeclaration(
     string Name,
     IReadOnlyList<ParameterDeclaration> Parameters,
     BlockStatement Body,
-    SourceLocation Location) : SyntaxNode(Location);
+    Visibility Visibility,
+    SourceLocation Location,
+    IReadOnlyList<AnnotationSyntax>? Annotations = null,
+    bool IsExternalDeclaration = false) : SyntaxNode(Location)
+{
+    public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+}
 
 public sealed record ParameterDeclaration(
     TypeSyntax Type,
@@ -44,7 +68,12 @@ public enum PrimitiveType
 public sealed record TypeSyntax(
     PrimitiveType? Primitive,
     bool IsInferred,
-    SourceLocation Location) : SyntaxNode(Location);
+    SourceLocation Location,
+    bool IsString = false,
+    TypeSyntax? Pointee = null) : SyntaxNode(Location)
+{
+    public bool IsPointer => Pointee is not null;
+}
 
 public abstract record Statement(SourceLocation Location) : SyntaxNode(Location);
 
@@ -60,7 +89,7 @@ public sealed record VariableDeclarationStatement(
     SourceLocation Location) : Statement(Location);
 
 public sealed record AssignmentStatement(
-    string Name,
+    Expression Target,
     Expression Value,
     SourceLocation Location) : Statement(Location);
 

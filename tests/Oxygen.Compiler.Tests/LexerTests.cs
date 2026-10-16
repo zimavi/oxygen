@@ -56,6 +56,15 @@ public sealed class LexerTests
     }
 
     [Fact]
+    public void TokenizesAddressOfWithoutConfusingLogicalAnd()
+    {
+        var tokens = _lexer.Tokenize("i32* value = &other && flag;");
+
+        Assert.Contains(tokens, token => token.Kind == TokenKind.Ampersand);
+        Assert.Contains(tokens, token => token.Kind == TokenKind.AmpersandAmpersand);
+    }
+
+    [Fact]
     public void SkipsCommentsAndTracksLocations()
     {
         var tokens = _lexer.Tokenize("// ignored\n/* ignored */ i32 value;");
@@ -67,7 +76,7 @@ public sealed class LexerTests
     [Fact]
     public void ReportsInvalidCharacters()
     {
-        var exception = Assert.Throws<LexicalException>(() => _lexer.Tokenize("i32 @"));
+        var exception = Assert.Throws<LexicalException>(() => _lexer.Tokenize("i32 #"));
 
         Assert.Equal(new SourceLocation(1, 5), exception.Location);
     }

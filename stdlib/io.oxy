@@ -1,0 +1,16 @@
+module std.io;
+
+@extern("oxygen_write_stdout")
+public extern void write_stdout(string value);
+
+@extern("oxygen_write_stderr")
+public extern void write_stderr(string value);
+
+public void print(string value) {
+    write_stdout(value);
+}
+
+public void println(string value) {
+    write_stdout(value);
+    write_stdout("\n");
+}

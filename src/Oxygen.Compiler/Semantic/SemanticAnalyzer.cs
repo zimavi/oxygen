@@ -10,6 +10,7 @@ public sealed class SemanticAnalyzer
     private readonly ILogger _logger;
     private DiagnosticBag? _diagnostics;
     private readonly HashSet<VariableSymbol> _usedVariables = [];
+    private readonly HashSet<VariableSymbol> _definitelyNullVariables = [];
     private readonly HashSet<FunctionSymbol> _usedFunctions = [];
     private readonly List<VariableSymbol> _declaredVariables = [];
     private string? _sourceName;
@@ -23,36 +24,97 @@ public sealed class SemanticAnalyzer
     }
 
     public SemanticModel Analyze(IReadOnlyList<CompilationUnit> compilationUnits)
-        => AnalyzeCore(compilationUnits, null);
+        => AnalyzeCore(compilationUnits, null, null);
+
+    public SemanticModel Analyze(
+        IReadOnlyList<CompilationUnit> compilationUnits,
+        IReadOnlyList<ExternalModuleDeclaration> externalModules)
+        => AnalyzeCore(compilationUnits, null, null, externalModules);
 
     private SemanticModel AnalyzeCore(
         IReadOnlyList<CompilationUnit> compilationUnits,
         DiagnosticBag? diagnostics,
-        IReadOnlyList<string?>? sourceNames = null)
+        IReadOnlyList<string?>? sourceNames = null,
+        IReadOnlyList<ExternalModuleDeclaration>? externalModules = null)
     {
         ArgumentNullException.ThrowIfNull(compilationUnits);
         _diagnostics = diagnostics;
         _usedVariables.Clear();
+        _definitelyNullVariables.Clear();
         _usedFunctions.Clear();
         _declaredVariables.Clear();
 
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
         var functionsByName = new Dictionary<string, List<FunctionSymbol>>(StringComparer.Ordinal);
         var functionSources = new Dictionary<FunctionSymbol, string?>();
-
+        var functionModules = new Dictionary<FunctionSymbol, (string Name, IReadOnlyList<ImportDeclaration> Imports)>();
+        var resolvedCalls = new Dictionary<CallExpression, FunctionSymbol>();
         for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
         {
             var unit = compilationUnits[unitIndex];
+            var moduleName = unit.ModuleName ?? "program";
             var sourceName = diagnostics is null || sourceNames is null || unitIndex >= sourceNames.Count
                 ? null
                 : sourceNames[unitIndex];
+            foreach (var externalModule in externalModules ?? [])
+            {
+                foreach (var external in externalModule.Functions)
+                {
+                    var declaration = new FunctionDeclaration(
+                        new TypeSyntax(external.ReturnType.Primitive, false, new SourceLocation(1, 1), external.ReturnType.Kind == SemanticTypeKind.String),
+                        external.Name,
+                        external.ParameterTypes.Select((type, index) =>
+                            new ParameterDeclaration(
+                                new TypeSyntax(type.Primitive, false, new SourceLocation(1, 1), type.Kind == SemanticTypeKind.String),
+                                $"arg{index}",
+                                new SourceLocation(1, 1))).ToArray(),
+                        new BlockStatement([], new SourceLocation(1, 1)),
+                        external.Visibility,
+                        new SourceLocation(1, 1));
+                    var symbol = new FunctionSymbol(
+                        external.Name,
+                        external.ReturnType,
+                        declaration.Parameters.Select(parameter =>
+                            new ParameterSymbol(parameter.Name, GetType(parameter.Type), parameter)).ToArray(),
+                        declaration,
+                        externalModule.ModuleName,
+                        external.Visibility,
+                        external.NativeName,
+                        true,
+                        external.CInterop);
+                    var key = symbol.QualifiedName;
+                    if (!functionsByName.TryGetValue(key, out var overloads))
+                    {
+                        overloads = [];
+                        functionsByName.Add(key, overloads);
+                    }
+                    if (!overloads.Any(existing => HasSameParameterTypes(existing, symbol)))
+                    {
+                        overloads.Add(symbol);
+                        functions[declaration] = symbol;
+                        functionSources[symbol] = null;
+                        functionModules[symbol] = (externalModule.ModuleName, []);
+                    }
+                }
+            }
             foreach (var declaration in unit.Functions)
             {
-                var symbol = CreateFunctionSymbol(declaration);
-                if (!functionsByName.TryGetValue(symbol.Name, out var overloads))
+                var symbol = CreateFunctionSymbol(declaration, moduleName);
+                if (declaration.IsExternalDeclaration)
+                {
+                    var nativeName = symbol.CInterop?.ExternalName ?? declaration.Name;
+                    symbol = symbol with
+                    {
+                        NativeName = nativeName,
+                        IsExternal = true,
+                        CInterop = symbol.CInterop ?? new CInteropFunctionMetadata()
+                    };
+                }
+                var key = symbol.QualifiedName;
+                if (!functionsByName.TryGetValue(key, out var overloads))
                 {
                     overloads = [];
-                    functionsByName.Add(symbol.Name, overloads);
+                    functionsByName.Add(key, overloads);
                 }
 
                 if (overloads.Any(existing => HasSameParameterTypes(existing, symbol)))
@@ -69,11 +131,12 @@ public sealed class SemanticAnalyzer
                 overloads.Add(symbol);
                 functions[declaration] = symbol;
                 functionSources[symbol] = sourceName;
+                functionModules[symbol] = (moduleName, unit.Imports);
             }
         }
 
         FunctionSymbol? mainFunction = null;
-        if (!functionsByName.TryGetValue("main", out var mainOverloads))
+        if (!functionsByName.TryGetValue("program.main", out var mainOverloads))
         {
             ReportOrThrow(
                 diagnostics,
@@ -91,10 +154,13 @@ public sealed class SemanticAnalyzer
         var expressionTypes = new Dictionary<Expression, SemanticType>();
         foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads))
         {
+            if (symbol.IsExternal)
+                continue;
             try
             {
                 _sourceName = functionSources.GetValueOrDefault(symbol);
-                AnalyzeFunction(symbol, functionsByName, expressionTypes);
+                var module = functionModules[symbol];
+                AnalyzeFunction(symbol, functionsByName, module.Name, module.Imports, expressionTypes, resolvedCalls);
             }
             catch (SemanticException exception) when (diagnostics is not null)
             {
@@ -111,7 +177,10 @@ public sealed class SemanticAnalyzer
         {
             foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads))
             {
-                if (symbol.Name != "main" && !_usedFunctions.Contains(symbol))
+                if (symbol.QualifiedName != "program.main"
+                    && symbol.Visibility != Visibility.Public
+                    && !symbol.IsExternal
+                    && !_usedFunctions.Contains(symbol))
                 {
                     ReportWarning(
                         $"Function '{symbol.Name}' is never called",
@@ -124,18 +193,25 @@ public sealed class SemanticAnalyzer
 
         _logger.Information("Analyzed {FunctionCount} function(s).", functions.Count);
         _sourceName = null;
-        return new SemanticModel(functions, expressionTypes, mainFunction);
+        var modules = functionsByName
+            .GroupBy(pair => pair.Key[..pair.Key.LastIndexOf('.')], StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<FunctionSymbol>)group.SelectMany(pair => pair.Value).ToList(),
+                StringComparer.Ordinal);
+        return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls);
     }
 
     public SemanticResult AnalyzeWithDiagnostics(
         IReadOnlyList<CompilationUnit> compilationUnits,
-        IReadOnlyList<string?>? sourceNames = null)
+        IReadOnlyList<string?>? sourceNames = null,
+        IReadOnlyList<ExternalModuleDeclaration>? externalModules = null)
     {
         var diagnostics = new DiagnosticBag();
-        return new SemanticResult(AnalyzeCore(compilationUnits, diagnostics, sourceNames), diagnostics.Diagnostics);
+        return new SemanticResult(AnalyzeCore(compilationUnits, diagnostics, sourceNames, externalModules), diagnostics.Diagnostics);
     }
 
-    private static FunctionSymbol CreateFunctionSymbol(FunctionDeclaration declaration)
+    private static FunctionSymbol CreateFunctionSymbol(FunctionDeclaration declaration, string moduleName)
     {
         var returnType = GetType(declaration.ReturnType);
         var parameters = new List<ParameterSymbol>();
@@ -151,7 +227,79 @@ public sealed class SemanticAnalyzer
             parameters.Add(new ParameterSymbol(parameter.Name, GetType(parameter.Type), parameter));
         }
 
-        return new FunctionSymbol(declaration.Name, returnType, parameters, declaration);
+        return new FunctionSymbol(
+            declaration.Name,
+            returnType,
+            parameters,
+            declaration,
+            moduleName,
+            declaration.Visibility,
+            CInterop: ParseCInterop(declaration));
+    }
+
+    private static CInteropFunctionMetadata? ParseCInterop(FunctionDeclaration declaration)
+    {
+        string? externalName = null;
+        var callingConvention = "c";
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var annotation in declaration.DeclaredAnnotations)
+        {
+            if (!seen.Add(annotation.Name))
+                throw Error($"Annotation '@{annotation.Name}' may only appear once", annotation.Location, annotation.Name.Length + 1);
+
+            switch (annotation.Name)
+            {
+                case "extern":
+                    if (annotation.Arguments.Count != 1 ||
+                        !TryUnquote(annotation.Arguments[0], out externalName) ||
+                        string.IsNullOrWhiteSpace(externalName))
+                        throw Error("Annotation '@extern' expects one string argument", annotation.Location);
+                    break;
+                case "calling_convention":
+                    if (annotation.Arguments.Count != 1)
+                        throw Error("Annotation '@calling_convention' expects one identifier or string argument", annotation.Location);
+                    if (!TryUnquote(annotation.Arguments[0], out callingConvention))
+                    {
+                        if (!string.Equals(annotation.Arguments[0], "c", StringComparison.Ordinal))
+                            throw Error("Annotation '@calling_convention' expects one identifier or string argument", annotation.Location);
+                        callingConvention = annotation.Arguments[0];
+                    }
+                    if (!string.Equals(callingConvention, "c", StringComparison.Ordinal))
+                        throw Error($"Unsupported calling convention '{callingConvention}'", annotation.Location);
+                    break;
+                case "packed":
+                    if (annotation.Arguments.Count != 0)
+                        throw Error("Annotation '@packed' does not accept arguments", annotation.Location);
+                    throw Error("Annotation '@packed' is reserved for struct declarations, which are not implemented", annotation.Location);
+                case "align":
+                    if (annotation.Arguments.Count != 1 ||
+                        !uint.TryParse(annotation.Arguments[0], out var alignment) ||
+                        alignment == 0 ||
+                        (alignment & (alignment - 1)) != 0 ||
+                        alignment > 4096)
+                        throw Error("Annotation '@align' expects one power-of-two byte alignment from 1 through 4096", annotation.Location);
+                    throw Error($"Annotation '@{annotation.Name}' is reserved for struct declarations, which are not implemented", annotation.Location);
+                default:
+                    throw Error($"Unknown annotation '@{annotation.Name}'", annotation.Location, annotation.Name.Length + 1);
+            }
+        }
+
+        return externalName is null && callingConvention == "c"
+            ? null
+            : new CInteropFunctionMetadata(externalName, callingConvention);
+    }
+
+    private static bool TryUnquote(string value, out string unquoted)
+    {
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+        {
+            unquoted = value[1..^1];
+            return true;
+        }
+
+        unquoted = string.Empty;
+        return false;
     }
 
     private static void ValidateMainFunction(
@@ -164,6 +312,16 @@ public sealed class SemanticAnalyzer
             ReportOrThrow(
                 diagnostics,
                 "The 'main' function cannot have parameters",
+                mainFunction.Declaration.Location,
+                mainFunction.Name.Length,
+                sourceName);
+        }
+
+        if (mainFunction.IsExternal)
+        {
+            ReportOrThrow(
+                diagnostics,
+                "The 'main' function must be defined in Oxygen and cannot be extern",
                 mainFunction.Declaration.Location,
                 mainFunction.Name.Length,
                 sourceName);
@@ -198,20 +356,35 @@ public sealed class SemanticAnalyzer
 
     private static SemanticType GetType(TypeSyntax syntax)
     {
-        if (syntax.IsInferred || syntax.Primitive is null)
+        if (syntax.IsInferred)
         {
             throw Error("Type inference is not valid in this context", syntax.Location);
         }
 
-        return SemanticType.FromPrimitive(syntax.Primitive.Value);
+        if (syntax.IsString)
+            return syntax.IsPointer
+                ? SemanticType.PointerTo(GetType(syntax.Pointee!))
+                : SemanticType.String;
+
+        if (syntax.Primitive is null)
+            return syntax.IsPointer
+                ? SemanticType.PointerTo(GetType(syntax.Pointee!))
+                : SemanticType.String;
+
+        var type = SemanticType.FromPrimitive(syntax.Primitive.Value);
+        return syntax.IsPointer ? SemanticType.PointerTo(type) : type;
     }
 
     private void AnalyzeFunction(
         FunctionSymbol function,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         _declaredVariables.Clear();
+        _definitelyNullVariables.Clear();
         var scope = new Scope(null, MarkVariableUsed);
         foreach (var parameter in function.Parameters)
         {
@@ -220,7 +393,7 @@ public sealed class SemanticAnalyzer
             _declaredVariables.Add(variable);
         }
 
-        var hasReturn = AnalyzeBlock(function.Declaration.Body, scope, function, functions, expressionTypes);
+        var hasReturn = AnalyzeBlock(function.Declaration.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (!function.ReturnType.IsVoid && !hasReturn)
         {
             throw Error($"Function '{function.Name}' must return a value", function.Declaration.Location);
@@ -255,7 +428,10 @@ public sealed class SemanticAnalyzer
         Scope parent,
         FunctionSymbol function,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         var scope = new Scope(parent, MarkVariableUsed);
         var hasReturn = false;
@@ -267,7 +443,7 @@ public sealed class SemanticAnalyzer
                 ReportWarning("Unreachable statement", statement.Location);
             }
 
-            hasReturn |= AnalyzeStatement(statement, scope, function, functions, expressionTypes);
+            hasReturn |= AnalyzeStatement(statement, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         }
 
         return hasReturn;
@@ -278,23 +454,34 @@ public sealed class SemanticAnalyzer
         Scope scope,
         FunctionSymbol function,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         switch (statement)
         {
             case BlockStatement block:
-                return AnalyzeBlock(block, scope, function, functions, expressionTypes);
+                return AnalyzeBlock(block, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
             case VariableDeclarationStatement declaration:
-                AnalyzeVariableDeclaration(declaration, scope, functions, expressionTypes);
+                AnalyzeVariableDeclaration(declaration, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return false;
             case AssignmentStatement assignment:
-                AnalyzeAssignment(assignment, scope, functions, expressionTypes);
+                AnalyzeAssignment(assignment, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return false;
             case ReturnStatement returnStatement:
-                AnalyzeReturn(returnStatement, function, scope, functions, expressionTypes);
+                AnalyzeReturn(returnStatement, function, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return true;
             case ExpressionStatement expressionStatement:
-                AnalyzeExpression(expressionStatement.Expression, scope, functions, expressionTypes);
+                AnalyzeExpression(
+                    expressionStatement.Expression,
+                    scope,
+                    functions,
+                    moduleName,
+                    imports,
+                    expressionTypes,
+                    resolvedCalls,
+                    allowVoid: true);
                 return false;
             default:
                 throw new InvalidOperationException($"Unsupported statement type {statement.GetType().Name}.");
@@ -305,7 +492,10 @@ public sealed class SemanticAnalyzer
         VariableDeclarationStatement declaration,
         Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         if (declaration.Type.IsInferred && declaration.Initializer is null)
         {
@@ -319,9 +509,9 @@ public sealed class SemanticAnalyzer
 
         var initializerType = declaration.Initializer is null
             ? (SemanticType?)null
-            : AnalyzeExpression(declaration.Initializer, scope, functions, expressionTypes);
+            : AnalyzeExpression(declaration.Initializer, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         var type = declaration.Type.IsInferred
-            ? initializerType!.Value
+            ? initializerType!
             : GetType(declaration.Type);
 
         if (type.IsVoid)
@@ -329,34 +519,59 @@ public sealed class SemanticAnalyzer
             throw Error($"Variable '{declaration.Name}' cannot have type void", declaration.Location, declaration.Name.Length);
         }
 
-        if (initializerType is not null && initializerType.Value != type)
+        if (initializerType is not null && !CanAssign(type, declaration.Initializer!, initializerType))
         {
             throw Error(
-                $"Cannot initialize '{declaration.Name}' with {initializerType.Value}; expected {type}",
+                $"Cannot initialize '{declaration.Name}' with {initializerType}; expected {type}",
                 declaration.Initializer!.Location);
         }
+        if (declaration.Initializer is IntegerLiteralExpression { Lexeme: "0" } && type.IsPointer)
+            expressionTypes[declaration.Initializer] = type;
 
         var variable = new VariableSymbol(type, declaration.IsConst, declaration, false);
         scope.Declare(declaration.Name, variable);
         _declaredVariables.Add(variable);
+        if (type.IsPointer && declaration.Initializer is IntegerLiteralExpression { Lexeme: "0" })
+            _definitelyNullVariables.Add(variable);
     }
 
     private void AnalyzeAssignment(
         AssignmentStatement assignment,
         Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
-        var variable = scope.Lookup(assignment.Name, assignment.Location);
-        if (variable.IsConst)
+        var targetType = AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        if (!CanAssign(targetType, assignment.Value, valueType))
         {
-            throw Error($"Cannot assign to const variable '{assignment.Name}'", assignment.Location, assignment.Name.Length);
+            throw Error($"Cannot assign {valueType} to target of type {targetType}", assignment.Value.Location);
         }
 
-        var valueType = AnalyzeExpression(assignment.Value, scope, functions, expressionTypes);
-        if (valueType != variable.Type)
+        if (assignment.Target is IdentifierExpression identifier)
         {
-            throw Error($"Cannot assign {valueType} to '{assignment.Name}' of type {variable.Type}", assignment.Value.Location);
+            var variable = scope.Lookup(identifier.Name, identifier.Location);
+            if (variable.IsConst)
+                throw Error($"Cannot assign to const variable '{identifier.Name}'", assignment.Location, identifier.Name.Length);
+        }
+        else if (assignment.Target is not UnaryExpression { Operator: TokenKind.Star })
+        {
+            throw Error("Assignment target is not addressable", assignment.Target.Location);
+        }
+
+        if (assignment.Target is IdentifierExpression assignedIdentifier)
+        {
+            var variable = scope.Lookup(assignedIdentifier.Name, assignedIdentifier.Location);
+            if (variable.Type.IsPointer)
+            {
+                if (assignment.Value is IntegerLiteralExpression { Lexeme: "0" })
+                    _definitelyNullVariables.Add(variable);
+                else
+                    _definitelyNullVariables.Remove(variable);
+            }
         }
     }
 
@@ -365,7 +580,10 @@ public sealed class SemanticAnalyzer
         FunctionSymbol function,
         Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         if (returnStatement.Value is null)
         {
@@ -382,20 +600,26 @@ public sealed class SemanticAnalyzer
             throw Error($"Void function '{function.Name}' cannot return a value", returnStatement.Value.Location);
         }
 
-        var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, expressionTypes);
-        if (valueType != function.ReturnType)
+        var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        if (!CanAssign(function.ReturnType, returnStatement.Value, valueType))
         {
             throw Error(
                 $"Cannot return {valueType} from function '{function.Name}'; expected {function.ReturnType}",
                 returnStatement.Value.Location);
         }
+        if (returnStatement.Value is IntegerLiteralExpression { Lexeme: "0" } && function.ReturnType.IsPointer)
+            expressionTypes[returnStatement.Value] = function.ReturnType;
     }
 
     private SemanticType AnalyzeExpression(
         Expression expression,
         Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        bool allowVoid = false)
     {
         var type = expression switch
         {
@@ -404,9 +628,9 @@ public sealed class SemanticAnalyzer
             FloatingPointLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.F64),
             StringLiteralExpression => SemanticType.String,
             BooleanLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.Bool),
-            UnaryExpression unary => AnalyzeUnary(unary, scope, functions, expressionTypes),
-            BinaryExpression binary => AnalyzeBinary(binary, scope, functions, expressionTypes),
-            CallExpression call => AnalyzeCall(call, scope, functions, expressionTypes),
+            UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, allowVoid),
             _ => throw new InvalidOperationException($"Unsupported expression type {expression.GetType().Name}.")
         };
 
@@ -418,9 +642,30 @@ public sealed class SemanticAnalyzer
         UnaryExpression expression,
         Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
-        var operandType = AnalyzeExpression(expression.Operand, scope, functions, expressionTypes);
+        var operandType = AnalyzeExpression(expression.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        if (expression.Operator == TokenKind.Ampersand)
+        {
+            if (!IsAddressable(expression.Operand, scope))
+                throw Error("The '&' operator requires an addressable operand", expression.Location);
+            return SemanticType.PointerTo(operandType);
+        }
+
+        if (expression.Operator == TokenKind.Star)
+        {
+            if (expression.Operand is IntegerLiteralExpression { Lexeme: "0" }
+                || expression.Operand is IdentifierExpression identifier
+                    && _definitelyNullVariables.Contains(scope.Lookup(identifier.Name, identifier.Location)))
+                throw Error("Cannot dereference a null pointer", expression.Location);
+            if (!operandType.IsPointer)
+                throw Error("The '*' operator requires a pointer operand", expression.Location);
+            return operandType.Pointee!;
+        }
+
         if (expression.Operator == TokenKind.Bang)
         {
             if (operandType != SemanticType.FromPrimitive(PrimitiveType.Bool))
@@ -443,10 +688,13 @@ public sealed class SemanticAnalyzer
         BinaryExpression expression,
         Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
-        var left = AnalyzeExpression(expression.Left, scope, functions, expressionTypes);
-        var right = AnalyzeExpression(expression.Right, scope, functions, expressionTypes);
+        var left = AnalyzeExpression(expression.Left, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        var right = AnalyzeExpression(expression.Right, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         var isLogical = expression.Operator is TokenKind.AmpersandAmpersand or TokenKind.PipePipe;
         var isComparison = expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals
             or TokenKind.LessThan or TokenKind.LessThanOrEquals or TokenKind.GreaterThan
@@ -457,6 +705,29 @@ public sealed class SemanticAnalyzer
             RequireType(left, SemanticType.FromPrimitive(PrimitiveType.Bool), expression.Location, "Logical operators");
             RequireType(right, SemanticType.FromPrimitive(PrimitiveType.Bool), expression.Location, "Logical operators");
             return SemanticType.FromPrimitive(PrimitiveType.Bool);
+        }
+
+        if (left.IsPointer || right.IsPointer)
+        {
+            if (left.IsPointer && right.IsNumeric
+                && expression.Operator is TokenKind.Plus or TokenKind.Minus)
+                return left;
+            if (left.IsPointer && expression.Right is IntegerLiteralExpression { Lexeme: "0" }
+                && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
+            {
+                expressionTypes[expression.Right] = left;
+                return SemanticType.FromPrimitive(PrimitiveType.Bool);
+            }
+            if (right.IsPointer && expression.Left is IntegerLiteralExpression { Lexeme: "0" }
+                && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
+            {
+                expressionTypes[expression.Left] = right;
+                return SemanticType.FromPrimitive(PrimitiveType.Bool);
+            }
+            if (left.IsPointer && right.IsPointer
+                && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
+                return SemanticType.FromPrimitive(PrimitiveType.Bool);
+            throw Error($"Operator '{expression.Operator}' is not valid for pointer operands", expression.Location);
         }
 
         if (left != right)
@@ -486,15 +757,20 @@ public sealed class SemanticAnalyzer
         CallExpression call,
         Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
-        IDictionary<Expression, SemanticType> expressionTypes)
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        bool allowVoid)
     {
-        if (!functions.TryGetValue(call.Name, out var overloads))
+        var overloads = ResolveFunctions(call.Name, moduleName, imports, functions);
+        if (overloads.Count == 0)
         {
             throw Error($"Function '{call.Name}' is not declared", call.Location, call.Name.Length);
         }
 
         var argumentTypes = call.Arguments
-            .Select(argument => AnalyzeExpression(argument, scope, functions, expressionTypes))
+            .Select(argument => AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls))
             .ToList();
         var candidates = overloads
             .Where(function => function.Parameters.Count == argumentTypes.Count)
@@ -516,8 +792,8 @@ public sealed class SemanticAnalyzer
 
         var matches = candidates
             .Where(function => function.Parameters
-                .Select(parameter => parameter.Type)
-                .SequenceEqual(argumentTypes))
+                .Select((parameter, index) => CanAssign(parameter.Type, call.Arguments[index], argumentTypes[index]))
+                .All(match => match))
             .ToList();
         if (matches.Count == 0)
         {
@@ -535,13 +811,76 @@ public sealed class SemanticAnalyzer
         }
 
         var function = matches[0];
+        for (var index = 0; index < call.Arguments.Count; index++)
+        {
+            if (call.Arguments[index] is IntegerLiteralExpression { Lexeme: "0" }
+                && function.Parameters[index].Type.IsPointer)
+                expressionTypes[call.Arguments[index]] = function.Parameters[index].Type;
+        }
+        resolvedCalls[call] = function;
         _usedFunctions.Add(function);
-        if (function.ReturnType.IsVoid)
+        if (function.ReturnType.IsVoid && !allowVoid)
         {
             throw Error($"Void function '{call.Name}' cannot be used as an expression", call.Location);
         }
 
         return function.ReturnType;
+    }
+
+    private static bool CanAssign(SemanticType target, Expression value, SemanticType actual) =>
+        target == actual || (target.IsPointer && value is IntegerLiteralExpression { Lexeme: "0" } && actual.IsNumeric);
+
+    private static bool IsAddressable(Expression expression, Scope scope) =>
+        expression switch
+        {
+            IdentifierExpression identifier => scope.Lookup(identifier.Name, identifier.Location) is not null,
+            UnaryExpression { Operator: TokenKind.Star, Operand: var operand } =>
+                true,
+            _ => false
+        };
+
+    private static List<FunctionSymbol> ResolveFunctions(
+        string name,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions)
+    {
+        var keys = new List<string>();
+        if (!name.Contains('.', StringComparison.Ordinal))
+            keys.Add($"{moduleName}.{name}");
+
+        // A fully qualified reference is always valid when its module is in the
+        // compilation, regardless of whether that module was imported.
+        keys.Add(name);
+
+        foreach (var import in imports)
+        {
+            var leaf = import.Name[(import.Name.LastIndexOf('.') + 1)..];
+            if (name.StartsWith(leaf + ".", StringComparison.Ordinal))
+            {
+                // import math; float.pow(...) -> math.float.pow(...)
+                // import math.float; float.pow(...) -> math.float.pow(...)
+                keys.Add($"{import.Name}.{name[(leaf.Length + 1)..]}");
+            }
+            else if (name.Contains('.', StringComparison.Ordinal))
+            {
+                // import math; float.pow(...) -> math.float.pow(...)
+                keys.Add($"{import.Name}.{name}");
+            }
+        }
+
+        var candidates = new List<FunctionSymbol>();
+        foreach (var key in keys.Distinct(StringComparer.Ordinal))
+        {
+            if (functions.TryGetValue(key, out var resolved))
+                candidates.AddRange(resolved.Where(symbol =>
+                    symbol.Visibility == Visibility.Public || symbol.ModuleName == moduleName));
+        }
+
+        return candidates
+            .GroupBy(symbol => symbol.QualifiedName + ":" + string.Join(",", symbol.Parameters.Select(p => p.Type)))
+            .Select(group => group.First())
+            .ToList();
     }
 
     private static bool HasSameParameterTypes(FunctionSymbol left, FunctionSymbol right) =>

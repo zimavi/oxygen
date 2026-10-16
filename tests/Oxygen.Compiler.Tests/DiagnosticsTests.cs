@@ -9,7 +9,7 @@ public sealed class DiagnosticsTests
     [Fact]
     public void CollectsMultipleLexicalErrorsWithoutThrowing()
     {
-        var result = new Tokenizer().TokenizeWithDiagnostics("i32 @ main() { return #; }", "main.oxy");
+        var result = new Tokenizer().TokenizeWithDiagnostics("i32 # main() { return $; }", "main.oxy");
 
         Assert.Equal(2, result.Diagnostics.Count);
         Assert.All(result.Diagnostics, diagnostic => Assert.Equal(DiagnosticPhase.Lexing, diagnostic.Phase));
@@ -38,11 +38,11 @@ public sealed class DiagnosticsTests
     [Fact]
     public void AddsAnExplanationAndConcreteFixToCompilerErrors()
     {
-        var result = new Tokenizer().TokenizeWithDiagnostics("i32 @", "main.oxy");
+        var result = new Tokenizer().TokenizeWithDiagnostics("i32 #", "main.oxy");
         var diagnostic = Assert.Single(result.Diagnostics);
         var formatted = new DiagnosticFormatter().Format(
             diagnostic,
-            new SourceText("main.oxy", "i32 @"));
+            new SourceText("main.oxy", "i32 #"));
 
         Assert.Contains("help: This character is not part of Oxygen's lexical grammar", formatted);
         Assert.Contains("fix: Remove the character", formatted);
