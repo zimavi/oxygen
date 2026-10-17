@@ -57,6 +57,8 @@ public sealed class LlvmModuleGenerator
     private static readonly Dictionary<string, LLVMValueRef> _classTypeNames = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, LLVMValueRef> _constructors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, LLVMValueRef> _destructors = new(StringComparer.Ordinal);
+    private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type);
+    private static Stack<List<OwnedLocal>> _ownedScopes = new();
     private static LLVMValueRef _oxygenAlloc;
     private static LLVMValueRef _oxygenFree;
     private static LLVMTypeRef ToLlvmStringType() =>
@@ -236,7 +238,7 @@ public sealed class LlvmModuleGenerator
             foreach (var statement in ctor.Declaration.Body.Statements)
                 EmitStatement(context, builder, function, statement, values, storage, storageRequirements,
                     model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
-                    new Stack<(LLVMBasicBlockRef, LLVMBasicBlockRef)>());
+                    new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth)>());
             builder.BuildRetVoid();
         }
 
@@ -252,7 +254,7 @@ public sealed class LlvmModuleGenerator
             foreach (var statement in cls.Destructor!.Body.Statements)
                 EmitStatement(context, builder, function, statement, values, storage,
                     new HashSet<string>(), model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
-                    new Stack<(LLVMBasicBlockRef, LLVMBasicBlockRef)>());
+                    new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth)>());
             builder.BuildRetVoid();
         }
 
@@ -302,6 +304,8 @@ public sealed class LlvmModuleGenerator
         builder.PositionAtEnd(entry);
         var values = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
+        _ownedScopes = new Stack<List<OwnedLocal>>();
+        _ownedScopes.Push([]);
         var storageRequirements = CollectStorageRequirements(symbol.Declaration.Body);
         var parameterOffset = IsClassMethod(symbol, model) ? 1 : 0;
         if (parameterOffset != 0)
@@ -326,11 +330,13 @@ public sealed class LlvmModuleGenerator
             {
                 values.Add(symbol.Parameters[index].Name, parameter);
             }
+            if (symbol.Parameters[index].Type.IsClass)
+                _ownedScopes.Peek().Add(new OwnedLocal(null, symbol.Parameters[index].Name, symbol.Parameters[index].Type));
         }
 
         var emittedReturnType = symbol.ReturnType;
         var returned = false;
-        var loops = new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue)>();
+        var loops = new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth)>();
         foreach (var statement in symbol.Declaration.Body.Statements)
         {
             returned = EmitStatement(
@@ -351,6 +357,7 @@ public sealed class LlvmModuleGenerator
 
         if (!returned)
         {
+            CleanupOwnedScopes(builder, values, storage, model);
             if (emittedReturnType.IsVoid)
                 builder.BuildRetVoid();
             else
@@ -377,6 +384,77 @@ public sealed class LlvmModuleGenerator
         }
     }
 
+    private static void CleanupOwnedScopes(
+        LLVMBuilderRef builder,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model)
+    {
+        CleanupOwnedScopesTo(builder, values, storage, model, 0);
+    }
+
+    private static void EmitOwnedScopeDestructors(
+        LLVMBuilderRef builder,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model)
+    {
+        var snapshots = _ownedScopes.Select(scope => scope.ToArray()).ToArray();
+        foreach (var scope in snapshots)
+            CleanupOwnedScope(builder, values, storage, model, scope.ToList());
+        var index = 0;
+        foreach (var scope in _ownedScopes)
+        {
+            scope.AddRange(snapshots[index]);
+            index++;
+        }
+    }
+
+    private static void CleanupOwnedScopesTo(
+        LLVMBuilderRef builder,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        int scopeDepth)
+    {
+        while (_ownedScopes.Count > scopeDepth)
+        {
+            CleanupOwnedScope(builder, values, storage, model, _ownedScopes.Peek());
+            _ownedScopes.Pop();
+        }
+    }
+
+    private static void CleanupOwnedScope(
+        LLVMBuilderRef builder,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        List<OwnedLocal>? scope = null)
+    {
+        scope ??= _ownedScopes.Peek();
+        foreach (var owned in scope.AsEnumerable().Reverse())
+        {
+            if (!owned.Type.IsClass || !_destructors.TryGetValue(owned.Type.StructName!, out var destructor))
+                continue;
+            var value = values.TryGetValue(owned.Name, out var direct)
+                ? direct
+                : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
+            builder.BuildCall2(destructor.FunctionType, destructor, [value]);
+        }
+        scope.Clear();
+    }
+
+    private static void RemoveOwned(string name)
+    {
+        foreach (var scope in _ownedScopes)
+            scope.RemoveAll(owned => owned.Name == name);
+    }
+
+    private static void TransferOwnership(string sourceName, string targetName)
+    {
+        RemoveOwned(sourceName);
+    }
+
     private static bool EmitStatement(
         LLVMContextRef context,
         LLVMBuilderRef builder,
@@ -388,7 +466,7 @@ public sealed class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
         SemanticType emittedReturnType,
-        Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue)> loops)
+        Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth)> loops)
     {
         switch (statement)
         {
@@ -428,9 +506,17 @@ public sealed class LlvmModuleGenerator
                         declaration.Name + ".addr");
                     storage[declaration.Name] = declarationStorage;
                 }
+                if (declaredType.IsClass)
+                    _ownedScopes.Peek().Add(new OwnedLocal(declaration, declaration.Name, declaredType));
                 return false;
             case AssignmentStatement assignment:
                 var assigned = EmitExpression(context, builder, assignment.Value, values, storage, model, llvmFunctions);
+                if (assignment.Target is IdentifierExpression assignmentIdentifier
+                    && assignment.Value is IdentifierExpression sourceIdentifier
+                    && model.ExpressionTypes[assignment.Target].IsClass
+                    && model.ExpressionTypes[assignment.Value].IsClass
+                    && sourceIdentifier.Name != assignmentIdentifier.Name)
+                    TransferOwnership(sourceIdentifier.Name, assignmentIdentifier.Name);
                 if (assignment.Target is IdentifierExpression identifier)
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                         model.ExpressionTypes[assignment.Target], model), storage[identifier.Name]);
@@ -478,22 +564,33 @@ public sealed class LlvmModuleGenerator
                     throw new InvalidOperationException("Unsupported assignment target.");
                 return false;
             case ReturnStatement returnStatement:
+                LLVMValueRef? returnValue = null;
                 if (returnStatement.Value is null)
                 {
+                    EmitOwnedScopeDestructors(builder, values, storage, model);
                     if (emittedReturnType.IsVoid)
                         builder.BuildRetVoid();
                     else
                         builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType, model), 0, false));
                 }
                 else
-                    builder.BuildRet(CoerceValue(builder,
+                {
+                    returnValue = CoerceValue(builder,
                         EmitExpression(context, builder, returnStatement.Value, values, storage, model, llvmFunctions),
-                        model.ExpressionTypes[returnStatement.Value], emittedReturnType, model));
+                        model.ExpressionTypes[returnStatement.Value], emittedReturnType, model);
+                    if (returnStatement.Value is IdentifierExpression returnedIdentifier
+                        && model.ExpressionTypes[returnStatement.Value].IsClass)
+                        RemoveOwned(returnedIdentifier.Name);
+                    EmitOwnedScopeDestructors(builder, values, storage, model);
+                    builder.BuildRet(returnValue.Value);
+                }
                 return true;
             case ExpressionStatement expression:
                 EmitExpression(context, builder, expression.Expression, values, storage, model, llvmFunctions);
                 return false;
             case BlockStatement block:
+                var blockParentDepth = _ownedScopes.Count;
+                _ownedScopes.Push([]);
                 foreach (var nested in block.Statements)
                     if (EmitStatement(
                         context,
@@ -507,7 +604,13 @@ public sealed class LlvmModuleGenerator
                         llvmFunctions,
                         emittedReturnType,
                         loops))
+                    {
+                        if (_ownedScopes.Count > blockParentDepth)
+                            _ownedScopes.Pop();
                         return true;
+                    }
+                CleanupOwnedScope(builder, values, storage, model);
+                _ownedScopes.Pop();
                 return false;
             case IfStatement conditional:
             {
@@ -574,7 +677,7 @@ public sealed class LlvmModuleGenerator
                 var condition = EmitExpression(context, builder, whileStatement.Condition, values, storage, model, llvmFunctions);
                 builder.BuildCondBr(condition, bodyBlock, endBlock);
                 builder.PositionAtEnd(bodyBlock);
-                loops.Push((endBlock, conditionBlock));
+                loops.Push((endBlock, conditionBlock, _ownedScopes.Count));
                 var bodyTerminated = EmitStatement(context, builder, function, whileStatement.Body, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
                 loops.Pop();
                 if (!bodyTerminated) builder.BuildBr(conditionBlock);
@@ -597,7 +700,9 @@ public sealed class LlvmModuleGenerator
                     : EmitExpression(context, builder, forStatement.Condition, values, storage, model, llvmFunctions);
                 builder.BuildCondBr(condition, bodyBlock, endBlock);
                 builder.PositionAtEnd(bodyBlock);
-                loops.Push((endBlock, incrementBlock));
+                var forScopeDepth = _ownedScopes.Count;
+                _ownedScopes.Push([]);
+                loops.Push((endBlock, incrementBlock, forScopeDepth));
                 var bodyTerminated = EmitStatement(context, builder, function, forStatement.Body, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
                 loops.Pop();
                 if (!bodyTerminated) builder.BuildBr(incrementBlock);
@@ -606,12 +711,19 @@ public sealed class LlvmModuleGenerator
                     && EmitStatement(context, builder, function, forStatement.Increment, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
                 if (!incrementTerminated) builder.BuildBr(conditionBlock);
                 builder.PositionAtEnd(endBlock);
+                if (_ownedScopes.Count > forScopeDepth)
+                {
+                    CleanupOwnedScope(builder, values, storage, model);
+                    _ownedScopes.Pop();
+                }
                 return false;
             }
             case BreakStatement:
+                CleanupOwnedScopesTo(builder, values, storage, model, loops.Peek().ScopeDepth);
                 builder.BuildBr(loops.Peek().Break);
                 return true;
             case ContinueStatement:
+                CleanupOwnedScopesTo(builder, values, storage, model, loops.Peek().ScopeDepth);
                 builder.BuildBr(loops.Peek().Continue);
                 return true;
             default:
@@ -1283,6 +1395,8 @@ public sealed class LlvmModuleGenerator
                 value = storagePointer;
             }
 
+            if (argument is IdentifierExpression identifier && function.Parameters[index].Type.IsClass)
+                RemoveOwned(identifier.Name);
             arguments.Add(value);
         }
 

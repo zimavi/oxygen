@@ -13,6 +13,7 @@ public sealed class SemanticAnalyzer
     private readonly HashSet<VariableSymbol> _definitelyNullVariables = [];
     private readonly HashSet<FunctionSymbol> _usedFunctions = [];
     private readonly List<VariableSymbol> _declaredVariables = [];
+    private readonly HashSet<VariableDeclarationStatement> _escapingClassLocals = [];
     private string? _sourceName;
     private readonly Dictionary<string, StructSymbol> _structsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
@@ -113,6 +114,7 @@ public sealed class SemanticAnalyzer
         _definitelyNullVariables.Clear();
         _usedFunctions.Clear();
         _declaredVariables.Clear();
+        _escapingClassLocals.Clear();
         _structsByName.Clear();
         _enumsByName.Clear();
         _unionsByName.Clear();
@@ -487,7 +489,7 @@ public sealed class SemanticAnalyzer
                 group => (IReadOnlyList<FunctionSymbol>)group.SelectMany(pair => pair.Value).ToList(),
                 StringComparer.Ordinal);
         return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName, _enumsByName, _unionsByName,
-            _classesByName, _interfacesByName);
+            _classesByName, _interfacesByName, _escapingClassLocals);
     }
 
     private static FunctionSymbol CreateConstructorFunctionSymbol(string moduleName, ConstructorSymbol constructor)
@@ -1113,6 +1115,14 @@ public sealed class SemanticAnalyzer
         if (assignment.Target is IdentifierExpression assignedIdentifier)
         {
             var variable = scope.Lookup(assignedIdentifier.Name, assignedIdentifier.Location);
+            if (valueType.IsClass && assignment.Value is IdentifierExpression sourceIdentifier)
+            {
+                var source = scope.Lookup(sourceIdentifier.Name, sourceIdentifier.Location);
+                if (source.Declaration is VariableDeclarationStatement sourceDeclaration
+                    && scope.LookupDepth(assignedIdentifier.Name, assignedIdentifier.Location)
+                    > scope.LookupDepth(sourceIdentifier.Name, sourceIdentifier.Location))
+                    _escapingClassLocals.Add(sourceDeclaration);
+            }
             if (variable.Type.IsPointer)
             {
                 if (assignment.Value is IntegerLiteralExpression { Lexeme: "0" })
@@ -1149,6 +1159,9 @@ public sealed class SemanticAnalyzer
         }
 
         var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        if (valueType.IsClass && returnStatement.Value is IdentifierExpression identifier
+            && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
+            _escapingClassLocals.Add(declaration);
         if (!CanAssign(function.ReturnType, returnStatement.Value, valueType))
         {
             throw Error(
@@ -1542,6 +1555,13 @@ public sealed class SemanticAnalyzer
         var argumentTypes = call.Arguments
             .Select(argument => AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls))
             .ToList();
+        foreach (var argument in call.Arguments)
+        {
+            if (argument is IdentifierExpression identifier
+                && scope.Lookup(identifier.Name, identifier.Location).Type.IsClass
+                && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
+                _escapingClassLocals.Add(declaration);
+        }
         if (call.ExplicitTypeArguments.Count != 0)
         {
             var generic = overloads.Where(candidate => candidate.IsGeneric).ToList();
@@ -2070,6 +2090,11 @@ public sealed class SemanticAnalyzer
         public void Declare(string name, VariableSymbol symbol) => _variables.Add(name, symbol);
 
         public bool ContainsInCurrentScope(string name) => _variables.ContainsKey(name);
+
+        public int LookupDepth(string name, SourceLocation location) =>
+            _variables.ContainsKey(name) ? 0
+            : _parent is not null ? _parent.LookupDepth(name, location) + 1
+            : throw Error($"Variable '{name}' is not declared", location, name.Length);
 
         public VariableSymbol Lookup(string name, SourceLocation location) =>
             _variables.TryGetValue(name, out var symbol)

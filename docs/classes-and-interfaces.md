@@ -94,10 +94,16 @@ code checks the runtime object type. A failed check reports an invalid-cast
 diagnostic and terminates the process; it does not produce a value of the
 requested type.
 
-Destructor syntax and symbols are recognized, but automatic destruction at
-scope exit and virtual destructor dispatch are not enabled yet. They require
-ownership and lifetime information in the semantic model plus cleanup-aware
-lowering for returns, branches, loop exits, and partially initialized
-constructors. Interface vtable population and indirect interface calls are
-also pending; interface fat values must not be treated as directly callable
-class pointers.
+Destructor calls are emitted automatically for owned class locals. Locals
+belong to their lexical scope, are destroyed once in reverse declaration
+order, and are cleaned up on block exits, returns, `break`, `continue`, and
+loop exits. Ownership escapes when a class reference is assigned to an outer
+scope, returned from a function, or passed as a function argument; an escaped
+reference is not destroyed by the inner scope. This is a transfer of the
+reference's ownership, not a hidden allocation or `oxygen_free` call, and
+manual pointer management remains unchanged.
+
+Destructor dispatch is direct for the declared class. Virtual destructor
+dispatch and partially initialized-constructor cleanup are not yet enabled.
+Interface vtable population and indirect interface calls are also pending;
+interface fat values must not be treated as directly callable class pointers.

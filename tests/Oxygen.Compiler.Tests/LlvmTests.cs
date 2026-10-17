@@ -330,6 +330,63 @@ public sealed class LlvmTests
     }
 
     [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsOneDestructorForAnInnerClassTransferredToAnOuterLocal()
+    {
+        var model = Analyze(
+            "class Box { ~Box() { } } i32 main() { Box outer = new Box(); { Box inner = new Box(); outer = inner; } return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+        const string destructor = "call void @_Ox_v0_m7program_d3Box";
+
+        Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsNestedDestructorsInReverseScopeOrder()
+    {
+        var model = Analyze(
+            "class Box { ~Box() { } } i32 main() { Box outer = new Box(); { Box inner = new Box(); } return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+        const string destructor = "call void @_Ox_v0_m7program_d3Box";
+
+        var first = ir.IndexOf(destructor, StringComparison.Ordinal);
+        var second = ir.IndexOf(destructor, first + destructor.Length, StringComparison.Ordinal);
+        Assert.Equal(2, ir.Split(destructor, StringSplitOptions.None).Length - 1);
+        Assert.True(first >= 0 && second > first);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsDestructorAfterReturnedClassOwnershipIsReceived()
+    {
+        var model = Analyze(
+            "class Box { ~Box() { } } Box make() { Box value = new Box(); return value; } i32 main() { Box result = make(); return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+        const string destructor = "call void @_Ox_v0_m7program_d3Box";
+
+        Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
+        Assert.Contains("@_Ox_v0_m7program_f4make", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void TransfersClassArgumentOwnershipToTheCallee()
+    {
+        var model = Analyze(
+            "class Box { ~Box() { } } void consume(Box value) { return; } i32 main() { Box value = new Box(); consume(value); return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+        const string destructor = "call void @_Ox_v0_m7program_d3Box";
+
+        Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
+        Assert.Contains("define void @_Ox_v0_m7program_f7consume_p1", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
     public void EmitsExplicitThisFieldAccessWhenParameterShadowsField()
     {
         var model = Analyze(

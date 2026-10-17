@@ -101,7 +101,8 @@ public sealed class SemanticModel
         IReadOnlyDictionary<string, EnumSymbol> enums,
         IReadOnlyDictionary<string, UnionSymbol>? unions = null,
         IReadOnlyDictionary<string, ClassSymbol>? classes = null,
-        IReadOnlyDictionary<string, InterfaceSymbol>? interfaces = null)
+        IReadOnlyDictionary<string, InterfaceSymbol>? interfaces = null,
+        IReadOnlySet<VariableDeclarationStatement>? escapingClassLocals = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -113,6 +114,7 @@ public sealed class SemanticModel
         Unions = unions ?? new Dictionary<string, UnionSymbol>();
         Classes = classes ?? new Dictionary<string, ClassSymbol>();
         Interfaces = interfaces ?? new Dictionary<string, InterfaceSymbol>();
+        EscapingClassLocals = escapingClassLocals ?? new HashSet<VariableDeclarationStatement>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -130,4 +132,5 @@ public sealed class SemanticModel
     public IReadOnlyDictionary<string, UnionSymbol> Unions { get; }
     public IReadOnlyDictionary<string, ClassSymbol> Classes { get; }
     public IReadOnlyDictionary<string, InterfaceSymbol> Interfaces { get; }
+    public IReadOnlySet<VariableDeclarationStatement> EscapingClassLocals { get; }
 }

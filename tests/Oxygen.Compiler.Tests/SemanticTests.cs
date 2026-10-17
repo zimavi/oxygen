@@ -25,6 +25,24 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void TracksClassLocalsThatEscapeTheirLexicalScope()
+    {
+        var model = Analyze(
+            "class Box { } Box take(Box value) { return value; } i32 main() { Box outer = new Box(); { Box inner = new Box(); outer = inner; } take(outer); return 0; }");
+
+        Assert.Contains(model.EscapingClassLocals, declaration => declaration.Name == "inner");
+        Assert.Contains(model.EscapingClassLocals, declaration => declaration.Name == "outer");
+    }
+
+    [Fact]
+    public void TracksClassLocalsReturnedFromAFunction()
+    {
+        var model = Analyze("class Box { } Box make() { Box value = new Box(); return value; } i32 main() { return 0; }");
+
+        Assert.Contains(model.EscapingClassLocals, declaration => declaration.Name == "value");
+    }
+
+    [Fact]
     public void AllowsParametersAndLocalsToShadowClassFieldsWithThisAccess()
     {
         var model = Analyze(
