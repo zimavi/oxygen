@@ -253,6 +253,35 @@ public sealed class Tokenizer
     {
         var first = source[position];
         var second = Peek(source, position + 1);
+        var third = Peek(source, position + 2);
+        if ((first, second, third) is ('<', '<', '=') or ('>', '>', '='))
+        {
+            var compoundShiftKind = first == '<' ? TokenKind.LessThanLessThanEquals : TokenKind.GreaterThanGreaterThanEquals;
+            Advance(first, ref position, ref line, ref column);
+            Advance(second, ref position, ref line, ref column);
+            Advance(third, ref position, ref line, ref column);
+            return new Token(compoundShiftKind, source[(position - 3)..position], location);
+        }
+        if ((first, second) is ('+', '+') or ('-', '-') or ('+', '=') or ('-', '=')
+            or ('*', '=') or ('/', '=') or ('%', '=') or ('&', '=') or ('|', '=') or ('^', '='))
+        {
+            var compoundKind = (first, second) switch
+            {
+                ('+', '+') => TokenKind.PlusPlus,
+                ('-', '-') => TokenKind.MinusMinus,
+                ('+', '=') => TokenKind.PlusEquals,
+                ('-', '=') => TokenKind.MinusEquals,
+                ('*', '=') => TokenKind.StarEquals,
+                ('/', '=') => TokenKind.SlashEquals,
+                ('%', '=') => TokenKind.PercentEquals,
+                ('&', '=') => TokenKind.AmpersandEquals,
+                ('|', '=') => TokenKind.PipeEquals,
+                _ => TokenKind.CaretEquals
+            };
+            Advance(first, ref position, ref line, ref column);
+            Advance(second, ref position, ref line, ref column);
+            return new Token(compoundKind, source[(position - 2)..position], location);
+        }
         var kind = (first, second) switch
         {
             ('=', '=') => TokenKind.EqualsEquals,
@@ -278,6 +307,8 @@ public sealed class Tokenizer
                 '+' => TokenKind.Plus,
                 '-' => TokenKind.Minus,
                 '&' => TokenKind.Ampersand,
+                '|' => TokenKind.Pipe,
+                '^' => TokenKind.Caret,
                 '*' => TokenKind.Star,
                 '/' => TokenKind.Slash,
                 '%' => TokenKind.Percent,

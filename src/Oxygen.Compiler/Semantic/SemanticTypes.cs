@@ -63,6 +63,10 @@ public sealed record SemanticType(
         Kind == SemanticTypeKind.Primitive &&
         Primitive is not PrimitiveType.Bool and not PrimitiveType.Void;
 
+    public bool IsInteger =>
+        Kind == SemanticTypeKind.Primitive &&
+        Primitive is not (PrimitiveType.F32 or PrimitiveType.F64 or PrimitiveType.Bool or PrimitiveType.Void);
+
     public override string ToString() =>
         Kind switch
         {

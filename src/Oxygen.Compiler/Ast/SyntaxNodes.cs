@@ -210,7 +210,8 @@ public sealed record VariableDeclarationStatement(
 public sealed record AssignmentStatement(
     Expression Target,
     Expression Value,
-    SourceLocation Location) : Statement(Location);
+    SourceLocation Location,
+    TokenKind Operator = TokenKind.Equals) : Statement(Location);
 
 public sealed record ReturnStatement(
     Expression? Value,
@@ -269,7 +270,8 @@ public sealed record BooleanLiteralExpression(
 public sealed record UnaryExpression(
     TokenKind Operator,
     Expression Operand,
-    SourceLocation Location) : Expression(Location);
+    SourceLocation Location,
+    bool IsPostfix = false) : Expression(Location);
 
 public sealed record BinaryExpression(
     Expression Left,

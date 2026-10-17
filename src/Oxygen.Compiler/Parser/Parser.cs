@@ -532,23 +532,17 @@ public sealed class Parser
             return ParseVariableDeclaration();
         }
 
-        if (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Equals)
-        {
-            var location = Current.Location;
-            var target = new IdentifierExpression(Advance().Lexeme, location);
-            Advance();
-            var value = ParseExpression();
-            Consume(TokenKind.Semicolon, "Expected ';' after assignment.");
-            return new AssignmentStatement(target, value, location);
-        }
-
         var expressionLocation = Current.Location;
         var expression = ParseExpression();
-        if (Match(TokenKind.Equals))
+        if (TryConsumeAssignmentOperator(out var assignmentOperator))
         {
             var value = ParseExpression();
             Consume(TokenKind.Semicolon, "Expected ';' after assignment.");
-            return new AssignmentStatement(expression, value, expressionLocation);
+            return new AssignmentStatement(expression,
+                assignmentOperator == TokenKind.Equals
+                    ? value
+                    : new BinaryExpression(expression, CompoundOperator(assignmentOperator), value, expressionLocation),
+                expressionLocation);
         }
         Consume(TokenKind.Semicolon, "Expected ';' after expression.");
         return new ExpressionStatement(expression, expressionLocation);
@@ -623,31 +617,29 @@ public sealed class Parser
             || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier))
             return ParseVariableDeclaration();
 
-        if (!isInitializer && Check(TokenKind.Identifier)
-            && Peek(1).Kind == TokenKind.Plus && Peek(2).Kind == TokenKind.Plus)
-        {
-            var location = Current.Location;
-            var identifier = new IdentifierExpression(Advance().Lexeme, location);
-            Advance();
-            Advance();
-            return new AssignmentStatement(
-                identifier,
-                new BinaryExpression(
-                    identifier,
-                    TokenKind.Plus,
-                    new IntegerLiteralExpression("1", location),
-                    location),
-                location);
-        }
-
         var expressionLocation = Current.Location;
         var expression = ParseExpression();
-        if (Match(TokenKind.Equals))
+        if (!isInitializer && expression is UnaryExpression increment
+            && increment.Operator is TokenKind.PlusPlus or TokenKind.MinusMinus
+            && increment.IsPostfix)
+        {
+            var operatorKind = increment.Operator == TokenKind.PlusPlus ? TokenKind.Plus : TokenKind.Minus;
+            return new AssignmentStatement(
+                increment.Operand,
+                new BinaryExpression(increment.Operand, operatorKind,
+                    new IntegerLiteralExpression("1", increment.Location), increment.Location),
+                expressionLocation);
+        }
+        if (TryConsumeAssignmentOperator(out var assignmentOperator))
         {
             var value = ParseExpression();
             if (isInitializer)
                 Consume(TokenKind.Semicolon, "Expected ';' after for initializer.");
-            return new AssignmentStatement(expression, value, expressionLocation);
+            return new AssignmentStatement(expression,
+                assignmentOperator == TokenKind.Equals
+                    ? value
+                    : new BinaryExpression(expression, CompoundOperator(assignmentOperator), value, expressionLocation),
+                expressionLocation);
         }
         if (isInitializer)
             Consume(TokenKind.Semicolon, "Expected ';' after for initializer.");
@@ -688,12 +680,21 @@ public sealed class Parser
     private Expression ParseBinaryExpression(int minimumPrecedence)
     {
         var left = ParseUnaryExpression();
-        while (GetPrecedence(Current.Kind) >= minimumPrecedence)
+        while (true)
         {
+            var isLeftShift = Current.Kind == TokenKind.LessThan && Peek(1).Kind == TokenKind.LessThan;
+            var isRightShift = Current.Kind == TokenKind.GreaterThan && Peek(1).Kind == TokenKind.GreaterThan;
+            var precedence = isLeftShift || isRightShift ? 8 : GetPrecedence(Current.Kind);
+            if (precedence < minimumPrecedence)
+                break;
             var operatorToken = Advance();
-            var precedence = GetPrecedence(operatorToken.Kind);
+            var operatorKind = isLeftShift ? TokenKind.LessThanLessThan
+                : isRightShift ? TokenKind.GreaterThanGreaterThan
+                : operatorToken.Kind;
+            if (isLeftShift || isRightShift)
+                Advance();
             var right = ParseBinaryExpression(precedence + 1);
-            left = new BinaryExpression(left, operatorToken.Kind, right, left.Location);
+            left = new BinaryExpression(left, operatorKind, right, left.Location);
         }
 
         return left;
@@ -702,7 +703,8 @@ public sealed class Parser
     private Expression ParseUnaryExpression()
     {
         if (Check(TokenKind.Bang) || Check(TokenKind.Minus) || Check(TokenKind.Plus)
-            || Check(TokenKind.Ampersand) || Check(TokenKind.Star))
+            || Check(TokenKind.Ampersand) || Check(TokenKind.Star)
+            || Check(TokenKind.PlusPlus) || Check(TokenKind.MinusMinus))
         {
             var token = Advance();
             return new UnaryExpression(token.Kind, ParseUnaryExpression(), token.Location);
@@ -726,6 +728,14 @@ public sealed class Parser
             {
                 var member = Consume(TokenKind.Identifier, "Expected an identifier after '.'.");
                 expression = new MemberAccessExpression(expression, member.Lexeme, expression.Location);
+            }
+            else if (Match(TokenKind.PlusPlus))
+            {
+                expression = new UnaryExpression(TokenKind.PlusPlus, expression, expression.Location, true);
+            }
+            else if (Match(TokenKind.MinusMinus))
+            {
+                expression = new UnaryExpression(TokenKind.MinusMinus, expression, expression.Location, true);
             }
             else break;
         }
@@ -1024,9 +1034,43 @@ public sealed class Parser
         TokenKind.EqualsEquals or TokenKind.BangEquals => 3,
         TokenKind.LessThan or TokenKind.LessThanOrEquals or TokenKind.GreaterThan
             or TokenKind.GreaterThanOrEquals => 4,
-        TokenKind.Plus or TokenKind.Minus => 5,
-        TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 6,
+        TokenKind.Pipe => 5,
+        TokenKind.Caret => 6,
+        TokenKind.Ampersand => 7,
+        TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan => 8,
+        TokenKind.Plus or TokenKind.Minus => 9,
+        TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 10,
         _ => -1
+    };
+
+    private bool TryConsumeAssignmentOperator(out TokenKind operatorKind)
+    {
+        operatorKind = Current.Kind;
+        if (operatorKind is TokenKind.Equals or TokenKind.PlusEquals or TokenKind.MinusEquals
+            or TokenKind.StarEquals or TokenKind.SlashEquals or TokenKind.PercentEquals
+            or TokenKind.AmpersandEquals or TokenKind.PipeEquals or TokenKind.CaretEquals
+            or TokenKind.LessThanLessThanEquals or TokenKind.GreaterThanGreaterThanEquals)
+        {
+            Advance();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static TokenKind CompoundOperator(TokenKind operatorKind) => operatorKind switch
+    {
+        TokenKind.PlusEquals => TokenKind.Plus,
+        TokenKind.MinusEquals => TokenKind.Minus,
+        TokenKind.StarEquals => TokenKind.Star,
+        TokenKind.SlashEquals => TokenKind.Slash,
+        TokenKind.PercentEquals => TokenKind.Percent,
+        TokenKind.AmpersandEquals => TokenKind.Ampersand,
+        TokenKind.PipeEquals => TokenKind.Pipe,
+        TokenKind.CaretEquals => TokenKind.Caret,
+        TokenKind.LessThanLessThanEquals => TokenKind.LessThanLessThan,
+        TokenKind.GreaterThanGreaterThanEquals => TokenKind.GreaterThanGreaterThan,
+        _ => throw new InvalidOperationException($"'{operatorKind}' is not a compound assignment operator.")
     };
 
     private bool IsType(TokenKind kind) => PrimitiveTypes.ContainsKey(kind) || kind == TokenKind.String;

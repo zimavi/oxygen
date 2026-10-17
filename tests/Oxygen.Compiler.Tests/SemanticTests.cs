@@ -733,6 +733,37 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AnalyzesIntegerAndPointerIncrementAndCompoundArithmetic()
+    {
+        var model = Analyze(
+            """
+            i32 main() {
+                i32 value = 1;
+                value++;
+                ++value;
+                value += 2;
+                value ^= 1;
+                i32* pointer = &value;
+                pointer++;
+                --pointer;
+                pointer -= 1;
+                return value;
+            }
+            """);
+
+        Assert.Contains(model.ExpressionTypes.Values, type => type.IsPointer);
+    }
+
+    [Fact]
+    public void RejectsBitwiseOperationsOnFloatingPointValues()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { f64 value = 1.0; value += 1.0; value ^= 1.0; return 0; }"));
+
+        Assert.Contains("requires integer operands", exception.Message);
+    }
+
+    [Fact]
     public void AnalyzesDataOnlyStructsAndFieldAssignments()
     {
         var model = Analyze(

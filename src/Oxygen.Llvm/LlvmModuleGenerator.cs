@@ -1342,12 +1342,44 @@ public sealed class LlvmModuleGenerator
             TokenKind.Minus => builder.BuildSub(left, right, "sub"),
             TokenKind.Star => builder.BuildMul(left, right, "mul"),
             TokenKind.Slash => builder.BuildSDiv(left, right, "div"),
+            TokenKind.Percent => builder.BuildSRem(left, right, "rem"),
+            TokenKind.Ampersand => builder.BuildAnd(left, right, "and"),
+            TokenKind.Pipe => builder.BuildOr(left, right, "or"),
+            TokenKind.Caret => builder.BuildXor(left, right, "xor"),
+            TokenKind.LessThanLessThan => builder.BuildShl(left, right, "shl"),
+            TokenKind.GreaterThanGreaterThan => builder.BuildAShr(left, right, "ashr"),
             _ => throw new InvalidOperationException($"Unsupported binary operator '{expression.Operator}'.")
         };
     }
 
     private static LLVMValueRef EmitUnary(LLVMContextRef context, LLVMBuilderRef builder, UnaryExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        if (expression.Operator is TokenKind.PlusPlus or TokenKind.MinusMinus)
+        {
+            var address = EmitLValueAddress(context, builder, expression.Operand, values, storage, model, llvmFunctions);
+            var type = model.ExpressionTypes[expression.Operand];
+            var oldValue = builder.BuildLoad2(ToLlvmType(type, model), address, "increment.old");
+            LLVMValueRef updated;
+            if (type.IsPointer)
+            {
+                var index = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 1, false);
+                if (expression.Operator == TokenKind.MinusMinus)
+                    index = builder.BuildNeg(index, "decrement.index");
+                updated = builder.BuildGEP2(ToLlvmType(type.Pointee!, model), oldValue,
+                    new LLVMValueRef[] { index }, "increment.pointer");
+            }
+            else
+            {
+                var one = LLVMValueRef.CreateConstInt(ToLlvmType(type, model), 1, false);
+                updated = expression.Operator == TokenKind.PlusPlus
+                    ? builder.BuildAdd(oldValue, one, "increment")
+                    : builder.BuildSub(oldValue, one, "decrement");
+            }
+
+            builder.BuildStore(updated, address);
+            return expression.IsPostfix ? oldValue : updated;
+        }
+
         if (expression.Operator == TokenKind.Ampersand)
         {
             if (expression.Operand is IdentifierExpression identifier)
@@ -1365,6 +1397,25 @@ public sealed class LlvmModuleGenerator
                 ? builder.BuildFNeg(operand, "fneg")
                 : builder.BuildNeg(operand, "neg")
             : throw new InvalidOperationException($"Unsupported unary operator '{expression.Operator}'.");
+    }
+
+    private static LLVMValueRef EmitLValueAddress(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        Expression expression,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        return expression switch
+        {
+            IdentifierExpression identifier => storage[identifier.Name],
+            UnaryExpression { Operator: TokenKind.Star, Operand: var pointer } =>
+                EmitExpression(context, builder, pointer, values, storage, model, llvmFunctions),
+            IndexExpression index => EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions),
+            _ => throw new InvalidOperationException("Increment target is not supported by the LLVM backend.")
+        };
     }
 
     private static LLVMValueRef EmitCall(LLVMContextRef context, LLVMBuilderRef builder, CallExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)

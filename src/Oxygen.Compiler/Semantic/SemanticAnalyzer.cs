@@ -1145,36 +1145,69 @@ public sealed class SemanticAnalyzer
     {
         var targetType = AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-        if (!CanAssign(targetType, assignment.Value, valueType))
+        if (assignment.Operator != TokenKind.Equals)
+        {
+            if (targetType.IsPointer)
+            {
+                if (assignment.Operator is not (TokenKind.PlusEquals or TokenKind.MinusEquals)
+                    || !valueType.IsInteger)
+                    throw Error($"Operator '{assignment.Operator}' is not valid for pointer operands", assignment.Location);
+            }
+            else if (targetType.IsInteger && valueType.IsInteger)
+            {
+                // All integer compound operators are valid.
+            }
+            else if (targetType.IsNumeric && valueType.IsNumeric
+                     && assignment.Operator is TokenKind.PlusEquals or TokenKind.MinusEquals
+                        or TokenKind.StarEquals or TokenKind.SlashEquals)
+            {
+            }
+            else
+            {
+                throw Error($"Operator '{assignment.Operator}' requires compatible operands", assignment.Location);
+            }
+        }
+        else if (!CanAssign(targetType, assignment.Value, valueType))
         {
             throw Error($"Cannot assign {valueType} to target of type {targetType}", assignment.Value.Location);
         }
 
-        if (assignment.Target is IdentifierExpression identifier)
+        ValidateWritableTarget(assignment.Target, scope);
+        TrackPointerAssignment(assignment, assignment.Value, valueType, scope);
+    }
+
+    private void ValidateWritableTarget(Expression target, Scope scope)
+    {
+        if (target is IdentifierExpression identifier)
         {
             var variable = scope.Lookup(identifier.Name, identifier.Location);
             if (variable.IsConst)
-                throw Error($"Cannot assign to const variable '{identifier.Name}'", assignment.Location, identifier.Name.Length);
+                throw Error($"Cannot assign to const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
         }
-        else if (assignment.Target is MemberAccessExpression member)
+        else if (target is MemberAccessExpression member)
         {
             if (member.Target is IdentifierExpression memberIdentifier
                 && scope.Lookup(memberIdentifier.Name, memberIdentifier.Location).IsConst)
-                throw Error($"Cannot assign to a field of const variable '{memberIdentifier.Name}'", assignment.Location,
+                throw Error($"Cannot assign to a field of const variable '{memberIdentifier.Name}'", target.Location,
                     memberIdentifier.Name.Length);
         }
-        else if (assignment.Target is IndexExpression index
+        else if (target is IndexExpression index
                  && index.Target is IdentifierExpression indexIdentifier
                  && scope.Lookup(indexIdentifier.Name, indexIdentifier.Location).IsConst)
-        {
-            throw Error($"Cannot assign to an element of const variable '{indexIdentifier.Name}'", assignment.Location,
+            throw Error($"Cannot assign to an element of const variable '{indexIdentifier.Name}'", target.Location,
                 indexIdentifier.Name.Length);
-        }
-        else if (assignment.Target is not (UnaryExpression { Operator: TokenKind.Star } or IndexExpression))
+        else if (target is not (UnaryExpression { Operator: TokenKind.Star } or IndexExpression or MemberAccessExpression))
         {
-            throw Error("Assignment target is not addressable", assignment.Target.Location);
+            throw Error("Assignment target is not addressable", target.Location);
         }
+    }
 
+    private void TrackPointerAssignment(
+        AssignmentStatement assignment,
+        Expression value,
+        SemanticType valueType,
+        Scope scope)
+    {
         if (assignment.Target is IdentifierExpression assignedIdentifier)
         {
             var variable = scope.Lookup(assignedIdentifier.Name, assignedIdentifier.Location);
@@ -1186,9 +1219,9 @@ public sealed class SemanticAnalyzer
                     > scope.LookupDepth(sourceIdentifier.Name, sourceIdentifier.Location))
                     _escapingClassLocals.Add(sourceDeclaration);
             }
-            if (variable.Type.IsPointer)
+            if (variable.Type.IsPointer && assignment.Operator == TokenKind.Equals)
             {
-                if (assignment.Value is IntegerLiteralExpression { Lexeme: "0" })
+                if (value is IntegerLiteralExpression { Lexeme: "0" })
                     _definitelyNullVariables.Add(variable);
                 else
                     _definitelyNullVariables.Remove(variable);
@@ -1462,6 +1495,16 @@ public sealed class SemanticAnalyzer
             return operandType;
         }
 
+        if (expression.Operator is TokenKind.PlusPlus or TokenKind.MinusMinus)
+        {
+            if (!IsAddressable(expression.Operand, scope))
+                throw Error($"The '{expression.Operator}' operator requires an addressable operand", expression.Location);
+            ValidateWritableTarget(expression.Operand, scope);
+            if (!operandType.IsInteger && !operandType.IsPointer)
+                throw Error($"The '{expression.Operator}' operator requires an integer or pointer operand", expression.Location);
+            return operandType;
+        }
+
         if (!operandType.IsNumeric)
         {
             throw Error($"The '{expression.Operator}' operator requires a numeric operand", expression.Location);
@@ -1495,7 +1538,7 @@ public sealed class SemanticAnalyzer
 
         if (left.IsPointer || right.IsPointer)
         {
-            if (left.IsPointer && right.IsNumeric
+            if (left.IsPointer && right.IsInteger
                 && expression.Operator is TokenKind.Plus or TokenKind.Minus)
                 return left;
             if (left.IsPointer && expression.Right is IntegerLiteralExpression { Lexeme: "0" }
@@ -1516,6 +1559,17 @@ public sealed class SemanticAnalyzer
             throw Error($"Operator '{expression.Operator}' is not valid for pointer operands", expression.Location);
         }
 
+        if (expression.Operator is TokenKind.Ampersand or TokenKind.Pipe or TokenKind.Caret
+            or TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan)
+        {
+            if (!left.IsInteger || !right.IsInteger)
+                throw Error($"Operator '{expression.Operator}' requires integer operands", expression.Location);
+            return left;
+        }
+
+        if (expression.Operator == TokenKind.Percent && (!left.IsInteger || !right.IsInteger))
+            throw Error("The '%' operator requires integer operands", expression.Location);
+
         if (left != right)
         {
             if (left.IsNumeric && right.IsNumeric)
@@ -1525,6 +1579,7 @@ public sealed class SemanticAnalyzer
                 return isComparison ? SemanticType.FromPrimitive(PrimitiveType.Bool)
                     : CanAssign(left, expression.Right, right) ? left : right;
             }
+
             throw Error($"Binary operator '{expression.Operator}' requires matching operand types", expression.Location);
         }
 

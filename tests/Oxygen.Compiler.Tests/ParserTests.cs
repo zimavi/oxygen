@@ -327,6 +327,25 @@ public sealed class ParserTests
         Assert.True(inferred.Type.IsInferred);
     }
 
+    [Fact]
+    public void ParsesPrefixPostfixAndCompoundArithmetic()
+    {
+        var unit = Parse(
+            "i32 main() { i32 value = 1; i32 before = value++; i32 after = ++value; value += 2; value <<= 1; return value; }");
+
+        var statements = unit.Functions[0].Body.Statements;
+        var before = Assert.IsType<VariableDeclarationStatement>(statements[1]);
+        var postfix = Assert.IsType<UnaryExpression>(before.Initializer);
+        Assert.True(postfix.IsPostfix);
+        Assert.Equal(TokenKind.PlusPlus, postfix.Operator);
+        var after = Assert.IsType<VariableDeclarationStatement>(statements[2]);
+        Assert.Equal(TokenKind.PlusPlus, Assert.IsType<UnaryExpression>(after.Initializer).Operator);
+        var compound = Assert.IsType<AssignmentStatement>(statements[3]);
+        Assert.Equal(TokenKind.Plus, Assert.IsType<BinaryExpression>(compound.Value).Operator);
+        var shift = Assert.IsType<AssignmentStatement>(statements[4]);
+        Assert.Equal(TokenKind.LessThanLessThan, Assert.IsType<BinaryExpression>(shift.Value).Operator);
+    }
+
     private CompilationUnit Parse(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
 }

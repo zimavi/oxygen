@@ -22,9 +22,17 @@ validity and lifetime rules are the programmer's responsibility; pointers to
 local variables are allowed, but must not outlive the storage they reference.
 
 Pointer arithmetic supports `pointer + integer` and `pointer - integer`.
-The integer offset is scaled by the size of the pointee type. Integer-plus-
-pointer, pointer-pointer arithmetic, and pointer comparisons other than
-`==` and `!=` are not supported.
+The integer offset is scaled by the size of the pointee type. Prefix and
+postfix `++` and `--`, and compound `+=` and `-=`, apply the same scaled
+one-element or integer-offset movement. Prefix operators produce the updated
+pointer; postfix operators produce the previous pointer value. Integer-plus-
+pointer, pointer-pointer arithmetic, multiplication, division, bitwise
+operations, shifts, and pointer comparisons other than `==` and `!=` are not
+supported.
+
+Integers support prefix and postfix `++` and `--`, compound arithmetic and
+bitwise assignment, and the binary bitwise (`&`, `|`, `^`) and shift (`<<`,
+`>>`) operators. Increment and decrement require mutable addressable values.
 
 Pointers are lowered as native LLVM pointers. They are not managed, reference
 counted, or garbage-collected.

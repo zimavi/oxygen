@@ -118,6 +118,20 @@ public sealed class LexerTests
     }
 
     [Fact]
+    public void TokenizesExtendedArithmeticOperators()
+    {
+        Assert.Equal(
+            [
+                TokenKind.PlusPlus, TokenKind.MinusMinus, TokenKind.PlusEquals, TokenKind.MinusEquals,
+                TokenKind.StarEquals, TokenKind.SlashEquals, TokenKind.PercentEquals,
+                TokenKind.AmpersandEquals, TokenKind.PipeEquals, TokenKind.CaretEquals,
+                TokenKind.LessThan, TokenKind.LessThan, TokenKind.GreaterThan, TokenKind.GreaterThan,
+                TokenKind.EndOfFile
+            ],
+            _lexer.Tokenize("++ -- += -= *= /= %= &= |= ^= << >>").Select(token => token.Kind));
+    }
+
+    [Fact]
     public void SkipsCommentsAndTracksLocations()
     {
         var tokens = _lexer.Tokenize("// ignored\n/* ignored */ i32 value;");
