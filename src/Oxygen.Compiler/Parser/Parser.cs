@@ -55,6 +55,8 @@ public sealed class Parser
             var structs = new List<StructDeclaration>();
             var enums = new List<EnumDeclaration>();
             var unions = new List<UnionDeclaration>();
+            var classes = new List<ClassDeclaration>();
+            var interfaces = new List<InterfaceDeclaration>();
             var functions = new List<FunctionDeclaration>();
             while (!Check(TokenKind.EndOfFile))
             {
@@ -64,12 +66,19 @@ public sealed class Parser
                     unions.Add(ParseUnion());
                 else if (IsStructDeclarationStart())
                     structs.Add(ParseStruct());
+                else if (IsClassDeclarationStart())
+                    classes.Add(ParseClass());
+                else if (IsInterfaceDeclarationStart())
+                    interfaces.Add(ParseInterface());
                 else
                     functions.Add(ParseFunction());
             }
 
             _logger.Information("Parsed {FunctionCount} function(s).", functions.Count);
-            return new CompilationUnit(module.Name, module.Visibility, imports, functions, location) { Structs = structs, Enums = enums, Unions = unions };
+            return new CompilationUnit(module.Name, module.Visibility, imports, functions, location)
+            {
+                Structs = structs, Enums = enums, Unions = unions, Classes = classes, Interfaces = interfaces
+            };
         }
         catch (ParseException exception)
         {
@@ -87,6 +96,8 @@ public sealed class Parser
         var structs = new List<StructDeclaration>();
         var enums = new List<EnumDeclaration>();
         var unions = new List<UnionDeclaration>();
+        var classes = new List<ClassDeclaration>();
+        var interfaces = new List<InterfaceDeclaration>();
         try
         {
             module = ParseModuleDeclaration();
@@ -116,6 +127,10 @@ public sealed class Parser
                     unions.Add(ParseUnion());
                 else if (IsStructDeclarationStart())
                     structs.Add(ParseStruct());
+                else if (IsClassDeclarationStart())
+                    classes.Add(ParseClass());
+                else if (IsInterfaceDeclarationStart())
+                    interfaces.Add(ParseInterface());
                 else
                     functions.Add(ParseFunction());
             }
@@ -136,7 +151,129 @@ public sealed class Parser
             Structs = structs,
             Enums = enums
             ,Unions = unions
+            ,Classes = classes
+            ,Interfaces = interfaces
         }, diagnostics.Diagnostics);
+    }
+
+    private ClassDeclaration ParseClass()
+    {
+        var location = Current.Location;
+        var annotations = ParseAnnotations();
+        var visibility = ParseVisibility();
+        Consume(TokenKind.Class, "Expected 'class'.");
+        var name = Consume(TokenKind.Identifier, "Expected a class name.").Lexeme;
+        string? baseType = null;
+        var interfaces = new List<string>();
+        if (Match(TokenKind.Colon))
+        {
+            baseType = Consume(TokenKind.Identifier, "Expected a base type.").Lexeme;
+            while (Match(TokenKind.Comma))
+                interfaces.Add(Consume(TokenKind.Identifier, "Expected an interface name.").Lexeme);
+        }
+
+        Consume(TokenKind.OpenBrace, "Expected '{' after class declaration.");
+        var fields = new List<ClassFieldDeclaration>();
+        var methods = new List<FunctionDeclaration>();
+        var constructors = new List<ConstructorDeclaration>();
+        DestructorDeclaration? destructor = null;
+        while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
+        {
+            var memberVisibility = ParseVisibility();
+            if (Check(TokenKind.Tilde))
+            {
+                var destructorLocation = Advance().Location;
+                var destructorName = Consume(TokenKind.Identifier, "Expected a destructor name.").Lexeme;
+                Consume(TokenKind.OpenParenthesis, "Expected '(' after destructor name.");
+                Consume(TokenKind.CloseParenthesis, "Expected ')' after destructor name.");
+                var body = Check(TokenKind.Semicolon)
+                    ? new BlockStatement([], destructorLocation)
+                    : ParseBlock();
+                Match(TokenKind.Semicolon);
+                destructor = new DestructorDeclaration(destructorName, body, memberVisibility, destructorLocation);
+                continue;
+            }
+
+            if (Check(TokenKind.Identifier) && Current.Lexeme == name && Peek(1).Kind == TokenKind.OpenParenthesis)
+            {
+                var constructorLocation = Current.Location;
+                Advance();
+                var parameters = ParseParameters();
+                constructors.Add(new ConstructorDeclaration(name, parameters, ParseBlock(), memberVisibility,
+                    constructorLocation));
+                continue;
+            }
+
+            var memberLocation = Current.Location;
+            var type = ParseType(allowInferred: false);
+            var memberName = Consume(TokenKind.Identifier, "Expected a class member name.").Lexeme;
+            if (Check(TokenKind.OpenParenthesis))
+            {
+                var parameters = ParseParameters();
+                methods.Add(new FunctionDeclaration(type, memberName, parameters, ParseBlock(), memberVisibility,
+                    memberLocation));
+            }
+            else
+            {
+                Consume(TokenKind.Semicolon, "Expected ';' after class field.");
+                fields.Add(new ClassFieldDeclaration(type, memberName, memberVisibility, memberLocation));
+            }
+        }
+        Consume(TokenKind.CloseBrace, "Expected '}' after class declaration.");
+        Match(TokenKind.Semicolon);
+        return new ClassDeclaration(name, baseType, interfaces, fields, methods, constructors, destructor, visibility,
+            location, annotations);
+    }
+
+    private InterfaceDeclaration ParseInterface()
+    {
+        var location = Current.Location;
+        var annotations = ParseAnnotations();
+        var visibility = ParseVisibility();
+        Consume(TokenKind.Interface, "Expected 'interface'.");
+        var name = Consume(TokenKind.Identifier, "Expected an interface name.").Lexeme;
+        Consume(TokenKind.OpenBrace, "Expected '{' after interface name.");
+        var methods = new List<FunctionDeclaration>();
+        while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
+        {
+            var memberVisibility = ParseVisibility();
+            var methodLocation = Current.Location;
+            var returnType = ParseType(allowInferred: false);
+            var methodName = Consume(TokenKind.Identifier, "Expected an interface method name.").Lexeme;
+            var parameters = ParseParameters();
+            Consume(TokenKind.Semicolon, "Expected ';' after interface method.");
+            methods.Add(new FunctionDeclaration(returnType, methodName, parameters,
+                new BlockStatement([], methodLocation), memberVisibility, methodLocation, IsExternalDeclaration: true));
+        }
+        Consume(TokenKind.CloseBrace, "Expected '}' after interface declaration.");
+        Match(TokenKind.Semicolon);
+        return new InterfaceDeclaration(name, methods, visibility, location, annotations);
+    }
+
+    private IReadOnlyList<ParameterDeclaration> ParseParameters()
+    {
+        Consume(TokenKind.OpenParenthesis, "Expected '(' before parameters.");
+        var parameters = new List<ParameterDeclaration>();
+        if (!Check(TokenKind.CloseParenthesis))
+        {
+            do
+            {
+                var parameterLocation = Current.Location;
+                var type = ParseType(allowInferred: false);
+                var parameterName = Consume(TokenKind.Identifier, "Expected a parameter name.").Lexeme;
+                parameters.Add(new ParameterDeclaration(type, parameterName, parameterLocation));
+            } while (Match(TokenKind.Comma));
+        }
+        Consume(TokenKind.CloseParenthesis, "Expected ')' after parameters.");
+        return parameters;
+    }
+
+    private Visibility ParseVisibility()
+    {
+        if (Match(TokenKind.Public))
+            return Visibility.Public;
+        Match(TokenKind.Private);
+        return Visibility.Private;
     }
 
     private UnionDeclaration ParseUnion()
@@ -592,6 +729,21 @@ public sealed class Parser
         var token = Advance();
         switch (token.Kind)
         {
+            case TokenKind.New:
+            {
+                var type = ParseType(allowInferred: false);
+                Consume(TokenKind.OpenParenthesis, "Expected '(' after type in new expression.");
+                var arguments = new List<Expression>();
+                if (!Check(TokenKind.CloseParenthesis))
+                {
+                    do
+                    {
+                        arguments.Add(ParseExpression());
+                    } while (Match(TokenKind.Comma));
+                }
+                Consume(TokenKind.CloseParenthesis, "Expected ')' after constructor arguments.");
+                return new NewExpression(type, arguments, token.Location);
+            }
             case TokenKind.OpenBrace:
             {
                 var elements = new List<Expression>();
@@ -658,6 +810,8 @@ public sealed class Parser
                 }
 
                 return new IdentifierExpression(name, token.Location);
+            case TokenKind.This:
+                return new ThisExpression(token.Location);
             case TokenKind.IntegerLiteral:
                 return new IntegerLiteralExpression(token.Lexeme, token.Location);
             case TokenKind.FloatingPointLiteral:
@@ -889,6 +1043,36 @@ public sealed class Parser
         if (index < _tokens.Count && _tokens[index].Kind is TokenKind.Public or TokenKind.Private)
             index++;
         return index < _tokens.Count && _tokens[index].Kind == TokenKind.Struct;
+    }
+
+    private bool IsClassDeclarationStart() => IsDeclarationStart(TokenKind.Class);
+
+    private bool IsInterfaceDeclarationStart() => IsDeclarationStart(TokenKind.Interface);
+
+    private bool IsDeclarationStart(TokenKind declaration)
+    {
+        var index = _position;
+        while (index < _tokens.Count && _tokens[index].Kind == TokenKind.At)
+        {
+            index++;
+            if (index >= _tokens.Count || _tokens[index].Kind is not (TokenKind.Identifier or TokenKind.Extern))
+                return false;
+            index++;
+            if (index < _tokens.Count && _tokens[index].Kind == TokenKind.OpenParenthesis)
+            {
+                var depth = 1;
+                index++;
+                while (index < _tokens.Count && depth > 0)
+                {
+                    if (_tokens[index].Kind == TokenKind.OpenParenthesis) depth++;
+                    if (_tokens[index].Kind == TokenKind.CloseParenthesis) depth--;
+                    index++;
+                }
+            }
+        }
+        if (index < _tokens.Count && _tokens[index].Kind is TokenKind.Public or TokenKind.Private)
+            index++;
+        return index < _tokens.Count && _tokens[index].Kind == declaration;
     }
 
     private Token Consume(TokenKind kind, string message)

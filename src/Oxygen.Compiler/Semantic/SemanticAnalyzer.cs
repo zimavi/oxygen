@@ -17,6 +17,8 @@ public sealed class SemanticAnalyzer
     private readonly Dictionary<string, StructSymbol> _structsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, UnionSymbol> _unionsByName = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ClassSymbol> _classesByName = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InterfaceSymbol> _interfacesByName = new(StringComparer.Ordinal);
     private int _loopDepth;
     private Dictionary<FunctionDeclaration, FunctionSymbol>? _functionSymbols;
     private IReadOnlyDictionary<string, SemanticType> _genericTypes =
@@ -111,6 +113,8 @@ public sealed class SemanticAnalyzer
         _structsByName.Clear();
         _enumsByName.Clear();
         _unionsByName.Clear();
+        _classesByName.Clear();
+        _interfacesByName.Clear();
         _loopDepth = 0;
 
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
@@ -171,7 +175,66 @@ public sealed class SemanticAnalyzer
                     new StructSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
                         annotations.IsPacked, annotations.Alignment));
             }
+            foreach (var declaration in unit.Interfaces)
+            {
+                EnsureTypeNameAvailable(declaration.Name, declaration.Location);
+                _interfacesByName.Add(declaration.Name,
+                    new InterfaceSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility));
+            }
+            foreach (var declaration in unit.Classes)
+            {
+                EnsureTypeNameAvailable(declaration.Name, declaration.Location);
+                _classesByName.Add(declaration.Name,
+                    new ClassSymbol(declaration.Name, moduleName, declaration.BaseType,
+                        declaration.Interfaces, [], [], [], declaration.Destructor, declaration, declaration.Visibility));
+            }
         }
+        foreach (var unit in compilationUnits)
+        {
+            foreach (var declaration in unit.Interfaces)
+            {
+                var methods = declaration.Methods.Select(method =>
+                    CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray();
+                if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1))
+                    throw Error($"Interface '{declaration.Name}' contains duplicate methods", declaration.Location);
+                _interfacesByName[declaration.Name] = _interfacesByName[declaration.Name] with { Methods = methods };
+            }
+            foreach (var declaration in unit.Classes)
+            {
+                var fields = declaration.Fields.Select(field =>
+                    new ClassFieldSymbol(field.Name, ResolveType(field.Type), field, field.Visibility)).ToArray();
+                if (fields.GroupBy(field => field.Name, StringComparer.Ordinal).Any(group => group.Count() > 1))
+                    throw Error($"Class '{declaration.Name}' contains duplicate fields", declaration.Location);
+                var methods = declaration.Methods.Select(method =>
+                    CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray();
+                if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1))
+                    throw Error($"Class '{declaration.Name}' contains duplicate methods", declaration.Location);
+                var constructors = declaration.Constructors.Select(constructor =>
+                {
+                    var parameterNames = new HashSet<string>(StringComparer.Ordinal);
+                    if (constructor.Parameters.Any(parameter => !parameterNames.Add(parameter.Name)))
+                        throw Error($"Constructor '{declaration.Name}' contains duplicate parameters", constructor.Location);
+                    return new ConstructorSymbol(declaration.Name,
+                        constructor.Parameters.Select(parameter => new ParameterSymbol(
+                            parameter.Name, ResolveType(parameter.Type), parameter)).ToArray(),
+                        constructor, constructor.Visibility);
+                }).ToArray();
+                if (constructors.GroupBy(constructor => string.Join(",", constructor.Parameters.Select(parameter => parameter.Type)))
+                    .Any(group => group.Count() > 1))
+                    throw Error($"Class '{declaration.Name}' contains duplicate constructors", declaration.Location);
+                if (constructors.Length == 0)
+                    constructors = [new ConstructorSymbol(declaration.Name, [],
+                        new ConstructorDeclaration(declaration.Name, [], new BlockStatement([], declaration.Location),
+                            Visibility.Public, declaration.Location), Visibility.Public)];
+                if (declaration.Destructor is not null && declaration.Destructor.ClassName != declaration.Name)
+                    throw Error($"Destructor name must be '{declaration.Name}'", declaration.Destructor.Location);
+                _classesByName[declaration.Name] = _classesByName[declaration.Name] with
+                {
+                    Fields = fields, Methods = methods, Constructors = constructors
+                };
+            }
+        }
+        ValidateClassHierarchy();
         foreach (var unit in compilationUnits)
         {
             foreach (var declaration in unit.Structs)
@@ -278,6 +341,19 @@ public sealed class SemanticAnalyzer
                 functionSources[symbol] = sourceName;
                 functionModules[symbol] = (moduleName, unit.Imports);
             }
+            foreach (var classDeclaration in unit.Classes)
+            {
+                foreach (var method in _classesByName[classDeclaration.Name].Methods)
+                {
+                    var key = method.QualifiedName;
+                    if (!functionsByName.TryGetValue(key, out var overloads))
+                        functionsByName[key] = overloads = [];
+                    overloads.Add(method);
+                    functions[method.Declaration] = method;
+                    functionSources[method] = sourceName;
+                    functionModules[method] = (method.ModuleName, unit.Imports);
+                }
+            }
         }
 
         FunctionSymbol? mainFunction = null;
@@ -318,6 +394,67 @@ public sealed class SemanticAnalyzer
                     sourceName: functionSources.GetValueOrDefault(symbol));
             }
         }
+        for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
+        {
+            var unit = compilationUnits[unitIndex];
+            var moduleName = unit.ModuleName ?? "program";
+            _sourceName = diagnostics is null || sourceNames is null || unitIndex >= sourceNames.Count
+                ? null
+                : sourceNames[unitIndex];
+            foreach (var declaration in unit.Classes)
+            {
+                var classSymbol = _classesByName[declaration.Name];
+                foreach (var constructor in classSymbol.Constructors)
+                {
+                    try
+                    {
+                        AnalyzeFunction(
+                            CreateConstructorFunctionSymbol(moduleName, constructor),
+                            functionsByName,
+                            $"{moduleName}.{declaration.Name}",
+                            unit.Imports,
+                            expressionTypes,
+                            resolvedCalls);
+                    }
+                    catch (SemanticException exception) when (diagnostics is not null)
+                    {
+                        diagnostics.Add(
+                            DiagnosticPhase.Semantic,
+                            exception.Message,
+                            exception.Location,
+                            exception.Length,
+                            sourceName: sourceNames is not null && unitIndex < sourceNames.Count
+                                ? sourceNames[unitIndex]
+                                : null);
+                    }
+                }
+
+                if (classSymbol.Destructor is not null)
+                {
+                    try
+                    {
+                        AnalyzeFunction(
+                            CreateDestructorFunctionSymbol(moduleName, classSymbol.Destructor),
+                            functionsByName,
+                            $"{moduleName}.{declaration.Name}",
+                            unit.Imports,
+                            expressionTypes,
+                            resolvedCalls);
+                    }
+                    catch (SemanticException exception) when (diagnostics is not null)
+                    {
+                        diagnostics.Add(
+                            DiagnosticPhase.Semantic,
+                            exception.Message,
+                            exception.Location,
+                            exception.Length,
+                            sourceName: sourceNames is not null && unitIndex < sourceNames.Count
+                                ? sourceNames[unitIndex]
+                                : null);
+                    }
+                }
+            }
+        }
 
         if (diagnostics is not null)
         {
@@ -346,7 +483,100 @@ public sealed class SemanticAnalyzer
                 group => group.Key,
                 group => (IReadOnlyList<FunctionSymbol>)group.SelectMany(pair => pair.Value).ToList(),
                 StringComparer.Ordinal);
-        return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName, _enumsByName, _unionsByName);
+        return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName, _enumsByName, _unionsByName,
+            _classesByName, _interfacesByName);
+    }
+
+    private static FunctionSymbol CreateConstructorFunctionSymbol(string moduleName, ConstructorSymbol constructor)
+    {
+        var declaration = new FunctionDeclaration(
+            new TypeSyntax(PrimitiveType.Void, false, constructor.Declaration.Location),
+            constructor.ClassName,
+            constructor.Declaration.Parameters,
+            constructor.Declaration.Body,
+            constructor.Visibility,
+            constructor.Declaration.Location);
+        return new FunctionSymbol(
+            constructor.ClassName,
+            SemanticType.FromPrimitive(PrimitiveType.Void),
+            constructor.Parameters,
+            declaration,
+            $"{moduleName}.{constructor.ClassName}",
+            constructor.Visibility);
+    }
+
+    private static FunctionSymbol CreateDestructorFunctionSymbol(string moduleName, DestructorDeclaration destructor)
+    {
+        var declaration = new FunctionDeclaration(
+            new TypeSyntax(PrimitiveType.Void, false, destructor.Location),
+            destructor.ClassName,
+            [],
+            destructor.Body,
+            destructor.Visibility,
+            destructor.Location);
+        return new FunctionSymbol(
+            destructor.ClassName,
+            SemanticType.FromPrimitive(PrimitiveType.Void),
+            [],
+            declaration,
+            $"{moduleName}.{destructor.ClassName}",
+            destructor.Visibility);
+    }
+
+    private void EnsureTypeNameAvailable(string name, SourceLocation location)
+    {
+        if (_enumsByName.ContainsKey(name) || _structsByName.ContainsKey(name) || _unionsByName.ContainsKey(name)
+            || _classesByName.ContainsKey(name) || _interfacesByName.ContainsKey(name))
+            throw Error($"A type named '{name}' is already declared", location, name.Length);
+    }
+
+    private static string MethodSignature(FunctionSymbol method) =>
+        $"{method.Name}({string.Join(",", method.Parameters.Select(parameter => parameter.Type))})";
+
+    private void ValidateClassHierarchy()
+    {
+        foreach (var classSymbol in _classesByName.Values)
+        {
+            var interfaceNames = classSymbol.InterfaceNames.ToList();
+            if (classSymbol.BaseTypeName is not null
+                && !_classesByName.ContainsKey(classSymbol.BaseTypeName)
+                && _interfacesByName.ContainsKey(classSymbol.BaseTypeName))
+                interfaceNames.Insert(0, classSymbol.BaseTypeName);
+            else if (classSymbol.BaseTypeName is not null && !_classesByName.ContainsKey(classSymbol.BaseTypeName))
+                throw Error($"Base class '{classSymbol.BaseTypeName}' is not declared", classSymbol.Declaration.Location);
+            foreach (var interfaceName in interfaceNames)
+                if (!_interfacesByName.ContainsKey(interfaceName))
+                    throw Error($"Interface '{interfaceName}' is not declared", classSymbol.Declaration.Location);
+            var inherited = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
+                ? [] : GetClassMethods(classSymbol.BaseTypeName, []);
+            foreach (var contract in interfaceNames.SelectMany(name => GetInterfaceMethods(name, [])))
+            {
+                if (!classSymbol.Methods.Concat(inherited).Any(method =>
+                        method.Name == contract.Name && method.Parameters.Select(parameter => parameter.Type)
+                            .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type))
+                        && method.ReturnType == contract.ReturnType))
+                    throw Error($"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
+                        classSymbol.Declaration.Location);
+            }
+        }
+    }
+
+    private IReadOnlyList<FunctionSymbol> GetClassMethods(string name, HashSet<string> active)
+    {
+        if (!active.Add(name))
+            throw Error($"Class inheritance cycle involving '{name}'", _classesByName[name].Declaration.Location);
+        var cls = _classesByName[name];
+        var methods = cls.BaseTypeName is null ? [] : GetClassMethods(cls.BaseTypeName, active);
+        active.Remove(name);
+        return methods.Concat(cls.Methods).ToArray();
+    }
+
+    private IReadOnlyList<FunctionSymbol> GetInterfaceMethods(string name, HashSet<string> active)
+    {
+        if (!active.Add(name))
+            throw Error($"Interface inheritance cycle involving '{name}'", _interfacesByName[name].Declaration.Location);
+        active.Remove(name);
+        return _interfacesByName[name].Methods;
     }
 
     public SemanticResult AnalyzeWithDiagnostics(
@@ -532,6 +762,16 @@ public sealed class SemanticAnalyzer
                     return SemanticType.PointerTo(SemanticType.Union(syntax.NamedType));
                 return SemanticType.Union(syntax.NamedType);
             }
+            if (_classesByName.ContainsKey(syntax.NamedType))
+            {
+                var namedClass = SemanticType.Class(syntax.NamedType);
+                return syntax.IsPointer ? SemanticType.PointerTo(namedClass) : namedClass;
+            }
+            if (_interfacesByName.ContainsKey(syntax.NamedType))
+            {
+                var namedInterface = SemanticType.Interface(syntax.NamedType);
+                return syntax.IsPointer ? SemanticType.PointerTo(namedInterface) : namedInterface;
+            }
             if (!_structsByName.ContainsKey(syntax.NamedType))
                 throw Error($"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
             var named = SemanticType.Struct(syntax.NamedType);
@@ -595,15 +835,23 @@ public sealed class SemanticAnalyzer
         _declaredVariables.Clear();
         _definitelyNullVariables.Clear();
         var scope = new Scope(null, MarkVariableUsed);
+        var className = function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..];
+        if (_classesByName.TryGetValue(className, out var ownerClass))
+        {
+            scope = new Scope(null, MarkVariableUsed, SemanticType.Class(ownerClass.Name));
+            foreach (var field in ownerClass.Fields)
+                scope.Declare(field.Name, new VariableSymbol(field.Type, false, field.Declaration, false));
+        }
+        var parameterScope = new Scope(scope, MarkVariableUsed);
         foreach (var parameter in function.Parameters)
         {
             var variable = new VariableSymbol(parameter.Type, false, parameter.Declaration, true);
-            scope.Declare(parameter.Name, variable);
+            parameterScope.Declare(parameter.Name, variable);
             _declaredVariables.Add(variable);
         }
 
         _loopDepth = 0;
-        var hasReturn = AnalyzeBlock(function.Declaration.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        var hasReturn = AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (!function.ReturnType.IsVoid && !hasReturn)
         {
             throw Error($"Function '{function.Name}' must return a value", function.Declaration.Location);
@@ -921,6 +1169,7 @@ public sealed class SemanticAnalyzer
         var type = expression switch
         {
             IdentifierExpression identifier => scope.Lookup(identifier.Name, identifier.Location).Type,
+            ThisExpression thisExpression => scope.LookupThis(thisExpression.Location),
             IntegerLiteralExpression integer => SemanticType.FromPrimitive(ParseNumericLiteralType(integer.Lexeme, false)),
             FloatingPointLiteralExpression floating => SemanticType.FromPrimitive(ParseNumericLiteralType(floating.Lexeme, true)),
             StringLiteralExpression => SemanticType.String,
@@ -937,6 +1186,8 @@ public sealed class SemanticAnalyzer
             UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, allowVoid),
+            NewExpression creation => AnalyzeNewExpression(
+                creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             _ => throw new InvalidOperationException($"Unsupported expression type {expression.GetType().Name}.")
         };
 
@@ -1054,11 +1305,42 @@ public sealed class SemanticAnalyzer
         }
 
         var targetType = AnalyzeExpression(member.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        if (targetType.IsClass)
+        {
+            var cls = _classesByName[targetType.StructName!];
+            var field = cls.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+            if (field is not null)
+                return field.Type;
+            if (cls.Methods.Any(method => method.Name == member.MemberName))
+                return SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.Void));
+            throw Error($"Class '{cls.Name}' has no member named '{member.MemberName}'", member.Location);
+        }
         if (!targetType.IsStruct)
-            throw Error($"Member access requires a struct value, got {targetType}", member.Location);
+            throw Error($"Member access requires a struct or class value, got {targetType}", member.Location);
         var structure = _structsByName[targetType.StructName!];
         return structure.Fields.FirstOrDefault(field => field.Name == member.MemberName)?.Type
             ?? throw Error($"Struct '{targetType.StructName}' has no field named '{member.MemberName}'", member.Location, member.MemberName.Length);
+    }
+
+    private SemanticType AnalyzeNewExpression(
+        NewExpression expression, Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName,
+        IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types,
+        IDictionary<CallExpression, FunctionSymbol> calls)
+    {
+        if (expression.Type.NamedType is null || !_classesByName.TryGetValue(expression.Type.NamedType, out var cls)
+            || expression.Type.IsPointer || expression.Type.IsArray || expression.Type.IsString)
+            throw Error("Only declared classes can be constructed with 'new'", expression.Location);
+        var arguments = expression.Arguments.Select(argument =>
+            AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
+        var matches = cls.Constructors.Where(constructor => constructor.Parameters.Count == arguments.Length)
+            .Where(constructor => constructor.Parameters.Select((parameter, index) =>
+                CanAssign(parameter.Type, expression.Arguments[index], arguments[index])).All(match => match)).ToArray();
+        if (matches.Length == 0)
+            throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
+        if (matches.Length > 1)
+            throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
+        return SemanticType.Class(cls.Name);
     }
 
     private SemanticType AnalyzeUnary(
@@ -1217,6 +1499,36 @@ public sealed class SemanticAnalyzer
             var argumentType = AnalyzeExpression(call.Arguments[0], scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
             if (!argumentType.IsArray) throw Error("length() requires an array", call.Arguments[0].Location);
             return SemanticType.FromPrimitive(PrimitiveType.I32);
+        }
+        if (call.Name.Contains('.', StringComparison.Ordinal))
+        {
+            var separator = call.Name.LastIndexOf('.');
+            var receiverName = call.Name[..separator];
+            var methodName = call.Name[(separator + 1)..];
+            VariableSymbol? receiver = null;
+            try { receiver = scope.Lookup(receiverName, call.Location); }
+            catch (SemanticException) { }
+            if (receiver is not null)
+            {
+                var receiverType = receiver.Type;
+                if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
+                {
+                    var methodCandidates = GetClassMethods(receiverClass.Name, []).Where(method => method.Name == methodName).ToArray();
+                    var methodArgumentTypes = call.Arguments.Select(argument =>
+                        AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
+                    var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
+                        .Where(method => method.Parameters.Select((parameter, index) =>
+                            CanAssign(parameter.Type, call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
+                    if (methodMatches.Length == 1)
+                    {
+                        resolvedCalls[call] = methodMatches[0];
+                        _usedFunctions.Add(methodMatches[0]);
+                        return methodMatches[0].ReturnType;
+                    }
+                    if (methodCandidates.Length > 0)
+                        throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
+                }
+            }
         }
         var overloads = ResolveFunctions(call.Name, moduleName, imports, functions);
         if (overloads.Count == 0)
@@ -1585,6 +1897,7 @@ public sealed class SemanticAnalyzer
         expression switch
         {
             IdentifierExpression identifier => scope.Lookup(identifier.Name, identifier.Location) is not null,
+            ThisExpression => true,
             IndexExpression => true,
             UnaryExpression { Operator: TokenKind.Star, Operand: var operand } =>
                 true,
@@ -1677,11 +1990,13 @@ public sealed class SemanticAnalyzer
         private readonly Dictionary<string, VariableSymbol> _variables = new(StringComparer.Ordinal);
         private readonly Scope? _parent;
         private readonly Action<VariableSymbol> _markUsed;
+        private readonly SemanticType? _thisType;
 
-        public Scope(Scope? parent = null, Action<VariableSymbol>? markUsed = null)
+        public Scope(Scope? parent = null, Action<VariableSymbol>? markUsed = null, SemanticType? thisType = null)
         {
             _parent = parent;
             _markUsed = markUsed ?? (_ => { });
+            _thisType = thisType ?? parent?._thisType;
         }
 
         public void Declare(string name, VariableSymbol symbol) => _variables.Add(name, symbol);
@@ -1693,6 +2008,9 @@ public sealed class SemanticAnalyzer
                 ? MarkUsed(symbol)
                 : _parent?.Lookup(name, location)
                   ?? throw Error($"Variable '{name}' is not declared", location, name.Length);
+
+        public SemanticType LookupThis(SourceLocation location) =>
+            _thisType ?? throw Error("'this' is only valid inside a class instance body", location, 4);
 
         private VariableSymbol MarkUsed(VariableSymbol symbol)
         {

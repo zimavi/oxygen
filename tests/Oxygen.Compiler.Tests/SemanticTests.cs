@@ -14,6 +14,76 @@ public sealed class SemanticTests
     private readonly Tokenizer _tokenizer = new(Log.Logger);
 
     [Fact]
+    public void AnalyzesClassConstructionAndExposesMembers()
+    {
+        var model = Analyze(
+            "class Box { i32 value; Box(i32 initial) { value = initial; } i32 get() { return value; } } i32 main() { Box box = new Box(42); return box.get(); }");
+
+        Assert.Contains("Box", model.Classes.Keys);
+        Assert.Equal(SemanticType.Class("Box"), model.ExpressionTypes.Values.First(type => type.IsClass));
+        Assert.Contains(model.ResolvedCalls.Values, method => method.Name == "get");
+    }
+
+    [Fact]
+    public void AllowsParametersAndLocalsToShadowClassFieldsWithThisAccess()
+    {
+        var model = Analyze(
+            "class Box { i32 value; Box(i32 value) { this.value = value; } i32 get(i32 value) { i32 local = value; return this.value + local; } } i32 main() { Box box = new Box(41); return box.get(1); }");
+
+        Assert.Contains(model.ExpressionTypes, pair =>
+            pair.Key is ThisExpression && pair.Value == SemanticType.Class("Box"));
+    }
+
+    [Fact]
+    public void RejectsThisOutsideClassInstanceBodies()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { return this.value; }"));
+
+        Assert.Contains("'this' is only valid inside a class instance body", exception.Message);
+    }
+
+    [Fact]
+    public void AnalyzesCallsInConstructors()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse("import std.memory; class Box { i32* value; Box() { value = memory.alloc<i32>(1); } } i32 main() { Box box = new Box(); return 0; }"),
+            Parse("public module std.memory; public T* alloc<T>(u64 count) { return 0; }")
+        ]);
+
+        Assert.Contains(model.ResolvedCalls.Values, function =>
+            function.Name == "alloc"
+            && function.Parameters[0].Type == SemanticType.FromPrimitive(PrimitiveType.U64));
+    }
+
+    [Fact]
+    public void ValidatesInterfaceContracts()
+    {
+        var model = Analyze(
+            "interface Printable { i32 value(); } class Item : Printable { i32 value() { return 1; } } i32 main() { return 0; }");
+
+        Assert.Single(model.Interfaces["Printable"].Methods);
+    }
+
+    [Fact]
+    public void RejectsClassesThatDoNotImplementInterfaces()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("interface Printable { i32 value(); } class Item : Printable { } i32 main() { return 0; }"));
+
+        Assert.Contains("does not implement interface method", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsInvalidClassConstruction()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { Box(i32 value) { } } i32 main() { Box box = new Box(true); return 0; }"));
+
+        Assert.Contains("No constructor", exception.Message);
+    }
+
+    [Fact]
     public void AnalyzesDeclarationsScopesOperatorsAndCalls()
     {
         var model = Analyze(

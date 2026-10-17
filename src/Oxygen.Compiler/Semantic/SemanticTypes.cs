@@ -8,6 +8,8 @@ public enum SemanticTypeKind
     String,
     Pointer,
     Struct,
+    Class,
+    Interface,
     Array,
     Enum,
     Union,
@@ -31,6 +33,8 @@ public sealed record SemanticType(
     public static SemanticType PointerTo(SemanticType pointee) => new(SemanticTypeKind.Pointer, null, pointee);
 
     public static SemanticType Struct(string name) => new(SemanticTypeKind.Struct, null, null, name);
+    public static SemanticType Class(string name) => new(SemanticTypeKind.Class, null, null, name);
+    public static SemanticType Interface(string name) => new(SemanticTypeKind.Interface, null, null, name);
     public static SemanticType Enum(string name) => new(SemanticTypeKind.Enum, null, null, null, name);
     public static SemanticType Union(string name) => new(SemanticTypeKind.Union, null, null, null, name);
     public static SemanticType GenericParameter(string name) =>
@@ -42,6 +46,8 @@ public sealed record SemanticType(
     public bool IsPointer => Kind == SemanticTypeKind.Pointer;
 
     public bool IsStruct => Kind == SemanticTypeKind.Struct;
+    public bool IsClass => Kind == SemanticTypeKind.Class;
+    public bool IsInterface => Kind == SemanticTypeKind.Interface;
     public bool IsArray => Kind == SemanticTypeKind.Array;
     public bool IsEnum => Kind == SemanticTypeKind.Enum;
     public bool IsUnion => Kind == SemanticTypeKind.Union;
@@ -58,6 +64,8 @@ public sealed record SemanticType(
             SemanticTypeKind.String => "string",
             SemanticTypeKind.Pointer => $"{Pointee}*",
             SemanticTypeKind.Struct => StructName ?? "struct",
+            SemanticTypeKind.Class => StructName ?? "class",
+            SemanticTypeKind.Interface => StructName ?? "interface",
             SemanticTypeKind.Array => $"{ElementType}[{ArrayLength}]",
             SemanticTypeKind.Enum => EnumName ?? "enum",
             SemanticTypeKind.Union => EnumName ?? "union",

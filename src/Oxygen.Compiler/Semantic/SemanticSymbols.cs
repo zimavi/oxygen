@@ -18,6 +18,33 @@ public sealed record StructSymbol(
     public string QualifiedName => $"{ModuleName}.{Name}";
 }
 
+public sealed record ClassFieldSymbol(string Name, SemanticType Type, ClassFieldDeclaration Declaration, Visibility Visibility);
+public sealed record ConstructorSymbol(
+    string ClassName,
+    IReadOnlyList<ParameterSymbol> Parameters,
+    ConstructorDeclaration Declaration,
+    Visibility Visibility);
+public sealed record ClassSymbol(
+    string Name,
+    string ModuleName,
+    string? BaseTypeName,
+    IReadOnlyList<string> InterfaceNames,
+    IReadOnlyList<ClassFieldSymbol> Fields,
+    IReadOnlyList<FunctionSymbol> Methods,
+    IReadOnlyList<ConstructorSymbol> Constructors,
+    DestructorDeclaration? Destructor,
+    ClassDeclaration Declaration,
+    Visibility Visibility)
+{
+    public string QualifiedName => $"{ModuleName}.{Name}";
+}
+public sealed record InterfaceSymbol(
+    string Name,
+    string ModuleName,
+    IReadOnlyList<FunctionSymbol> Methods,
+    InterfaceDeclaration Declaration,
+    Visibility Visibility);
+
 public sealed record EnumMemberSymbol(string Name, int Value, EnumMemberDeclaration Declaration);
 
 public sealed record EnumSymbol(
@@ -72,7 +99,9 @@ public sealed class SemanticModel
         IReadOnlyDictionary<CallExpression, FunctionSymbol> resolvedCalls,
         IReadOnlyDictionary<string, StructSymbol> structs,
         IReadOnlyDictionary<string, EnumSymbol> enums,
-        IReadOnlyDictionary<string, UnionSymbol>? unions = null)
+        IReadOnlyDictionary<string, UnionSymbol>? unions = null,
+        IReadOnlyDictionary<string, ClassSymbol>? classes = null,
+        IReadOnlyDictionary<string, InterfaceSymbol>? interfaces = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -82,6 +111,8 @@ public sealed class SemanticModel
         Structs = structs;
         Enums = enums;
         Unions = unions ?? new Dictionary<string, UnionSymbol>();
+        Classes = classes ?? new Dictionary<string, ClassSymbol>();
+        Interfaces = interfaces ?? new Dictionary<string, InterfaceSymbol>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -97,4 +128,6 @@ public sealed class SemanticModel
     public IReadOnlyDictionary<string, StructSymbol> Structs { get; }
     public IReadOnlyDictionary<string, EnumSymbol> Enums { get; }
     public IReadOnlyDictionary<string, UnionSymbol> Unions { get; }
+    public IReadOnlyDictionary<string, ClassSymbol> Classes { get; }
+    public IReadOnlyDictionary<string, InterfaceSymbol> Interfaces { get; }
 }

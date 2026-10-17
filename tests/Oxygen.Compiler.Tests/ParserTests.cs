@@ -66,6 +66,17 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesThisMemberAccess()
+    {
+        var unit = Parse("class Box { i32 value; i32 get() { return this.value; } } i32 main() { return 0; }");
+
+        var member = Assert.IsType<MemberAccessExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(unit.Classes[0].Methods[0].Body.Statements)).Value);
+        Assert.IsType<ThisExpression>(member.Target);
+        Assert.Equal("value", member.MemberName);
+    }
+
+    [Fact]
     public void ReportsMalformedSyntax()
     {
         var exception = Assert.Throws<ParseException>(() => Parse("i32 main() { return 1 }"));
@@ -215,6 +226,34 @@ public sealed class ParserTests
         Assert.IsType<StructLiteralExpression>(declaration.Initializer);
         Assert.IsType<MemberAccessExpression>(
             Assert.IsType<AssignmentStatement>(unit.Functions[0].Body.Statements[1]).Target);
+    }
+
+    [Fact]
+    public void ParsesClassesInterfacesMembersConstructorsDestructorsAndNew()
+    {
+        var unit = Parse(
+            "interface Printable { void print(i32 value); } " +
+            "class Child : Base, Printable { i32 value; public Child(i32 initial) { value = initial; } " +
+            "void print(i32 value) { } ~Child() { } } " +
+            "i32 main() { var child = new Child(42); return 0; }");
+
+        var @interface = Assert.Single(unit.Interfaces);
+        Assert.Equal("Printable", @interface.Name);
+        Assert.Equal("print", Assert.Single(@interface.Methods).Name);
+
+        var @class = Assert.Single(unit.Classes);
+        Assert.Equal("Base", @class.BaseType);
+        Assert.Equal(["Printable"], @class.Interfaces);
+        Assert.Equal("value", Assert.Single(@class.Fields).Name);
+        Assert.Equal("Child", Assert.Single(@class.Constructors).ClassName);
+        Assert.Equal("Child", @class.Destructor!.ClassName);
+        Assert.Equal("print", Assert.Single(@class.Methods).Name);
+
+        var declaration = Assert.IsType<VariableDeclarationStatement>(
+            unit.Functions[0].Body.Statements[0]);
+        var construction = Assert.IsType<NewExpression>(declaration.Initializer);
+        Assert.Equal("Child", construction.Type.NamedType);
+        Assert.Single(construction.Arguments);
     }
 
     [Fact]

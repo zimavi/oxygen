@@ -25,6 +25,8 @@ public sealed record CompilationUnit(
     public IReadOnlyList<StructDeclaration> Structs { get; init; } = [];
     public IReadOnlyList<EnumDeclaration> Enums { get; init; } = [];
     public IReadOnlyList<UnionDeclaration> Unions { get; init; } = [];
+    public IReadOnlyList<ClassDeclaration> Classes { get; init; } = [];
+    public IReadOnlyList<InterfaceDeclaration> Interfaces { get; init; } = [];
 }
 
 public sealed record UnionCaseDeclaration(
@@ -66,6 +68,50 @@ public sealed record StructFieldDeclaration(
 public sealed record StructDeclaration(
     string Name,
     IReadOnlyList<StructFieldDeclaration> Fields,
+    Visibility Visibility,
+    SourceLocation Location,
+    IReadOnlyList<AnnotationSyntax>? Annotations = null) : SyntaxNode(Location)
+{
+    public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+}
+
+public sealed record ClassFieldDeclaration(
+    TypeSyntax Type,
+    string Name,
+    Visibility Visibility,
+    SourceLocation Location) : SyntaxNode(Location);
+
+public sealed record ConstructorDeclaration(
+    string ClassName,
+    IReadOnlyList<ParameterDeclaration> Parameters,
+    BlockStatement Body,
+    Visibility Visibility,
+    SourceLocation Location) : SyntaxNode(Location);
+
+public sealed record DestructorDeclaration(
+    string ClassName,
+    BlockStatement Body,
+    Visibility Visibility,
+    SourceLocation Location) : SyntaxNode(Location);
+
+public sealed record ClassDeclaration(
+    string Name,
+    string? BaseType,
+    IReadOnlyList<string> Interfaces,
+    IReadOnlyList<ClassFieldDeclaration> Fields,
+    IReadOnlyList<FunctionDeclaration> Methods,
+    IReadOnlyList<ConstructorDeclaration> Constructors,
+    DestructorDeclaration? Destructor,
+    Visibility Visibility,
+    SourceLocation Location,
+    IReadOnlyList<AnnotationSyntax>? Annotations = null) : SyntaxNode(Location)
+{
+    public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+}
+
+public sealed record InterfaceDeclaration(
+    string Name,
+    IReadOnlyList<FunctionDeclaration> Methods,
     Visibility Visibility,
     SourceLocation Location,
     IReadOnlyList<AnnotationSyntax>? Annotations = null) : SyntaxNode(Location)
@@ -192,6 +238,8 @@ public sealed record IdentifierExpression(
     string Name,
     SourceLocation Location) : Expression(Location);
 
+public sealed record ThisExpression(SourceLocation Location) : Expression(Location);
+
 public sealed record IntegerLiteralExpression(
     string Lexeme,
     SourceLocation Location) : Expression(Location);
@@ -269,6 +317,11 @@ public sealed record SizeOfExpression(
 public sealed record UnionConstructionExpression(
     string UnionName,
     string CaseName,
+    IReadOnlyList<Expression> Arguments,
+    SourceLocation Location) : Expression(Location);
+
+public sealed record NewExpression(
+    TypeSyntax Type,
     IReadOnlyList<Expression> Arguments,
     SourceLocation Location) : Expression(Location);
 

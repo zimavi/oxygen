@@ -24,12 +24,31 @@ public sealed class LexerTests
     }
 
     [Fact]
+    public void TokenizesThisKeyword()
+    {
+        Assert.Equal(
+            [TokenKind.This, TokenKind.Dot, TokenKind.Identifier, TokenKind.EndOfFile],
+            _lexer.Tokenize("this.value").Select(token => token.Kind));
+    }
+
+    [Fact]
     public void TokenizesEnumKeyword()
     {
         Assert.Equal(
             [TokenKind.Enum, TokenKind.Identifier, TokenKind.Colon, TokenKind.I32, TokenKind.OpenBrace,
                 TokenKind.Identifier, TokenKind.CloseBrace, TokenKind.EndOfFile],
             _lexer.Tokenize("enum Color : i32 { Red }").Select(token => token.Kind));
+    }
+
+    [Fact]
+    public void TokenizesClassInterfaceAndConstructionSyntax()
+    {
+        Assert.Equal(
+            [TokenKind.Class, TokenKind.Identifier, TokenKind.Colon, TokenKind.Identifier, TokenKind.Comma,
+                TokenKind.Identifier, TokenKind.OpenBrace, TokenKind.Tilde, TokenKind.Identifier, TokenKind.OpenParenthesis,
+                TokenKind.CloseParenthesis, TokenKind.New, TokenKind.Identifier,
+                TokenKind.OpenParenthesis, TokenKind.CloseParenthesis, TokenKind.CloseBrace, TokenKind.EndOfFile],
+            _lexer.Tokenize("class Child : Base, Printable { ~Child() new Type() }").Select(token => token.Kind));
     }
 
     [Fact]

@@ -304,6 +304,38 @@ public sealed class LlvmTests
     }
 
     [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsExplicitThisFieldAccessWhenParameterShadowsField()
+    {
+        var model = Analyze(
+            "class Box { i32 value; Box(i32 value) { this.value = value; } i32 get(i32 value) { return this.value + value; } } i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("get", ir);
+        Assert.Contains("field.value", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void ReusesExternalRuntimeAllocationDeclarations()
+    {
+        var model = Analyze(
+            """
+            @extern("oxygen_alloc") extern void* allocate(u64 size);
+            @extern("oxygen_free") extern void deallocate(void* pointer);
+            i32 main() { return 0; }
+            """);
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("declare ptr @oxygen_alloc(i64)", ir);
+        Assert.Contains("declare void @oxygen_free(ptr)", ir);
+        Assert.DoesNotContain("@oxygen_alloc.1", ir);
+        Assert.DoesNotContain("@oxygen_free.2", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
     public void EmitsFloatingPointArithmeticAndNativeMainStub()
     {
         var model = Analyze(
