@@ -1,0 +1,36 @@
+module std.exception;
+
+// Public value types used by exception handlers and standard-library
+// formatters.  The runtime ABI stores the same information as a compact,
+// address-stable record; these types keep formatting policy in Oxygen.
+public class Frame {
+    public string function_name;
+    public string file_name;
+    public u32 line;
+    public u32 column;
+
+    public Frame(string function_name, string file_name, u32 line, u32 column) {
+        this.function_name = function_name;
+        this.file_name = file_name;
+        this.line = line;
+        this.column = column;
+    }
+}
+
+public class StackTrace {
+    public u64 count;
+
+    public StackTrace(u64 count) {
+        this.count = count;
+    }
+}
+
+public class Exception {
+    public string message;
+    public StackTrace stack_trace;
+
+    public Exception(string message, StackTrace stack_trace) {
+        this.message = message;
+        this.stack_trace = stack_trace;
+    }
+}

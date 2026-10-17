@@ -4,6 +4,18 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define OXYGEN_RUNTIME_EXCEPTION_ABI_VERSION 1u
+
+#if defined(_WIN32) && defined(OXYGEN_RUNTIME_BUILD)
+#define OXYGEN_RUNTIME_API __declspec(dllexport)
+#else
+#define OXYGEN_RUNTIME_API
+#endif
+
 typedef struct oxygen_string
 {
     const char *data;
@@ -30,6 +42,41 @@ typedef struct oxygen_runtime_type_info
     const struct oxygen_runtime_type_info *parent;
 } oxygen_runtime_type_info;
 
+typedef struct oxygen_runtime_stack_trace_frame
+{
+    const char *function_name;
+    const char *file_name;
+    uint32_t line;
+    uint32_t column;
+} oxygen_runtime_stack_trace_frame;
+
+typedef struct oxygen_runtime_stack_trace
+{
+    const oxygen_runtime_stack_trace_frame *frames;
+    uint64_t count;
+} oxygen_runtime_stack_trace;
+
+typedef struct oxygen_runtime_exception
+{
+    const char *type_name;
+    const char *message;
+    oxygen_runtime_stack_trace stack_trace;
+} oxygen_runtime_exception;
+
+/* These records are deliberately composed only of fixed-width values and
+ * pointers.  Generated LLVM may pass them by address without depending on a
+ * platform C++ ABI. */
+
+typedef struct oxygen_runtime_exception_handler oxygen_runtime_exception_handler;
+typedef void (*oxygen_runtime_exception_handler_callback)(
+    const oxygen_runtime_exception *exception);
+
+struct oxygen_runtime_exception_handler
+{
+    oxygen_runtime_exception_handler_callback callback;
+    oxygen_runtime_exception_handler *previous;
+};
+
 void __oxygen_runtime_initialize(void);
 void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length);
 void __oxygen_runtime_enum_cast_failure(uint64_t value);
@@ -42,6 +89,44 @@ void __oxygen_runtime_register_type(
 void __oxygen_runtime_invalid_cast(
     const oxygen_runtime_type_info *source_type,
     const oxygen_runtime_type_info *target_type);
+OXYGEN_RUNTIME_API void __oxygen_runtime_push_exception_handler(
+    oxygen_runtime_exception_handler *handler);
+OXYGEN_RUNTIME_API void __oxygen_runtime_pop_exception_handler(
+    oxygen_runtime_exception_handler *handler);
+OXYGEN_RUNTIME_API void __oxygen_runtime_raise_exception(
+    const oxygen_runtime_exception *exception);
+OXYGEN_RUNTIME_API void __oxygen_runtime_unhandled_exception(
+    const oxygen_runtime_exception *exception);
+OXYGEN_RUNTIME_API void __oxygen_runtime_print_stack_trace(
+    const oxygen_runtime_stack_trace *stack_trace);
+OXYGEN_RUNTIME_API uint32_t __oxygen_runtime_exception_abi_version(void);
+OXYGEN_RUNTIME_API void __oxygen_runtime_exception_init(
+    oxygen_runtime_exception *exception,
+    const char *type_name,
+    const char *message);
+OXYGEN_RUNTIME_API void __oxygen_runtime_exception_set_stack_trace(
+    oxygen_runtime_exception *exception,
+    const oxygen_runtime_stack_trace_frame *frames,
+    uint64_t count);
+OXYGEN_RUNTIME_API const char *__oxygen_runtime_exception_type(
+    const oxygen_runtime_exception *exception);
+OXYGEN_RUNTIME_API const char *__oxygen_runtime_exception_message(
+    const oxygen_runtime_exception *exception);
+OXYGEN_RUNTIME_API const oxygen_runtime_stack_trace *
+__oxygen_runtime_exception_stack_trace(
+    const oxygen_runtime_exception *exception);
+OXYGEN_RUNTIME_API uint64_t __oxygen_runtime_stack_trace_count(
+    const oxygen_runtime_stack_trace *stack_trace);
+OXYGEN_RUNTIME_API const oxygen_runtime_stack_trace_frame *
+__oxygen_runtime_stack_trace_frame_at(
+    const oxygen_runtime_stack_trace *stack_trace, uint64_t index);
+
+/* POSIX/Itanium native exception bridge used by LLVM landing pads. */
+OXYGEN_RUNTIME_API void __oxygen_runtime_throw_object(void *object);
+OXYGEN_RUNTIME_API void *__oxygen_runtime_exception_object(void *exception_handle);
+OXYGEN_RUNTIME_API void __oxygen_runtime_end_catch(void);
+OXYGEN_RUNTIME_API void __oxygen_runtime_rethrow(void);
+OXYGEN_RUNTIME_API void __oxygen_runtime_unhandled_object(void *exception_handle);
 
 void *oxygen_alloc(uint64_t size);
 void oxygen_free(void *pointer);
@@ -75,5 +160,9 @@ void oxygen_println_bool(uint8_t value);
 
 const char *oxygen_string_to_c_string(oxygen_string value);
 oxygen_string oxygen_c_string_to_string(const char *value);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

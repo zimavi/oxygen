@@ -26,6 +26,24 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesThrowAndTypedAndBareCatchClauses()
+    {
+        var unit = Parse(
+            "class Exception { } class Failure : Exception { } " +
+            "void fail(Failure error) { throw error; } " +
+            "i32 main() { try { fail(new Failure()); } catch (Failure caught) { return 1; } catch { return 2; } finally { fail(new Failure()); } }");
+
+        Assert.IsType<ThrowStatement>(unit.Functions[0].Body.Statements[0]);
+        var tryStatement = Assert.IsType<TryStatement>(unit.Functions[1].Body.Statements[0]);
+        Assert.IsType<ExpressionStatement>(Assert.Single(tryStatement.Body.Statements));
+        Assert.Equal("Failure", tryStatement.Catches[0].ExceptionType!.NamedType);
+        Assert.Equal("caught", tryStatement.Catches[0].BindingName);
+        Assert.Null(tryStatement.Catches[1].ExceptionType);
+        Assert.Null(tryStatement.Catches[1].BindingName);
+        Assert.NotNull(tryStatement.Finally);
+    }
+
+    [Fact]
     public void ParsesForInArraySyntax()
     {
         var unit = Parse("i32 main() { i32[2] values = { 1, 2 }; for (var value in values) { return value; } return 0; }");

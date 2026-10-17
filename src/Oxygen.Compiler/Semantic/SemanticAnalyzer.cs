@@ -1273,6 +1273,60 @@ public sealed partial class SemanticAnalyzer
             case ReturnStatement returnStatement:
                 AnalyzeReturn(returnStatement, function, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return true;
+            case ThrowStatement throwStatement:
+            {
+                var thrownType = AnalyzeExpression(throwStatement.Value, scope, functions, moduleName, imports,
+                    expressionTypes, resolvedCalls);
+                if (!IsExceptionType(thrownType))
+                    throw Error($"Only exception class values can be thrown, got {thrownType}",
+                        throwStatement.Value.Location);
+                return true;
+            }
+            case TryStatement tryStatement:
+            {
+                var tryReturns = AnalyzeBlock(tryStatement.Body, scope, function, functions, moduleName, imports,
+                    expressionTypes, resolvedCalls);
+                var allCatchesReturn = true;
+                var catchAllSeen = false;
+                foreach (var (catchClause, index) in tryStatement.Catches.Select((item, index) => (item, index)))
+                {
+                    SemanticType? catchType = null;
+                    if (catchClause.ExceptionType is not null)
+                    {
+                        if (catchAllSeen)
+                            throw Error("A typed catch cannot follow a catch-all clause", catchClause.Location);
+                        catchType = ResolveType(catchClause.ExceptionType);
+                        if (!IsExceptionType(catchType))
+                            throw Error($"Catch type '{catchType}' must be an exception class",
+                                catchClause.ExceptionType.Location);
+                    }
+                    else
+                    {
+                        if (catchAllSeen)
+                            throw Error("A try statement cannot contain multiple catch-all clauses", catchClause.Location);
+                        catchAllSeen = true;
+                        if (index != tryStatement.Catches.Count - 1)
+                            throw Error("The catch-all clause must be last", catchClause.Location);
+                    }
+
+                    var catchScope = scope;
+                    if (catchClause.BindingName is not null)
+                    {
+                        catchScope = new Scope(scope, MarkVariableUsed);
+                        catchScope.Declare(catchClause.BindingName,
+                            new VariableSymbol(catchType!, false, catchClause, false));
+                    }
+
+                    var catchReturns = AnalyzeBlock(catchClause.Body, catchScope, function, functions, moduleName,
+                        imports, expressionTypes, resolvedCalls);
+                    allCatchesReturn &= catchReturns;
+                }
+
+                var finallyReturns = tryStatement.Finally is not null
+                    && AnalyzeBlock(tryStatement.Finally, scope, function, functions, moduleName, imports,
+                        expressionTypes, resolvedCalls);
+                return finallyReturns || (tryReturns && allCatchesReturn);
+            }
             case ExpressionStatement expressionStatement:
                 AnalyzeExpression(
                     expressionStatement.Expression,
@@ -1293,6 +1347,14 @@ public sealed partial class SemanticAnalyzer
     {
         if (type.Primitive != PrimitiveType.Bool || type.Kind != SemanticTypeKind.Primitive)
             throw Error($"Loop and conditional conditions must be bool, got {type}", location);
+    }
+
+    private bool IsExceptionType(SemanticType type)
+    {
+        if (!type.IsClass || type.StructName is null || !_classesByName.ContainsKey(type.StructName))
+            return false;
+        return string.Equals(type.StructName, "Exception", StringComparison.Ordinal)
+               || IsClassDerivedFrom(type.StructName, "Exception");
     }
 
     private void AnalyzeVariableDeclaration(

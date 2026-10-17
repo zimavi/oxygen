@@ -24,6 +24,18 @@ public sealed class LexerTests
     }
 
     [Fact]
+    public void TokenizesExceptionKeywords()
+    {
+        Assert.Equal(
+            [TokenKind.Throw, TokenKind.Try, TokenKind.OpenBrace, TokenKind.Catch,
+                TokenKind.OpenParenthesis, TokenKind.Identifier, TokenKind.Identifier,
+                TokenKind.CloseParenthesis, TokenKind.OpenBrace, TokenKind.CloseBrace,
+                TokenKind.Finally, TokenKind.OpenBrace, TokenKind.CloseBrace,
+                TokenKind.EndOfFile],
+            _lexer.Tokenize("throw try { catch (Exception error) { } finally { }").Select(token => token.Kind));
+    }
+
+    [Fact]
     public void TokenizesThisKeyword()
     {
         Assert.Equal(

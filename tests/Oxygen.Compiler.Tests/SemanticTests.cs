@@ -20,6 +20,52 @@ public sealed class SemanticTests
         Assert.Contains("must be marked 'override'", exception.Message);
     }
 
+    [Fact]
+    public void ValidatesExceptionFlowAndCatchScope()
+    {
+        var model = Analyze(
+            "class Exception { } class Failure : Exception { } " +
+            "i32 main() { try { throw new Failure(); } catch (Failure error) { return 1; } catch { return 2; } }");
+
+        Assert.Contains(model.Classes.Keys, name => name == "Failure");
+    }
+
+    [Fact]
+    public void RejectsNonExceptionThrowsAndCatchTypes()
+    {
+        var thrown = Assert.Throws<SemanticException>(() =>
+            Analyze("class Exception { } i32 main() { throw 1; return 0; }"));
+        Assert.Contains("Only exception class values can be thrown", thrown.Message);
+
+        var caught = Assert.Throws<SemanticException>(() =>
+            Analyze("class Exception { } class NotAnException { } i32 main() { try { return 0; } catch (NotAnException error) { return 1; } }"));
+        Assert.Contains("must be an exception class", caught.Message);
+    }
+
+    [Fact]
+    public void CatchBindingIsScopedToCatchBody()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Exception { } i32 main() { try { return 0; } catch (Exception error) { return 1; } return error; }"));
+        Assert.Contains("Variable 'error' is not declared", exception.Message);
+    }
+
+    [Fact]
+    public void RequiresCatchAllToBeLast()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Exception { } class Failure : Exception { } i32 main() { try { return 0; } catch { return 1; } catch (Failure error) { return 2; } }"));
+        Assert.Contains("catch-all clause must be last", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsFinallyWithoutCatch()
+    {
+        var model = Analyze(
+            "class Exception { } i32 main() { try { return 1; } finally { return 2; } }");
+        Assert.NotNull(model);
+    }
+
     private readonly Tokenizer _tokenizer = new(Log.Logger);
 
     [Fact]

@@ -252,6 +252,22 @@ public sealed record BreakStatement(SourceLocation Location) : Statement(Locatio
 
 public sealed record ContinueStatement(SourceLocation Location) : Statement(Location);
 
+public sealed record ThrowStatement(
+    Expression Value,
+    SourceLocation Location) : Statement(Location);
+
+public sealed record CatchClause(
+    TypeSyntax? ExceptionType,
+    string? BindingName,
+    BlockStatement Body,
+    SourceLocation Location) : SyntaxNode(Location);
+
+public sealed record TryStatement(
+    BlockStatement Body,
+    IReadOnlyList<CatchClause> Catches,
+    BlockStatement? Finally,
+    SourceLocation Location) : Statement(Location);
+
 public abstract record Expression(SourceLocation Location) : SyntaxNode(Location);
 
 public sealed record IdentifierExpression(

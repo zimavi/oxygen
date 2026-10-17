@@ -20,6 +20,9 @@ Runtime implementation files are organized by responsibility:
 
 - `src/runtime.c` contains runtime initialization.
 - `src/diagnostics.c` reports fatal runtime failures.
+- `src/exceptions.c` provides exception handler registration, dispatch, and
+  unhandled-exception termination.
+- `src/stack_trace.c` formats runtime-provided stack trace frames.
 - `src/types.c` handles runtime type registration and relationship checks.
 - `src/memory.c` provides allocation primitives.
 - `src/io.c` provides byte output and primitive formatting.
@@ -32,6 +35,40 @@ NUL bytes are supported.
 The Oxygen-to-C conversion allocates a NUL-terminated copy. Generic
 `stdlib.memory` allocation uses `oxygen_alloc` and `oxygen_free`; ownership of
 those allocations belongs to the Oxygen caller.
+
+Exceptions are represented by `oxygen_runtime_exception`, which contains a
+type name, message, and an optional array of
+`oxygen_runtime_stack_trace_frame` values. Generated code can register a
+callback with `__oxygen_runtime_push_exception_handler` and remove it with
+`__oxygen_runtime_pop_exception_handler`. Raising an exception dispatches to
+the current handler; without one, `__oxygen_runtime_unhandled_exception`
+prints the type, message, and stack trace to standard error, flushes the
+stream, and aborts with a non-zero status. Handler state is thread-local, so
+independent generated programs running on different threads do not share
+exception chains.
+
+The exception ABI is versioned by
+`OXYGEN_RUNTIME_EXCEPTION_ABI_VERSION` and
+`__oxygen_runtime_exception_abi_version()`. Generated code should initialize
+records with `__oxygen_runtime_exception_init`, attach borrowed trace frames
+with `__oxygen_runtime_exception_set_stack_trace`, and use the accessor
+functions when it needs to inspect a record. Trace frame and record pointers
+are borrowed; their storage must remain alive until dispatch returns. The
+`__oxygen_runtime_stack_trace_frame_at` accessor performs bounds checking and
+returns null for an invalid index.
+
+The public `std.exception` standard-library module contains the
+`Exception`, `StackTrace`, and `Frame` value classes. It intentionally keeps
+formatting and presentation in Oxygen while the C runtime only provides the
+stable record and fatal diagnostic ABI.
+
+LLVM exception lowering currently uses the POSIX/Itanium C++ unwinder
+(`__gxx_personality_v0` and the `__cxa_*` bridge) for native `throw`,
+`try/catch`, and `finally` control flow. Windows/SEH lowering is not yet
+implemented: the Windows bridge reports an unhandled exception rather than
+pretending that Itanium landing pads are compatible with SEH. Cross-compiling
+exception-enabled programs for Windows therefore requires a future
+`__C_specific_handler`/LLVM funclet implementation.
 
 From the repository root:
 
@@ -71,8 +108,8 @@ any optional `--stdlib` paths as dynamic dependencies. The source standard
 library includes `stdlib.io`, which provides `write_stdout`, `write_stderr`,
 and overloaded `print`/`println` functions for strings and all primitive
 numeric and boolean types. Primitive values use decimal formatting; booleans
-are written as `true` or `false`. Use
-Use `--debug` to generate debug symbols for the generated program and select
+are written as `true` or `false`. Use `--debug` to generate debug symbols for
+the generated program and select
 another optimization level with `--optimization O0`, `--optimization O1`, or
 `--optimization O2`. The runtime archive always includes debug symbols.
 

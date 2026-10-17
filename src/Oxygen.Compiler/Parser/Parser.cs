@@ -524,6 +524,8 @@ public sealed partial class Parser
         {
             return ParseReturn();
         }
+        if (Match(TokenKind.Throw))
+            return ParseThrow(Previous.Location);
 
         if (Match(TokenKind.If))
             return ParseIf(Previous.Location);
@@ -545,6 +547,8 @@ public sealed partial class Parser
         }
         if (Match(TokenKind.Switch))
             return ParseSwitch(Previous.Location);
+        if (Match(TokenKind.Try))
+            return ParseTry(Previous.Location);
 
         if (Check(TokenKind.Const) || Check(TokenKind.Var) || IsType(Current.Kind)
             || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier)
@@ -728,6 +732,40 @@ public sealed partial class Parser
 
         Consume(TokenKind.Semicolon, "Expected ';' after return statement.");
         return new ReturnStatement(value, token.Location);
+    }
+
+    private ThrowStatement ParseThrow(SourceLocation location)
+    {
+        var value = ParseExpression();
+        Consume(TokenKind.Semicolon, "Expected ';' after throw expression.");
+        return new ThrowStatement(value, location);
+    }
+
+    private TryStatement ParseTry(SourceLocation location)
+    {
+        var body = ParseBlock();
+        var catches = new List<CatchClause>();
+        while (Match(TokenKind.Catch))
+        {
+            var catchToken = Previous;
+            TypeSyntax? exceptionType = null;
+            string? bindingName = null;
+            if (Match(TokenKind.OpenParenthesis))
+            {
+                exceptionType = ParseType(allowInferred: false);
+                bindingName = Consume(TokenKind.Identifier, "Expected a catch binding name.").Lexeme;
+                Consume(TokenKind.CloseParenthesis, "Expected ')' after catch declaration.");
+            }
+            catches.Add(new CatchClause(exceptionType, bindingName, ParseBlock(), catchToken.Location));
+        }
+
+        BlockStatement? finallyBlock = null;
+        if (Match(TokenKind.Finally))
+            finallyBlock = ParseBlock();
+
+        if (catches.Count == 0 && finallyBlock is null)
+            throw Error("Expected at least one 'catch' clause or a 'finally' block after try block.", Current);
+        return new TryStatement(body, catches, finallyBlock, location);
     }
 
     private Expression ParseExpression() => ParseConditionalExpression();
