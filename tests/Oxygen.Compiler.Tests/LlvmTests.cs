@@ -325,6 +325,9 @@ public sealed class LlvmTests
 
         Assert.Contains("__oxygen_runtime_is_instance", ir);
         Assert.Contains("__oxygen_runtime_invalid_cast", ir);
+        Assert.Contains("oxygen.type.info.Item", ir);
+        Assert.Contains("oxygen.type.info.Printable", ir);
+        Assert.Contains("type.kind", ir);
         Assert.Contains("interface.type", ir);
         Assert.Contains("cast.failure", ir);
     }

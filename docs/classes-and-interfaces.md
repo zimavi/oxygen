@@ -88,6 +88,18 @@ Cat cat = cast<Cat>(animal);
 Cat sameCat = cast<Cat>(printable);
 ```
 
+Runtime type patterns use `is` and can optionally bind the checked value:
+
+```oxygen
+if (animal is Cat cat) {
+    return cat.value();
+}
+```
+
+The same syntax is available in switch cases (`case is Cat cat:`). A pattern
+matches derived classes and implemented interfaces, and its binding is only
+available in the matching branch.
+
 An implicit downcast and a cast between unrelated reference types are compile
 errors. When the compiler cannot prove an explicit downcast safe, the generated
 code checks the runtime object type. A failed check reports an invalid-cast

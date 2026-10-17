@@ -205,6 +205,26 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AnalyzesRuntimeTypePatternsAndBindings()
+    {
+        var model = Analyze(
+            "class Base { } class Child : Base { } i32 main() { Base value = new Child(); " +
+            "if (value is Child child) { return 1; } switch (value) { case is Child match: return 2; default: return 0; } }");
+
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.Bool),
+            model.ExpressionTypes.Values.First(type => type.Primitive == PrimitiveType.Bool));
+    }
+
+    [Fact]
+    public void RejectsTypePatternsForUnrelatedTypes()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Left { } class Right { } i32 main() { Left value = new Left(); return value is Right ? 1 : 0; }"));
+
+        Assert.Contains("are not related", exception.Message);
+    }
+
+    [Fact]
     public void RejectsDuplicateValueSwitchCases()
     {
         var exception = Assert.Throws<SemanticException>(() =>

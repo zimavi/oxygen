@@ -63,7 +63,7 @@ public sealed class LlvmModuleGenerator
     private static LLVMValueRef _invalidCast;
     private static LLVMValueRef _currentFunction;
     private static readonly Dictionary<string, LLVMTypeRef> _classTypes = new(StringComparer.Ordinal);
-    private static readonly Dictionary<string, LLVMValueRef> _classTypeNames = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, LLVMValueRef> _runtimeTypeInfos = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, LLVMValueRef> _constructors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, LLVMValueRef> _destructors = new(StringComparer.Ordinal);
     private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type);
@@ -71,6 +71,7 @@ public sealed class LlvmModuleGenerator
     private static LLVMValueRef _oxygenAlloc;
     private static LLVMValueRef _oxygenFree;
     private static LLVMValueRef _memcmp;
+    private static LLVMTypeRef _runtimeTypeInfoType;
     private static LLVMTypeRef ToLlvmStringType() =>
         LLVMTypeRef.CreateStruct([LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int64], false);
 
@@ -92,7 +93,10 @@ public sealed class LlvmModuleGenerator
         try
         {
             _classTypes.Clear();
-            _classTypeNames.Clear();
+            _runtimeTypeInfos.Clear();
+            _runtimeTypeInfoType = LLVMTypeRef.CreateStruct(
+                [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32,
+                    LLVMTypeRef.Int32, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false);
             _constructors.Clear();
             _destructors.Clear();
             foreach (var cls in model.Classes.Values)
@@ -101,6 +105,10 @@ public sealed class LlvmModuleGenerator
                     .Concat(cls.Fields.Select(field => ToLlvmType(field.Type, model))).ToArray();
                 _classTypes[cls.Name] = LLVMTypeRef.CreateStruct(fields, false);
             }
+            foreach (var cls in model.Classes.Values)
+                _runtimeTypeInfos[cls.Name] = AddRuntimeTypeInfoGlobal(module, cls.Name);
+            foreach (var interfaceSymbol in model.Interfaces.Values)
+                _runtimeTypeInfos[interfaceSymbol.Name] = AddRuntimeTypeInfoGlobal(module, interfaceSymbol.Name);
             foreach (var symbol in symbols)
             {
                 var functionType = ToLlvmFunctionType(symbol, model);
@@ -290,6 +298,26 @@ public sealed class LlvmModuleGenerator
         var entry = nativeMain.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
         builder.BuildCall2(runtimeInitializeType, runtimeInitialize, []);
+        var registerType = module.AddFunction(
+            "__oxygen_runtime_register_type",
+            LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
+                [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
+        foreach (var cls in model.Classes.Values)
+        {
+            InitializeRuntimeTypeInfo(builder, cls.Name, cls.BaseTypeName, 1);
+        }
+        foreach (var interfaceSymbol in model.Interfaces.Values)
+        {
+            InitializeRuntimeTypeInfo(builder, interfaceSymbol.Name, null, 2);
+        }
+        foreach (var cls in model.Classes.Values)
+        {
+            if (cls.BaseTypeName is not null)
+                RegisterRuntimeType(builder, registerType, cls.Name, cls.BaseTypeName);
+            foreach (var interfaceName in cls.InterfaceNames)
+                RegisterRuntimeType(builder, registerType, cls.Name, interfaceName);
+        }
 
         var oxygenMain = model.MainFunction
             ?? throw new InvalidOperationException("Semantic model does not contain a main function.");
@@ -303,6 +331,16 @@ public sealed class LlvmModuleGenerator
             builder.BuildRet(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false));
         else
             builder.BuildRet(result);
+    }
+
+    private static void RegisterRuntimeType(
+        LLVMBuilderRef builder,
+        LLVMValueRef registerType,
+        string actualType,
+        string parentType)
+    {
+        builder.BuildCall2(registerType.FunctionType, registerType,
+            [GetTypeName(builder, actualType), GetTypeName(builder, parentType)]);
     }
 
     private static void EmitFunction(
@@ -631,9 +669,24 @@ public sealed class LlvmModuleGenerator
                 var thenBlock = function.AppendBasicBlock("if.then");
                 var elseBlock = function.AppendBasicBlock("if.else");
                 var mergeBlock = function.AppendBasicBlock("if.end");
-                var condition = EmitExpression(context, builder, conditional.Condition, values, storage, model, llvmFunctions);
+                LLVMValueRef? patternOperand = null;
+                LLVMValueRef condition;
+                if (conditional.Condition is IsExpression pattern)
+                {
+                    patternOperand = EmitExpression(context, builder, pattern.Operand, values, storage, model, llvmFunctions);
+                    condition = EmitRuntimeTypeCheck(builder, patternOperand.Value, model.ExpressionTypes[pattern.Operand],
+                        FromTypeSyntax(pattern.TargetType, model), model);
+                }
+                else
+                {
+                    condition = EmitExpression(context, builder, conditional.Condition, values, storage, model, llvmFunctions);
+                }
                 builder.BuildCondBr(condition, thenBlock, elseBlock);
                 builder.PositionAtEnd(thenBlock);
+                if (conditional.Condition is IsExpression { BindingName: { } binding } boundPattern && patternOperand is not null)
+                    ((IDictionary<string, LLVMValueRef>)values)[binding] =
+                        EmitPatternBindingValue(builder, patternOperand.Value, model.ExpressionTypes[boundPattern.Operand],
+                            FromTypeSyntax(boundPattern.TargetType, model), model);
                 var thenTerminated = EmitStatement(context, builder, function, conditional.Then, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
                 if (!thenTerminated) builder.BuildBr(mergeBlock);
                 builder.PositionAtEnd(elseBlock);
@@ -659,7 +712,30 @@ public sealed class LlvmModuleGenerator
                     ? end
                     : defaultIndex < switchStatement.Cases.Count ? bodies[defaultIndex] : end;
 
-                if (selectorType.IsUnion)
+                if (switchStatement.Cases.Any(item => item.PatternType is not null))
+                {
+                    var dispatch = function.AppendBasicBlock("switch.dispatch");
+                    builder.BuildBr(dispatch);
+                    builder.PositionAtEnd(dispatch);
+                    var next = dispatch;
+                    foreach (var (item, index) in switchStatement.Cases.Select((item, index) => (item, index)))
+                    {
+                        if (item.IsDefault)
+                        {
+                            builder.BuildBr(bodies[index]);
+                            break;
+                        }
+                        var targetType = FromTypeSyntax(item.PatternType!, model);
+                        var match = EmitRuntimeTypeCheck(builder, selector, selectorType, targetType, model);
+                        var miss = index + 1 < switchStatement.Cases.Count
+                            ? function.AppendBasicBlock($"switch.next{index}")
+                            : defaultTarget;
+                        builder.BuildCondBr(match, bodies[index], miss);
+                        builder.PositionAtEnd(miss);
+                        next = miss;
+                    }
+                }
+                else if (selectorType.IsUnion)
                 {
                     var union = model.Unions[selectorType.EnumName!];
                     var tag = builder.BuildExtractValue(selector, 0, "union.tag");
@@ -717,7 +793,10 @@ public sealed class LlvmModuleGenerator
                     builder.PositionAtEnd(bodies[index]);
                     var item = switchStatement.Cases[index];
                     if (item.BindingName is not null)
-                        values[item.BindingName] = builder.BuildExtractValue(selector, 1, "union.payload");
+                        ((IDictionary<string, LLVMValueRef>)values)[item.BindingName] = item.PatternType is not null
+                            ? EmitPatternBindingValue(builder, selector, selectorType,
+                                FromTypeSyntax(item.PatternType, model), model)
+                            : builder.BuildExtractValue(selector, 1, "union.payload");
                     var bodyTerminated = EmitStatement(context, builder, function, item.Body, values, storage,
                         storageRequirements, model, llvmFunctions, emittedReturnType, loops);
                     terminated &= bodyTerminated;
@@ -828,6 +907,7 @@ public sealed class LlvmModuleGenerator
                 LLVMTypeRef.Int32, (ulong)model.ExpressionTypes[target].ArrayLength, false),
             MemberAccessExpression member => EmitMemberAccess(context, builder, member, values, storage, model, llvmFunctions),
             CastExpression cast => EmitCast(context, builder, cast, values, storage, model, llvmFunctions),
+            IsExpression pattern => EmitIsExpression(context, builder, pattern, values, storage, model, llvmFunctions),
             SizeOfExpression sizeOf => EmitSizeOf(sizeOf, model),
             BinaryExpression binary => EmitBinary(context, builder, binary, values, storage, model, llvmFunctions),
             ConditionalExpression conditional => EmitConditional(
@@ -1109,14 +1189,38 @@ public sealed class LlvmModuleGenerator
 
     private static bool IsReferenceType(SemanticType type) => type.IsClass || type.IsInterface;
 
+    private static void InitializeRuntimeTypeInfo(
+        LLVMBuilderRef builder,
+        string typeName,
+        string? parentType,
+        uint kind)
+    {
+        var info = _runtimeTypeInfos[typeName];
+        var name = builder.BuildGlobalStringPtr(typeName, $"oxygen.type.name.{typeName}");
+        builder.BuildStore(name, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 0, "type.name"));
+        builder.BuildStore(
+            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, kind, false),
+            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 1, "type.kind"));
+        builder.BuildStore(
+            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false),
+            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 2, "type.flags"));
+        var parent = parentType is null
+            ? LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0))
+            : GetTypeName(builder, parentType);
+        builder.BuildStore(parent, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 3, "type.parent"));
+    }
+
+    private static LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName)
+    {
+        var info = module.AddGlobal(_runtimeTypeInfoType, $"oxygen.type.info.{typeName}");
+        info.Linkage = LLVMLinkage.LLVMInternalLinkage;
+        info.Initializer = LLVMValueRef.CreateConstNull(_runtimeTypeInfoType);
+        return info;
+    }
+
     private static LLVMValueRef GetTypeName(LLVMBuilderRef builder, string typeName)
     {
-        if (_classTypeNames.TryGetValue(typeName, out var value))
-            return value;
-
-        value = builder.BuildGlobalStringPtr(typeName, $"oxygen.type.{typeName}");
-        _classTypeNames[typeName] = value;
-        return value;
+        return _runtimeTypeInfos[typeName];
     }
 
     private static LLVMValueRef EmitReferenceCast(
@@ -1174,7 +1278,7 @@ public sealed class LlvmModuleGenerator
             builder.PositionAtEnd(failureBlock);
             var sourceName = source.IsClass
                 ? GetTypeName(builder, source.StructName!)
-                : builder.BuildGlobalStringPtr(source.StructName!, "oxygen.cast.source");
+                : builder.BuildExtractValue(operand, 1, "cast.source.type");
             builder.BuildCall2(_invalidCast.FunctionType, _invalidCast,
                 [sourceName, GetTypeName(builder, target.StructName!)]);
             builder.BuildUnreachable();
@@ -1184,6 +1288,68 @@ public sealed class LlvmModuleGenerator
         return target.IsClass
             ? builder.BuildBitCast(objectValue, ToLlvmType(target, model), "class.cast")
             : objectValue;
+    }
+
+    private static LLVMValueRef EmitIsExpression(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        IsExpression expression,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var operand = EmitExpression(context, builder, expression.Operand, values, storage, model, llvmFunctions);
+        return EmitRuntimeTypeCheck(builder, operand, model.ExpressionTypes[expression.Operand],
+            FromTypeSyntax(expression.TargetType, model), model);
+    }
+
+    private static LLVMValueRef EmitRuntimeTypeCheck(
+        LLVMBuilderRef builder,
+        LLVMValueRef operand,
+        SemanticType source,
+        SemanticType target,
+        SemanticModel model)
+    {
+        var objectValue = source.IsInterface
+            ? builder.BuildExtractValue(operand, 0, "pattern.data")
+            : builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "pattern.object");
+        var possibleTypes = model.Classes.Keys
+            .Where(candidate => target.IsClass
+                ? IsClassDerivedFrom(candidate, target.StructName!, model)
+                : ClassImplementsInterface(candidate, target.StructName!, model))
+            .ToArray();
+        var match = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false);
+        foreach (var possibleType in possibleTypes)
+        {
+            var candidate = builder.BuildCall2(_isInstance.FunctionType, _isInstance,
+                [objectValue, GetTypeName(builder, possibleType)], (ReadOnlySpan<char>)"type.match");
+            match = builder.BuildOr(match, candidate, "type.match");
+        }
+        return match;
+    }
+
+    private static LLVMValueRef EmitPatternBindingValue(
+        LLVMBuilderRef builder,
+        LLVMValueRef operand,
+        SemanticType source,
+        SemanticType target,
+        SemanticModel model)
+    {
+        if (target.IsInterface)
+        {
+            if (source.IsInterface)
+                return operand;
+            var result = LLVMValueRef.CreateConstNull(ToLlvmType(target, model));
+            result = builder.BuildInsertValue(result,
+                builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "pattern.data"),
+                0, "pattern.data");
+            return builder.BuildInsertValue(result, GetTypeName(builder, source.StructName!), 1, "pattern.type");
+        }
+        var objectValue = source.IsInterface
+            ? builder.BuildExtractValue(operand, 0, "pattern.object")
+            : operand;
+        return builder.BuildBitCast(objectValue, ToLlvmType(target, model), "pattern.cast");
     }
 
     private static bool IsClassDerivedFrom(string sourceName, string targetName, SemanticModel model)
@@ -1339,6 +1505,9 @@ public sealed class LlvmModuleGenerator
                 break;
             case CastExpression cast:
                 CollectStorageRequirements(cast.Operand, requirements);
+                break;
+            case IsExpression pattern:
+                CollectStorageRequirements(pattern.Operand, requirements);
                 break;
         }
     }

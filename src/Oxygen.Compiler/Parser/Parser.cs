@@ -558,6 +558,14 @@ public sealed class Parser
         while (Match(TokenKind.Case))
         {
             var caseToken = Previous;
+            if (Match(TokenKind.Is))
+            {
+                var patternType = ParseType(allowInferred: false);
+                var binding = Match(TokenKind.Identifier) ? Previous.Lexeme : null;
+                Consume(TokenKind.Colon, "Expected ':' after switch type pattern.");
+                cases.Add(new SwitchCase(null, null, false, binding, ParseStatement(), caseToken.Location, patternType));
+                continue;
+            }
             if (Check(TokenKind.Identifier)
                 && (Peek(1).Kind == TokenKind.Colon
                     || (Peek(1).Kind == TokenKind.OpenParenthesis && Peek(4).Kind == TokenKind.Colon)))
@@ -710,6 +718,13 @@ public sealed class Parser
         var left = ParseUnaryExpression();
         while (true)
         {
+            if (Match(TokenKind.Is))
+            {
+                var targetType = ParseType(allowInferred: false);
+                var bindingName = Match(TokenKind.Identifier) ? Previous.Lexeme : null;
+                left = new IsExpression(left, targetType, bindingName, left.Location);
+                continue;
+            }
             var isLeftShift = Current.Kind == TokenKind.LessThan && Peek(1).Kind == TokenKind.LessThan;
             var isRightShift = Current.Kind == TokenKind.GreaterThan && Peek(1).Kind == TokenKind.GreaterThan;
             var precedence = isLeftShift || isRightShift ? 8 : GetPrecedence(Current.Kind);

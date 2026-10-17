@@ -1,55 +1,5 @@
-﻿#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <stdio.h>
 #include "oxygen_runtime.h"
-
-void __oxygen_runtime_initialize(void)
-{
-}
-
-void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length)
-{
-    fprintf(stderr, "Oxygen array index %llu is out of bounds for length %llu\n",
-        (unsigned long long)index, (unsigned long long)length);
-    fflush(stderr);
-    abort();
-}
-
-void __oxygen_runtime_enum_cast_failure(uint64_t value)
-{
-    fprintf(stderr, "Oxygen value %llu is not a valid enum member\n",
-        (unsigned long long)value);
-    fflush(stderr);
-    abort();
-}
-
-uint8_t __oxygen_runtime_is_instance(const void *object, const char *expected_type)
-{
-    if (object == NULL || expected_type == NULL)
-        return 0;
-
-    const char *actual_type = *(const char *const *)object;
-    return actual_type != NULL && strcmp(actual_type, expected_type) == 0;
-}
-
-void __oxygen_runtime_invalid_cast(const char *source_type, const char *target_type)
-{
-    fprintf(stderr, "Oxygen cannot cast %s to %s\n",
-        source_type == NULL ? "unknown" : source_type,
-        target_type == NULL ? "unknown" : target_type);
-    fflush(stderr);
-    abort();
-}
-
-void *oxygen_alloc(uint64_t size)
-{
-    return malloc((size_t)size);
-}
-
-void oxygen_free(void *pointer)
-{
-    free(pointer);
-}
 
 static void oxygen_write(FILE *stream, const oxygen_string *value)
 {
@@ -117,29 +67,3 @@ void oxygen_println_u64(uint64_t value) { oxygen_print_unsigned(value, 1); }
 void oxygen_println_f32(float value) { oxygen_print_float(value, 1); }
 void oxygen_println_f64(double value) { oxygen_print_float(value, 1); }
 void oxygen_println_bool(uint8_t value) { oxygen_print_boolean(value, 1); }
-
-const char *oxygen_string_to_c_string(oxygen_string value)
-{
-    for (uint64_t index = 0; index < value.length; index++)
-    {
-        if (value.data[index] == '\0')
-            return value.data;
-    }
-
-    char *result = malloc((size_t)value.length + 1);
-    if (result == NULL)
-        return NULL;
-
-    if (value.length > 0)
-        memcpy(result, value.data, (size_t)value.length);
-    result[value.length] = '\0';
-    return result;
-}
-
-oxygen_string oxygen_c_string_to_string(const char *value)
-{
-    oxygen_string result = { value, 0 };
-    if (value != NULL)
-        result.length = (uint64_t)strlen((const char *)value);
-    return result;
-}

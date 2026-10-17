@@ -267,6 +267,12 @@ public sealed record BooleanLiteralExpression(
     bool Value,
     SourceLocation Location) : Expression(Location);
 
+public sealed record IsExpression(
+    Expression Operand,
+    TypeSyntax TargetType,
+    string? BindingName,
+    SourceLocation Location) : Expression(Location);
+
 public sealed record UnaryExpression(
     TokenKind Operator,
     Expression Operand,
@@ -349,7 +355,8 @@ public sealed record SwitchCase(
     bool IsDefault,
     string? BindingName,
     Statement Body,
-    SourceLocation Location) : SyntaxNode(Location);
+    SourceLocation Location,
+    TypeSyntax? PatternType = null) : SyntaxNode(Location);
 
 public sealed record SwitchStatement(
     Expression Value,

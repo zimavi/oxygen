@@ -136,9 +136,7 @@ buildCommand.SetAction(result =>
 
     var runtimePath = result.GetValue(runtimeOption)?.FullName
         ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? "./",
-            result.GetValue(debugOption)
-                ? OperatingSystem.IsWindows() ? "oxygen_runtime_debug.lib" : "liboxygen_runtime_debug.a"
-                : OperatingSystem.IsWindows() ? "oxygen_runtime.lib" : "liboxygen_runtime.a");
+            "liboxygenrt.a");
     var dependencies = new List<NativeDependency>
     {
         new(runtimePath, NativeDependencyKind.Static)

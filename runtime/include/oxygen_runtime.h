@@ -10,11 +10,38 @@ typedef struct oxygen_string
     uint64_t length;
 } oxygen_string;
 
+typedef enum oxygen_runtime_type_kind
+{
+    OXYGEN_RUNTIME_TYPE_UNKNOWN = 0,
+    OXYGEN_RUNTIME_TYPE_CLASS = 1,
+    OXYGEN_RUNTIME_TYPE_INTERFACE = 2
+} oxygen_runtime_type_kind;
+
+typedef enum oxygen_runtime_type_flags
+{
+    OXYGEN_RUNTIME_TYPE_FLAGS_NONE = 0
+} oxygen_runtime_type_flags;
+
+typedef struct oxygen_runtime_type_info
+{
+    const char *name;
+    uint32_t kind;
+    uint32_t flags;
+    const struct oxygen_runtime_type_info *parent;
+} oxygen_runtime_type_info;
+
 void __oxygen_runtime_initialize(void);
 void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length);
 void __oxygen_runtime_enum_cast_failure(uint64_t value);
-uint8_t __oxygen_runtime_is_instance(const void *object, const char *expected_type);
-void __oxygen_runtime_invalid_cast(const char *source_type, const char *target_type);
+uint8_t __oxygen_runtime_is_instance(
+    const void *object,
+    const oxygen_runtime_type_info *expected_type);
+void __oxygen_runtime_register_type(
+    oxygen_runtime_type_info *actual_type,
+    const oxygen_runtime_type_info *parent_type);
+void __oxygen_runtime_invalid_cast(
+    const oxygen_runtime_type_info *source_type,
+    const oxygen_runtime_type_info *target_type);
 
 void *oxygen_alloc(uint64_t size);
 void oxygen_free(void *pointer);

@@ -47,6 +47,7 @@ public enum TokenKind
     Switch,
     Case,
     Default,
+    Is,
     Cast,
     SizeOf,
     OpenParenthesis,

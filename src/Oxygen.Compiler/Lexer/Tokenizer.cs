@@ -49,6 +49,7 @@ public sealed class Tokenizer
             ["switch"] = TokenKind.Switch,
             ["case"] = TokenKind.Case,
             ["default"] = TokenKind.Default,
+            ["is"] = TokenKind.Is,
             ["cast"] = TokenKind.Cast,
             ["sizeof"] = TokenKind.SizeOf
         };

@@ -995,7 +995,14 @@ public sealed class SemanticAnalyzer
             case IfStatement conditional:
                 var conditionType = AnalyzeExpression(conditional.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 RequireBoolean(conditionType, conditional.Condition.Location);
-                var thenReturns = AnalyzeStatement(conditional.Then, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                var thenScope = scope;
+                if (conditional.Condition is IsExpression { BindingName: { } binding, TargetType: var targetSyntax })
+                {
+                    var targetType = ResolveType(targetSyntax);
+                    thenScope = new Scope(scope, MarkVariableUsed);
+                    thenScope.Declare(binding, new VariableSymbol(targetType, false, conditional.Condition, false));
+                }
+                var thenReturns = AnalyzeStatement(conditional.Then, thenScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 var elseReturns = conditional.Else is not null
                     && AnalyzeStatement(conditional.Else, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return conditional.Else is not null && thenReturns && elseReturns;
@@ -1054,6 +1061,43 @@ public sealed class SemanticAnalyzer
                         }
                         if (seen.Count != union.Cases.Count)
                             throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
+                        return caseReturns.Length > 0 && caseReturns[0];
+                    }
+
+                    if (switchStatement.Cases.Any(item => item.PatternType is not null))
+                    {
+                        if (!valueType.IsClass && !valueType.IsInterface)
+                            throw Error("Type-pattern switches require a class or interface value", switchStatement.Value.Location);
+                        var caseReturns = new bool[switchStatement.Cases.Count];
+                        for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
+                        {
+                            var item = switchStatement.Cases[index];
+                            if (item.IsDefault)
+                            {
+                                if (item.PatternType is not null || item.BindingName is not null)
+                                    throw Error("Default switch cases cannot bind a value", item.Location);
+                            }
+                            else
+                            {
+                                if (item.PatternType is null || item.Value is not null || item.CaseName is not null)
+                                    throw Error("Type-pattern switches require 'case is Type' labels", item.Location);
+                                var targetType = AnalyzeTypePattern(item.PatternType, valueType, item.Location);
+                                if (item.BindingName is not null)
+                                {
+                                    var caseScope = new Scope(scope, MarkVariableUsed);
+                                    caseScope.Declare(item.BindingName, new VariableSymbol(targetType, false, item, false));
+                                    caseReturns[index] = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                }
+                                else
+                                {
+                                    caseReturns[index] = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                }
+                                caseReturns[index] |= index + 1 < caseReturns.Length && caseReturns[index + 1];
+                                continue;
+                            }
+                            caseReturns[index] = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls)
+                                || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                        }
                         return caseReturns.Length > 0 && caseReturns[0];
                     }
 
@@ -1345,6 +1389,8 @@ public sealed class SemanticAnalyzer
             FloatingPointLiteralExpression floating => SemanticType.FromPrimitive(ParseNumericLiteralType(floating.Lexeme, true)),
             StringLiteralExpression => SemanticType.String,
             BooleanLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.Bool),
+            IsExpression pattern => AnalyzeIsExpression(
+                pattern, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             StructLiteralExpression literal => AnalyzeStructLiteral(
                 literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             ArrayLiteralExpression literal => AnalyzeArrayLiteral(literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
@@ -1366,6 +1412,35 @@ public sealed class SemanticAnalyzer
 
         expressionTypes[expression] = type;
         return type;
+    }
+
+    private SemanticType AnalyzeIsExpression(
+        IsExpression expression,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        var operandType = AnalyzeExpression(expression.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        AnalyzeTypePattern(expression.TargetType, operandType, expression.Location);
+        if (expression.BindingName is not null && scope.ContainsInCurrentScope(expression.BindingName))
+            throw Error($"A variable named '{expression.BindingName}' is already declared in this scope", expression.Location);
+        return SemanticType.FromPrimitive(PrimitiveType.Bool);
+    }
+
+    private SemanticType AnalyzeTypePattern(TypeSyntax syntax, SemanticType operandType, SourceLocation location)
+    {
+        var targetType = ResolveType(syntax);
+        if (!targetType.IsClass && !targetType.IsInterface)
+            throw Error($"The 'is' pattern target must be a class or interface, got {targetType}", location);
+        if (!operandType.IsClass && !operandType.IsInterface)
+            throw Error($"The 'is' pattern operand must be a class or interface, got {operandType}", location);
+        if (!IsReferenceCast(operandType, targetType, out _)
+            && !IsReferenceCast(targetType, operandType, out _))
+            throw Error($"Types {operandType} and {targetType} are not related", location);
+        return targetType;
     }
 
     private SemanticType AnalyzeSizeOf(
@@ -2189,6 +2264,7 @@ public sealed class SemanticAnalyzer
         {
             UnaryExpression e => e with { Operand = Expr(e.Operand) },
             BinaryExpression e => e with { Left = Expr(e.Left), Right = Expr(e.Right) },
+            IsExpression e => e with { Operand = Expr(e.Operand) },
             ConditionalExpression e => e with
             {
                 Condition = Expr(e.Condition),

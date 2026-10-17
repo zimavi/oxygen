@@ -2,31 +2,21 @@
 param(
     [string]$Clang = "clang",
     [string]$Archiver = "",
-    [string]$OutputDirectory = "",
-    [ValidateSet("msvc", "gnu")]
-    [string]$Format = ""
+    [string]$OutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $runtimeRoot = $PSScriptRoot
-$source = Join-Path $runtimeRoot "src\main.c"
+$sourceDirectory = Join-Path $runtimeRoot "src"
 $includeDirectory = Join-Path $runtimeRoot "include"
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $runtimeRoot "build"
 }
 
-if ([string]::IsNullOrWhiteSpace($Format)) {
-    $Format = if ($IsWindows) { "msvc" } else { "gnu" }
-}
-
 if ([string]::IsNullOrWhiteSpace($Archiver)) {
-    $archiveCandidates = if ($Format -eq "msvc") {
-        @("llvm-lib", "lib", "llvm-ar", "ar")
-    } else {
-        @("llvm-ar", "ar")
-    }
+    $archiveCandidates = @("llvm-ar", "ar")
 
     foreach ($candidate in $archiveCandidates) {
         if (Get-Command $candidate -ErrorAction SilentlyContinue) {
@@ -41,36 +31,21 @@ if ([string]::IsNullOrWhiteSpace($Archiver)) {
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-$archiverName = [IO.Path]::GetFileNameWithoutExtension($Archiver)
-$isMsvc = $Format -eq "msvc"
-$variants = @(
-    @{ Suffix = ""; Flags = @("-O2") },
-    @{ Suffix = "_debug"; Flags = @("-O0", "-g") }
-)
-$libraries = @()
+$library = Join-Path $OutputDirectory "liboxygenrt.a"
+$objects = @()
 
-foreach ($variant in $variants) {
-    $objectExtension = if ($isMsvc) { ".obj" } else { ".o" }
-    $libraryName = if ($isMsvc) { "oxygen_runtime$($variant.Suffix).lib" } else { "liboxygen_runtime$($variant.Suffix).a" }
-    $object = Join-Path $OutputDirectory "oxygen_runtime$($variant.Suffix)$objectExtension"
-    $library = Join-Path $OutputDirectory $libraryName
-
-    & $Clang -std=c17 @($variant.Flags) -I $includeDirectory -c $source -o $object
+foreach ($source in Get-ChildItem -Path $sourceDirectory -Filter "*.c" -File | Sort-Object Name) {
+    $object = Join-Path $OutputDirectory "$($source.BaseName).o"
+    & $Clang -std=c17 -O2 -g -I $includeDirectory -c $source.FullName -o $object
     if ($LASTEXITCODE -ne 0) {
-        throw "Clang failed to compile the Oxygen runtime variant '$($variant.Suffix)'."
+        throw "Clang failed to compile '$($source.Name)' for the Oxygen runtime."
     }
-
-    if ($archiverName -in @("llvm-lib", "lib")) {
-        & $Archiver /out:$library $object
-    } else {
-        & $Archiver rcs $library $object
-    }
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "The static-library archiver failed to create '$library'."
-    }
-
-    $libraries += $library
+    $objects += $object
 }
 
-Write-Output $libraries
+& $Archiver rcs $library @objects
+if ($LASTEXITCODE -ne 0) {
+    throw "The static-library archiver failed to create '$library'."
+}
+
+Write-Output $library

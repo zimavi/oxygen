@@ -105,6 +105,22 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesTypePatternsWithOptionalBindings()
+    {
+        var unit = Parse(
+            "class Base { } class Child : Base { } i32 main() { Base value = new Child(); " +
+            "if (value is Child child) { return 1; } switch (value) { case is Child: return 2; default: return 0; } }");
+
+        var condition = Assert.IsType<IsExpression>(
+            Assert.IsType<IfStatement>(unit.Functions[0].Body.Statements[1]).Condition);
+        Assert.Equal("Child", condition.TargetType.NamedType);
+        Assert.Equal("child", condition.BindingName);
+        var switchStatement = Assert.IsType<SwitchStatement>(unit.Functions[0].Body.Statements[2]);
+        Assert.Equal("Child", switchStatement.Cases[0].PatternType!.NamedType);
+        Assert.Null(switchStatement.Cases[0].BindingName);
+    }
+
+    [Fact]
     public void ParsesParametersDeclarationsAssignmentsAndCalls()
     {
         var unit = Parse("i32 add(i32 left, i32 right) { var result = left + right; result = print(result); return result; }");
