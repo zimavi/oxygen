@@ -17,6 +17,7 @@ public sealed record NativeBuildOptions
     public string? MetadataPath { get; init; }
     public string CompilerPath { get; init; } = "clang";
     public string OptimizationLevel { get; init; } = "O2";
+    public int Jobs { get; init; } = 1;
     public bool GenerateDebugSymbols { get; init; }
     public string? WorkingDirectory { get; init; }
     public IReadOnlyList<NativeDependency> Dependencies { get; init; } = [];
@@ -203,10 +204,18 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             throw new ArgumentException(
                 "OptimizationLevel must contain only letters and digits.",
                 nameof(options));
+        if (options.Jobs < 1)
+            throw new ArgumentOutOfRangeException(nameof(NativeBuildOptions.Jobs), options.Jobs,
+                "Jobs must be greater than zero.");
 
         var arguments = new List<string> { $"-{options.OptimizationLevel}" };
         if (options.GenerateDebugSymbols)
             arguments.Add("-g");
+        if (options.Jobs > 1)
+        {
+            arguments.Add("-flto=thin");
+            arguments.Add($"-flto-jobs={options.Jobs}");
+        }
         return arguments;
     }
 }

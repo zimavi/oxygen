@@ -5,18 +5,25 @@ namespace Oxygen.Compiler.Diagnostics;
 
 public sealed class DiagnosticFormatter
 {
-    public string Format(Diagnostic diagnostic, SourceText source, bool useColor = false)
+    public string Format(Diagnostic diagnostic, SourceText? source = null, bool useColor = false)
     {
-        var lines = source.Text.Replace("\r\n", "\n").Split('\n');
-        var lineIndex = Math.Clamp(diagnostic.Span.Start.Line - 1, 0, Math.Max(0, lines.Length - 1));
-        var start = Math.Clamp(diagnostic.Span.Start.Column - 1, 0, lines[lineIndex].Length);
-        var sourceLine = lines[lineIndex];
-        var underlineLength = Math.Min(
-            Math.Max(1, diagnostic.Span.Length),
-            Math.Max(1, sourceLine.Length - start));
+        var hasSource = source is not null;
+        var lines = source?.Text.Replace("\r\n", "\n").Split('\n') ?? [];
+        var lineIndex = hasSource
+            ? Math.Clamp(diagnostic.Span.Start.Line - 1, 0, Math.Max(0, lines.Length - 1))
+            : 0;
+        var start = hasSource
+            ? Math.Clamp(diagnostic.Span.Start.Column - 1, 0, lines[lineIndex].Length)
+            : 0;
+        var sourceLine = hasSource ? lines[lineIndex] : string.Empty;
+        var underlineLength = hasSource
+            ? Math.Min(Math.Max(1, diagnostic.Span.Length), Math.Max(1, sourceLine.Length - start))
+            : 0;
         var lineNumber = diagnostic.Span.Start.Line.ToString();
         var severity = diagnostic.Severity == DiagnosticSeverity.Warning ? "warning" : "error";
-        var prefix = $"{source.Name}:{diagnostic.Span.Start.Line}:{diagnostic.Span.Start.Column}: {severity}: ";
+        var prefix = hasSource
+            ? $"{diagnostic.SourceName}:{diagnostic.Span.Start.Line}:{diagnostic.Span.Start.Column}: {severity}: "
+            : $"{diagnostic.SourceName ?? "compiler"}: {severity}: ";
         var diagnosticColor = diagnostic.Severity == DiagnosticSeverity.Warning ? "\u001b[33m" : "\u001b[31m";
         var reset = "\u001b[0m";
         var gutterColor = "\u001b[90m";
@@ -33,26 +40,29 @@ public sealed class DiagnosticFormatter
         }
 
         builder.AppendLine();
-        if (lineIndex > 0)
+        if (hasSource && lineIndex > 0)
         {
             AppendSourceLine(builder, lines[lineIndex - 1], lineIndex, useColor, gutterColor, reset);
             builder.AppendLine();
         }
 
-        AppendSourceLine(builder, sourceLine, diagnostic.Span.Start.Line, useColor, gutterColor, reset,
-            start, underlineLength, diagnosticColor);
-        builder.AppendLine();
-
-        AppendGutter(builder, lineNumber, useColor, gutterColor, reset);
-        builder.Append(' ', start)
-            .Append(useColor ? diagnosticColor : string.Empty)
-            .Append('^')
-            .Append('~', Math.Max(0, underlineLength - 1))
-            .Append(useColor ? reset : string.Empty);
-        if (lineIndex + 1 < lines.Length)
+        if (hasSource)
         {
+            AppendSourceLine(builder, sourceLine, diagnostic.Span.Start.Line, useColor, gutterColor, reset,
+                start, underlineLength, diagnosticColor);
             builder.AppendLine();
-            AppendSourceLine(builder, lines[lineIndex + 1], lineIndex + 2, useColor, gutterColor, reset);
+
+            AppendGutter(builder, lineNumber, useColor, gutterColor, reset);
+            builder.Append(' ', start)
+                .Append(useColor ? diagnosticColor : string.Empty)
+                .Append('^')
+                .Append('~', Math.Max(0, underlineLength - 1))
+                .Append(useColor ? reset : string.Empty);
+            if (lineIndex + 1 < lines.Length)
+            {
+                builder.AppendLine();
+                AppendSourceLine(builder, lines[lineIndex + 1], lineIndex + 2, useColor, gutterColor, reset);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(diagnostic.Explanation))

@@ -6,7 +6,10 @@ public enum DiagnosticPhase
 {
     Lexing,
     Parsing,
-    Semantic
+    Semantic,
+    Backend,
+    Toolchain,
+    Metadata
 }
 
 public enum DiagnosticSeverity
@@ -74,6 +77,24 @@ public sealed class DiagnosticBag
             DiagnosticAdvice.Explain(phase, message),
             DiagnosticAdvice.Suggest(phase, message)));
 
+    public void Add(
+        DiagnosticPhase phase,
+        DiagnosticSeverity severity,
+        string message,
+        SourceLocation location,
+        int length = 1,
+        string? sourceName = null,
+        string? explanation = null,
+        string? suggestion = null) =>
+        Add(new Diagnostic(
+            phase,
+            severity,
+            message,
+            sourceName,
+            new SourceSpan(location, Math.Max(1, length)),
+            explanation ?? DiagnosticAdvice.Explain(phase, message),
+            suggestion ?? DiagnosticAdvice.Suggest(phase, message)));
+
     public void AddRange(IEnumerable<Diagnostic> diagnostics) => _diagnostics.AddRange(diagnostics);
 }
 
@@ -83,7 +104,7 @@ internal static class DiagnosticAdvice
 {
     public static string? Explain(DiagnosticPhase phase, string message) => (phase, message) switch
     {
-        (DiagnosticPhase.Lexing, var value) when value.StartsWith("Unexpected character", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Lexing, var value) when value.StartsWith("Unexpected character", StringComparison.OrdinalIgnoreCase) =>
             "This character is not part of Oxygen's lexical grammar, so the compiler cannot interpret it as a token.",
         (DiagnosticPhase.Lexing, "A floating-point literal requires digits after the decimal point") =>
             "A decimal point starts a floating-point literal and must be followed by at least one digit.",
@@ -95,23 +116,29 @@ internal static class DiagnosticAdvice
             "The compiler reached the end of the file before finding the closing */ marker.",
         (DiagnosticPhase.Parsing, var value) when value.StartsWith("Expected", StringComparison.Ordinal) =>
             "The surrounding tokens do not form a valid Oxygen construct at this location.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("not declared", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("not declared", StringComparison.OrdinalIgnoreCase) =>
             "Name lookup only considers declarations visible in the current lexical scope and declared functions.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("already declared", StringComparison.Ordinal)
-            || value.Contains("more than once", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("already declared", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("more than once", StringComparison.OrdinalIgnoreCase) =>
             "Each scope and function signature must give every declared name a single, unambiguous meaning.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("must return", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("must return", StringComparison.OrdinalIgnoreCase) =>
             "Every path through a non-void function must produce a value of its declared return type.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("requires", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("requires", StringComparison.OrdinalIgnoreCase) =>
             "This operation is only defined for the operand types described by the language type rules.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("expected", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("expected", StringComparison.OrdinalIgnoreCase) =>
             "Oxygen uses exact type matching here; it does not insert an implicit conversion to make the types fit.",
+        (DiagnosticPhase.Backend, _) =>
+            "The source passed semantic analysis, but the compiler could not produce valid LLVM for it.",
+        (DiagnosticPhase.Toolchain, _) =>
+            "The native compiler or filesystem rejected a build step after source compilation completed.",
+        (DiagnosticPhase.Metadata, _) =>
+            "Native-module metadata must match the versioned Oxygen metadata format.",
         _ => null
     };
 
     public static string? Suggest(DiagnosticPhase phase, string message) => (phase, message) switch
     {
-        (DiagnosticPhase.Lexing, var value) when value.StartsWith("Unexpected character", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Lexing, var value) when value.StartsWith("Unexpected character", StringComparison.OrdinalIgnoreCase) =>
             "Remove the character or replace it with the Oxygen operator or punctuation you intended.",
         (DiagnosticPhase.Lexing, "A floating-point literal requires digits after the decimal point") =>
             "Write a value such as 3.14, or remove the decimal point if this should be an integer.",
@@ -129,17 +156,23 @@ internal static class DiagnosticAdvice
             "Close the current block with }.",
         (DiagnosticPhase.Parsing, var value) when value.Contains("expression", StringComparison.Ordinal) =>
             "Provide a literal, identifier, function call, or parenthesized expression.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("const variable", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("const variable", StringComparison.OrdinalIgnoreCase) =>
             "Declare the variable without const if it must change, or assign the value only once.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("using 'var'", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("using 'var'", StringComparison.OrdinalIgnoreCase) =>
             "Initialize the variable, for example: var result = expression;",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("expects", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("expects", StringComparison.OrdinalIgnoreCase) =>
             "Pass exactly the number of arguments shown in the function declaration.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("already declared", StringComparison.Ordinal)
-            || value.Contains("more than once", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("already declared", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("more than once", StringComparison.OrdinalIgnoreCase) =>
             "Rename the declaration, or remove the duplicate if it was accidental.",
-        (DiagnosticPhase.Semantic, var value) when value.Contains("must return", StringComparison.Ordinal) =>
+        (DiagnosticPhase.Semantic, var value) when value.Contains("must return", StringComparison.OrdinalIgnoreCase) =>
             "Add a return statement with the declared type, or change the function return type to void.",
+        (DiagnosticPhase.Backend, _) =>
+            "Inspect the backend message and simplify or revise the reported construct.",
+        (DiagnosticPhase.Toolchain, _) =>
+            "Check the configured compiler, output path, runtime library, and build options.",
+        (DiagnosticPhase.Metadata, _) =>
+            "Regenerate the metadata with the same Oxygen toolchain or remove the invalid dependency.",
         _ => null
     };
 }

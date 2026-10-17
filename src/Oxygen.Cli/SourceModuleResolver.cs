@@ -29,11 +29,37 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
 
         foreach (var rootDirectory in rootDirectories)
         {
-            foreach (var path in Directory.EnumerateFiles(rootDirectory, "*.oxy", SearchOption.AllDirectories)
-                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            try
             {
-                if (!visitedFiles.Contains(Path.GetFullPath(path)))
-                    queued.Enqueue(new SourceText(path, File.ReadAllText(path)));
+                foreach (var path in Directory.EnumerateFiles(rootDirectory, "*.oxy", SearchOption.AllDirectories)
+                             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (visitedFiles.Contains(Path.GetFullPath(path)))
+                        continue;
+
+                    try
+                    {
+                        queued.Enqueue(new SourceText(path, File.ReadAllText(path)));
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        diagnostics.Add(
+                            DiagnosticPhase.Toolchain,
+                            DiagnosticSeverity.Error,
+                            $"Unable to read source file '{path}': {exception.Message}",
+                            new SourceLocation(1, 1),
+                            sourceName: path);
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                diagnostics.Add(
+                    DiagnosticPhase.Toolchain,
+                    DiagnosticSeverity.Error,
+                    $"Unable to enumerate source directory '{rootDirectory}': {exception.Message}",
+                    new SourceLocation(1, 1),
+                    sourceName: rootDirectory);
             }
         }
 

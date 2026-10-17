@@ -77,7 +77,11 @@ public sealed partial class Parser
             _logger.Information("Parsed {FunctionCount} function(s).", functions.Count);
             return new CompilationUnit(module.Name, module.Visibility, imports, functions, location)
             {
-                Structs = structs, Enums = enums, Unions = unions, Classes = classes, Interfaces = interfaces
+                Structs = structs,
+                Enums = enums,
+                Unions = unions,
+                Classes = classes,
+                Interfaces = interfaces
             };
         }
         catch (ParseException exception)
@@ -150,9 +154,12 @@ public sealed partial class Parser
         {
             Structs = structs,
             Enums = enums
-            ,Unions = unions
-            ,Classes = classes
-            ,Interfaces = interfaces
+            ,
+            Unions = unions
+            ,
+            Classes = classes
+            ,
+            Interfaces = interfaces
         }, diagnostics.Diagnostics);
     }
 
@@ -933,30 +940,30 @@ public sealed partial class Parser
         switch (token.Kind)
         {
             case TokenKind.New:
-            {
-                var type = ParseType(allowInferred: false);
-                Consume(TokenKind.OpenParenthesis, "Expected '(' after type in new expression.");
-                var arguments = new List<Expression>();
-                if (!Check(TokenKind.CloseParenthesis))
                 {
-                    do
+                    var type = ParseType(allowInferred: false);
+                    Consume(TokenKind.OpenParenthesis, "Expected '(' after type in new expression.");
+                    var arguments = new List<Expression>();
+                    if (!Check(TokenKind.CloseParenthesis))
                     {
-                        arguments.Add(ParseExpression());
-                    } while (Match(TokenKind.Comma));
+                        do
+                        {
+                            arguments.Add(ParseExpression());
+                        } while (Match(TokenKind.Comma));
+                    }
+                    Consume(TokenKind.CloseParenthesis, "Expected ')' after constructor arguments.");
+                    return new NewExpression(type, arguments, token.Location);
                 }
-                Consume(TokenKind.CloseParenthesis, "Expected ')' after constructor arguments.");
-                return new NewExpression(type, arguments, token.Location);
-            }
             case TokenKind.OpenBrace:
-            {
-                var elements = new List<Expression>();
-                if (!Check(TokenKind.CloseBrace))
                 {
-                    do { elements.Add(ParseExpression()); } while (Match(TokenKind.Comma));
+                    var elements = new List<Expression>();
+                    if (!Check(TokenKind.CloseBrace))
+                    {
+                        do { elements.Add(ParseExpression()); } while (Match(TokenKind.Comma));
+                    }
+                    Consume(TokenKind.CloseBrace, "Expected '}' after array literal.");
+                    return new ArrayLiteralExpression(elements, token.Location);
                 }
-                Consume(TokenKind.CloseBrace, "Expected '}' after array literal.");
-                return new ArrayLiteralExpression(elements, token.Location);
-            }
             case TokenKind.Identifier:
                 var name = token.Lexeme;
                 var qualifiedParts = new List<string> { name };
@@ -1029,31 +1036,31 @@ public sealed partial class Parser
             case TokenKind.False:
                 return new BooleanLiteralExpression(false, token.Location);
             case TokenKind.Cast:
-            {
-                Consume(TokenKind.LessThan, "Expected '<' after 'cast'.");
-                var type = ParseType(allowInferred: false);
-                Consume(TokenKind.GreaterThan, "Expected '>' after cast type.");
-                Consume(TokenKind.OpenParenthesis, "Expected '(' after cast type.");
-                var operand = ParseExpression();
-                Consume(TokenKind.CloseParenthesis, "Expected ')' after cast operand.");
-                return new CastExpression(type, operand, token.Location);
-            }
-            case TokenKind.SizeOf:
-            {
-                if (Match(TokenKind.LessThan))
                 {
+                    Consume(TokenKind.LessThan, "Expected '<' after 'cast'.");
                     var type = ParseType(allowInferred: false);
-                    Consume(TokenKind.GreaterThan, "Expected '>' after sizeof type.");
-                    Consume(TokenKind.OpenParenthesis, "Expected '(' after sizeof type.");
-                    Consume(TokenKind.CloseParenthesis, "Expected ')' after sizeof type.");
-                    return new SizeOfExpression(type, null, token.Location);
+                    Consume(TokenKind.GreaterThan, "Expected '>' after cast type.");
+                    Consume(TokenKind.OpenParenthesis, "Expected '(' after cast type.");
+                    var operand = ParseExpression();
+                    Consume(TokenKind.CloseParenthesis, "Expected ')' after cast operand.");
+                    return new CastExpression(type, operand, token.Location);
                 }
+            case TokenKind.SizeOf:
+                {
+                    if (Match(TokenKind.LessThan))
+                    {
+                        var type = ParseType(allowInferred: false);
+                        Consume(TokenKind.GreaterThan, "Expected '>' after sizeof type.");
+                        Consume(TokenKind.OpenParenthesis, "Expected '(' after sizeof type.");
+                        Consume(TokenKind.CloseParenthesis, "Expected ')' after sizeof type.");
+                        return new SizeOfExpression(type, null, token.Location);
+                    }
 
-                Consume(TokenKind.OpenParenthesis, "Expected '(' after 'sizeof'.");
-                var operand = ParseExpression();
-                Consume(TokenKind.CloseParenthesis, "Expected ')' after sizeof operand.");
-                return new SizeOfExpression(null, operand, token.Location);
-            }
+                    Consume(TokenKind.OpenParenthesis, "Expected '(' after 'sizeof'.");
+                    var operand = ParseExpression();
+                    Consume(TokenKind.CloseParenthesis, "Expected ')' after sizeof operand.");
+                    return new SizeOfExpression(null, operand, token.Location);
+                }
             case TokenKind.OpenParenthesis:
                 if ((Check(TokenKind.Identifier) || IsType(Current.Kind)) && Peek(1).Kind == TokenKind.CloseParenthesis)
                 {

@@ -54,6 +54,11 @@ var optimizationOption = new Option<string>("--optimization", "-O")
     Description = "Clang optimization level, for example O0 or O2",
     DefaultValueFactory = _ => "2"
 };
+var jobsOption = new Option<int>("--jobs", "-j")
+{
+    Description = "Number of LLVM backend workers; values greater than one enable ThinLTO parallelism",
+    DefaultValueFactory = _ => 1
+};
 var runtimeOption = new Option<FileInfo?>("--runtime", "-r")
 {
     Description = "Static Oxygen runtime library to link"
@@ -73,15 +78,39 @@ var buildCommand = new Command("build", "Build the project")
     debugOption,
     warningsAsErrorsOption,
     optimizationOption,
+    jobsOption,
     runtimeOption,
     standardLibraryOption
 };
 buildCommand.SetAction(result =>
 {
     FileInfo[]? paths = result.GetValue(sourcesArgument);
-    var rootSources = paths!.Select(file => new SourceText(file.FullName, File.ReadAllText(file.FullName))).ToList();
+    var inputDiagnostics = new DiagnosticBag();
+    var rootSources = new List<SourceText>();
+    foreach (var file in paths!)
+    {
+        try
+        {
+            rootSources.Add(new SourceText(file.FullName, File.ReadAllText(file.FullName)));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            inputDiagnostics.Add(
+                DiagnosticPhase.Toolchain,
+                DiagnosticSeverity.Error,
+                $"Unable to read source file '{file.FullName}': {exception.Message}",
+                new SourceLocation(1, 1),
+                sourceName: file.FullName);
+        }
+    }
+
     var formatter = new DiagnosticFormatter();
     var useColor = !Console.IsErrorRedirected;
+    if (inputDiagnostics.HasErrors)
+    {
+        DisplayDiagnostics(inputDiagnostics.Diagnostics, rootSources, formatter, useColor);
+        return;
+    }
     var tokenizer = new Tokenizer(Log.Logger.ForContext("SourceContext", "Lexer"));
     var resolved = new SourceModuleResolver(tokenizer, Log.Logger.ForContext("SourceContext", "Resolver"))
         .Resolve(rootSources);
@@ -98,11 +127,28 @@ buildCommand.SetAction(result =>
         return;
     }
 
-    var externalModules = (result.GetValue(standardLibraryOption) ?? [])
-        .Select(NativeModuleLoader.Load)
-        .Where(module => module is not null)
-        .Cast<ExternalModuleDeclaration>()
-        .ToList();
+    var externalModules = new List<ExternalModuleDeclaration>();
+    foreach (var modulePath in result.GetValue(standardLibraryOption) ?? [])
+    {
+        try
+        {
+            var module = NativeModuleLoader.Load(modulePath);
+            if (module is not null)
+                externalModules.Add(module);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException)
+        {
+            var diagnostics = new DiagnosticBag();
+            diagnostics.Add(
+                DiagnosticPhase.Metadata,
+                DiagnosticSeverity.Error,
+                exception.Message,
+                new SourceLocation(1, 1),
+                sourceName: modulePath.FullName);
+            DisplayDiagnostics(diagnostics.Diagnostics, sources, formatter, useColor);
+            return;
+        }
+    }
     var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
         .AnalyzeWithDiagnostics(
             compilationUnits,
@@ -118,42 +164,76 @@ buildCommand.SetAction(result =>
         }
     }
 
-    using var generated = new LlvmModuleGenerator().Generate("program", semanticResult.Model!);
-    var irOutput = result.GetValue(emitIrOption);
-    var metadataOutput = result.GetValue(emitMetadataOption);
-    if (metadataOutput is not null)
-        generated.WriteMetadata(metadataOutput.FullName);
-    if (irOutput is not null)
+    GeneratedLlvmModule generated;
+    try
     {
-        var irOutputPath = Path.GetFullPath(irOutput.FullName);
-        var irOutputDirectory = Path.GetDirectoryName(irOutputPath);
-        if (!string.IsNullOrEmpty(irOutputDirectory))
-            Directory.CreateDirectory(irOutputDirectory);
-
-        File.WriteAllText(irOutputPath, generated.ToString());
+        generated = new LlvmModuleGenerator().Generate("program", semanticResult.Model!);
+    }
+    catch (Exception exception) when (exception is PlatformNotSupportedException or InvalidOperationException)
+    {
+        var diagnostics = new DiagnosticBag();
+        diagnostics.Add(
+            DiagnosticPhase.Backend,
+            DiagnosticSeverity.Error,
+            exception.Message,
+            new SourceLocation(1, 1));
+        DisplayDiagnostics(diagnostics.Diagnostics, sources, formatter, useColor);
         return;
     }
 
-    var runtimePath = result.GetValue(runtimeOption)?.FullName
-        ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? "./",
-            "liboxygenrt.a");
-    var dependencies = new List<NativeDependency>
+    using (generated)
+    {
+        var irOutput = result.GetValue(emitIrOption);
+        var metadataOutput = result.GetValue(emitMetadataOption);
+        if (metadataOutput is not null)
+            generated.WriteMetadata(metadataOutput.FullName);
+        if (irOutput is not null)
+        {
+            var irOutputPath = Path.GetFullPath(irOutput.FullName);
+            var irOutputDirectory = Path.GetDirectoryName(irOutputPath);
+            if (!string.IsNullOrEmpty(irOutputDirectory))
+                Directory.CreateDirectory(irOutputDirectory);
+
+            File.WriteAllText(irOutputPath, generated.ToString());
+            return;
+        }
+
+        var runtimePath = result.GetValue(runtimeOption)?.FullName
+            ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? "./",
+                "liboxygenrt.a");
+        var dependencies = new List<NativeDependency>
     {
         new(runtimePath, NativeDependencyKind.Static)
     };
-    dependencies.AddRange((result.GetValue(standardLibraryOption) ?? [])
-        .Select(path => new NativeDependency(path.FullName, NativeDependencyKind.Dynamic)));
+        dependencies.AddRange((result.GetValue(standardLibraryOption) ?? [])
+            .Select(path => new NativeDependency(path.FullName, NativeDependencyKind.Dynamic)));
 
-    generated.BuildNative(new NativeBuildOptions
-    {
-        CompilerPath = result.GetValue(clangOption) ?? "clang",
-        OptimizationLevel = "O" + (result.GetValue(optimizationOption) ?? "O2"),
-        GenerateDebugSymbols = result.GetValue(debugOption),
-        OutputPath = result.GetValue(outputOption)?.FullName ?? "program",
-        MetadataPath = metadataOutput?.FullName
-            ?? (result.GetValue(outputOption)?.FullName ?? "program") + ".oxmeta",
-        Dependencies = dependencies
-    });
+        try
+        {
+            generated.BuildNative(new NativeBuildOptions
+            {
+                CompilerPath = result.GetValue(clangOption) ?? "clang",
+                OptimizationLevel = NormalizeOptimizationLevel(result.GetValue(optimizationOption) ?? "O2"),
+                Jobs = result.GetValue(jobsOption),
+                GenerateDebugSymbols = result.GetValue(debugOption),
+                OutputPath = result.GetValue(outputOption)?.FullName ?? "program",
+                MetadataPath = metadataOutput?.FullName
+                    ?? (result.GetValue(outputOption)?.FullName ?? "program") + ".oxmeta",
+                Dependencies = dependencies
+            });
+        }
+        catch (Exception exception) when (exception is NativeToolException or InvalidOperationException
+            or ArgumentException or IOException)
+        {
+            var diagnostics = new DiagnosticBag();
+            diagnostics.Add(
+                DiagnosticPhase.Toolchain,
+                DiagnosticSeverity.Error,
+                exception.Message,
+                new SourceLocation(1, 1));
+            DisplayDiagnostics(diagnostics.Diagnostics, sources, formatter, useColor);
+        }
+    }
 });
 
 rootCommand.Add(buildCommand);
@@ -168,8 +248,11 @@ static void DisplayDiagnostics(
 {
     foreach (var diagnostic in diagnostics)
     {
-        var source = sources.FirstOrDefault(candidate => candidate.Name == diagnostic.SourceName) ?? sources[0];
+        var source = sources.FirstOrDefault(candidate => candidate.Name == diagnostic.SourceName);
         Console.Error.WriteLine(formatter.Format(diagnostic, source, useColor));
     }
 
 }
+
+static string NormalizeOptimizationLevel(string value) =>
+    value.StartsWith('O') ? value : "O" + value;

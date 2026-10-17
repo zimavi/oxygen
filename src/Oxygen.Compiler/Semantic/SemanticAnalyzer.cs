@@ -279,7 +279,9 @@ public sealed partial class SemanticAnalyzer
                     throw Error($"Destructor name must be '{declaration.Name}'", declaration.Destructor.Location);
                 _classesByName[declaration.Name] = _classesByName[declaration.Name] with
                 {
-                    Fields = fields, Methods = methods, Constructors = constructors
+                    Fields = fields,
+                    Methods = methods,
+                    Constructors = constructors
                 };
             }
         }
@@ -804,7 +806,22 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ExternalModuleDeclaration>? externalModules = null)
     {
         var diagnostics = new DiagnosticBag();
-        return new SemanticResult(AnalyzeCore(compilationUnits, diagnostics, sourceNames, externalModules), diagnostics.Diagnostics);
+        try
+        {
+            return new SemanticResult(
+                AnalyzeCore(compilationUnits, diagnostics, sourceNames, externalModules),
+                diagnostics.Diagnostics);
+        }
+        catch (SemanticException exception)
+        {
+            diagnostics.Add(
+                DiagnosticPhase.Semantic,
+                exception.Message,
+                exception.Location,
+                exception.Length,
+                _sourceName ?? (sourceNames is { Count: > 0 } ? sourceNames[0] : null));
+            return new SemanticResult(null, diagnostics.Diagnostics);
+        }
     }
 
     private FunctionSymbol CreateFunctionSymbol(FunctionDeclaration declaration, string moduleName)
@@ -1248,183 +1265,183 @@ public sealed partial class SemanticAnalyzer
                 _loopDepth--;
                 return false;
             case ForInStatement forInStatement:
-            {
-                if (!forInStatement.VariableType.IsInferred)
-                    throw Error("For-in iteration variables must use 'var'", forInStatement.VariableType.Location);
-                var collectionType = AnalyzeExpression(forInStatement.Collection, scope, functions, moduleName,
-                    imports, expressionTypes, resolvedCalls);
-                SemanticType iterationElement;
-                if (collectionType.IsArray && collectionType.ElementType is not null)
                 {
-                    // Fixed arrays use the intrinsic lowering path for now.
-                    // User-defined collections below must satisfy iter/next.
-                    iterationElement = collectionType.ElementType;
-                }
-                else if (!collectionType.IsClass
-                         || !_classesByName.TryGetValue(collectionType.StructName!, out var collectionClass))
-                    throw Error($"For-in requires a fixed array or iterator-protocol collection, got {collectionType}",
-                        forInStatement.Collection.Location);
-                else
-                {
-                    var iterCandidates = GetClassMethods(collectionClass.Name, [])
-                        .Where(method => method.Name == "iter" && method.Parameters.Count == 0).ToArray();
-                    if (iterCandidates.Length != 1)
-                        throw Error($"Collection class '{collectionClass.Name}' must declare exactly one iter() method",
-                            forInStatement.Collection.Location);
-                    var iter = iterCandidates[0];
-                    var iterCall = new CallExpression($"{collectionClass.Name}.iter", [],
-                        forInStatement.Collection.Location);
-                    var iteratorType = iter.ReturnType;
-                    if (!iteratorType.IsClass || !_classesByName.TryGetValue(iteratorType.StructName!, out var iteratorClass))
-                        throw Error("Iterator 'iter()' must return an iterator class", iterCall.Location);
-                    // The receiver for next() is represented by the iterator value
-                    // in the lowering; resolve the declared method directly here.
-                    var nextCandidates = GetClassMethods(iteratorClass.Name, [])
-                        .Where(method => method.Name == "next" && method.Parameters.Count == 0).ToArray();
-                    if (nextCandidates.Length != 1)
-                        throw Error($"Iterator class '{iteratorClass.Name}' must declare exactly one next() method",
-                            forInStatement.Collection.Location);
-                    var next = nextCandidates[0];
-                    var option = next.ReturnType;
-                    if (!option.IsUnion || !string.Equals(option.EnumName, "Option", StringComparison.Ordinal)
-                        || option.TypeArguments is not { Count: 1 })
-                        throw Error("Iterator next() must return Option<T> with the iteration element type",
-                            forInStatement.Collection.Location);
-                    iterationElement = option.TypeArguments[0];
-                    _iteratorProtocols[forInStatement] = new IteratorProtocol(
-                        forInStatement.Collection, iterCall, iter, next, iterationElement, option);
-                    _usedFunctions.Add(iter);
-                    _usedFunctions.Add(next);
-                }
-                var forInScope = new Scope(scope, MarkVariableUsed);
-                if (forInScope.ContainsInCurrentScope(forInStatement.VariableName))
-                    throw Error($"Variable '{forInStatement.VariableName}' is already declared in this scope",
-                        forInStatement.Location, forInStatement.VariableName.Length);
-                var variable = new VariableSymbol(iterationElement, false,
-                    new VariableDeclarationStatement(forInStatement.VariableType, forInStatement.VariableName, false,
-                        null, forInStatement.Location), false);
-                forInScope.Declare(forInStatement.VariableName, variable);
-                _declaredVariables.Add(variable);
-                _loopDepth++;
-                _breakableDepth++;
-                AnalyzeStatement(forInStatement.Body, forInScope, function, functions, moduleName, imports,
-                    expressionTypes, resolvedCalls);
-                _breakableDepth--;
-                _loopDepth--;
-                return false;
-            }
-            case SwitchStatement switchStatement:
-            {
-                var valueType = AnalyzeExpression(switchStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-                _breakableDepth++;
-                try
-                {
-                    if (valueType.IsUnion)
+                    if (!forInStatement.VariableType.IsInferred)
+                        throw Error("For-in iteration variables must use 'var'", forInStatement.VariableType.Location);
+                    var collectionType = AnalyzeExpression(forInStatement.Collection, scope, functions, moduleName,
+                        imports, expressionTypes, resolvedCalls);
+                    SemanticType iterationElement;
+                    if (collectionType.IsArray && collectionType.ElementType is not null)
                     {
-                        var union = _unionsByName[valueType.EnumName!];
-                        var seen = new HashSet<string>(StringComparer.Ordinal);
-                        var caseReturns = new bool[switchStatement.Cases.Count];
-                        for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
-                        {
-                            var item = switchStatement.Cases[index];
-                            if (item.IsDefault || item.Value is not null)
-                                throw Error("Union switches require named union cases", item.Location);
-                            if (item.CaseName is null || !seen.Add(item.CaseName)
-                                || !union.CasesByName.TryGetValue(item.CaseName, out var unionCase))
-                                throw Error($"Unknown or duplicate union case '{item.CaseName}'", item.Location);
-                            if ((item.BindingName is null) != (unionCase.PayloadType is null))
-                                throw Error($"Union case '{item.CaseName}' {(unionCase.PayloadType is null ? "does not have" : "requires")} a payload binding", item.Location);
-                            var caseScope = new Scope(scope, MarkVariableUsed);
-                            if (item.BindingName is not null)
-                                caseScope.Declare(item.BindingName, new VariableSymbol(unionCase.PayloadType!, false, item, false));
-                            var bodyReturns = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
-                            caseReturns[index] = bodyReturns || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
-                        }
-                        if (seen.Count != union.Cases.Count)
-                            throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
-                        return caseReturns.Length > 0 && caseReturns[0];
+                        // Fixed arrays use the intrinsic lowering path for now.
+                        // User-defined collections below must satisfy iter/next.
+                        iterationElement = collectionType.ElementType;
                     }
-
-                    if (switchStatement.Cases.Any(item => item.PatternType is not null))
+                    else if (!collectionType.IsClass
+                             || !_classesByName.TryGetValue(collectionType.StructName!, out var collectionClass))
+                        throw Error($"For-in requires a fixed array or iterator-protocol collection, got {collectionType}",
+                            forInStatement.Collection.Location);
+                    else
                     {
-                        if (!valueType.IsClass && !valueType.IsInterface)
-                            throw Error("Type-pattern switches require a class or interface value", switchStatement.Value.Location);
-                        var caseReturns = new bool[switchStatement.Cases.Count];
-                        for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
+                        var iterCandidates = GetClassMethods(collectionClass.Name, [])
+                            .Where(method => method.Name == "iter" && method.Parameters.Count == 0).ToArray();
+                        if (iterCandidates.Length != 1)
+                            throw Error($"Collection class '{collectionClass.Name}' must declare exactly one iter() method",
+                                forInStatement.Collection.Location);
+                        var iter = iterCandidates[0];
+                        var iterCall = new CallExpression($"{collectionClass.Name}.iter", [],
+                            forInStatement.Collection.Location);
+                        var iteratorType = iter.ReturnType;
+                        if (!iteratorType.IsClass || !_classesByName.TryGetValue(iteratorType.StructName!, out var iteratorClass))
+                            throw Error("Iterator 'iter()' must return an iterator class", iterCall.Location);
+                        // The receiver for next() is represented by the iterator value
+                        // in the lowering; resolve the declared method directly here.
+                        var nextCandidates = GetClassMethods(iteratorClass.Name, [])
+                            .Where(method => method.Name == "next" && method.Parameters.Count == 0).ToArray();
+                        if (nextCandidates.Length != 1)
+                            throw Error($"Iterator class '{iteratorClass.Name}' must declare exactly one next() method",
+                                forInStatement.Collection.Location);
+                        var next = nextCandidates[0];
+                        var option = next.ReturnType;
+                        if (!option.IsUnion || !string.Equals(option.EnumName, "Option", StringComparison.Ordinal)
+                            || option.TypeArguments is not { Count: 1 })
+                            throw Error("Iterator next() must return Option<T> with the iteration element type",
+                                forInStatement.Collection.Location);
+                        iterationElement = option.TypeArguments[0];
+                        _iteratorProtocols[forInStatement] = new IteratorProtocol(
+                            forInStatement.Collection, iterCall, iter, next, iterationElement, option);
+                        _usedFunctions.Add(iter);
+                        _usedFunctions.Add(next);
+                    }
+                    var forInScope = new Scope(scope, MarkVariableUsed);
+                    if (forInScope.ContainsInCurrentScope(forInStatement.VariableName))
+                        throw Error($"Variable '{forInStatement.VariableName}' is already declared in this scope",
+                            forInStatement.Location, forInStatement.VariableName.Length);
+                    var variable = new VariableSymbol(iterationElement, false,
+                        new VariableDeclarationStatement(forInStatement.VariableType, forInStatement.VariableName, false,
+                            null, forInStatement.Location), false);
+                    forInScope.Declare(forInStatement.VariableName, variable);
+                    _declaredVariables.Add(variable);
+                    _loopDepth++;
+                    _breakableDepth++;
+                    AnalyzeStatement(forInStatement.Body, forInScope, function, functions, moduleName, imports,
+                        expressionTypes, resolvedCalls);
+                    _breakableDepth--;
+                    _loopDepth--;
+                    return false;
+                }
+            case SwitchStatement switchStatement:
+                {
+                    var valueType = AnalyzeExpression(switchStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                    _breakableDepth++;
+                    try
+                    {
+                        if (valueType.IsUnion)
                         {
-                            var item = switchStatement.Cases[index];
-                            if (item.IsDefault)
+                            var union = _unionsByName[valueType.EnumName!];
+                            var seen = new HashSet<string>(StringComparer.Ordinal);
+                            var caseReturns = new bool[switchStatement.Cases.Count];
+                            for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
                             {
-                                if (item.PatternType is not null || item.BindingName is not null)
-                                    throw Error("Default switch cases cannot bind a value", item.Location);
-                            }
-                            else
-                            {
-                                if (item.PatternType is null || item.Value is not null || item.CaseName is not null)
-                                    throw Error("Type-pattern switches require 'case is Type' labels", item.Location);
-                                var targetType = AnalyzeTypePattern(item.PatternType, valueType, item.Location);
+                                var item = switchStatement.Cases[index];
+                                if (item.IsDefault || item.Value is not null)
+                                    throw Error("Union switches require named union cases", item.Location);
+                                if (item.CaseName is null || !seen.Add(item.CaseName)
+                                    || !union.CasesByName.TryGetValue(item.CaseName, out var unionCase))
+                                    throw Error($"Unknown or duplicate union case '{item.CaseName}'", item.Location);
+                                if ((item.BindingName is null) != (unionCase.PayloadType is null))
+                                    throw Error($"Union case '{item.CaseName}' {(unionCase.PayloadType is null ? "does not have" : "requires")} a payload binding", item.Location);
+                                var caseScope = new Scope(scope, MarkVariableUsed);
                                 if (item.BindingName is not null)
+                                    caseScope.Declare(item.BindingName, new VariableSymbol(unionCase.PayloadType!, false, item, false));
+                                var bodyReturns = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                caseReturns[index] = bodyReturns || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                            }
+                            if (seen.Count != union.Cases.Count)
+                                throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
+                            return caseReturns.Length > 0 && caseReturns[0];
+                        }
+
+                        if (switchStatement.Cases.Any(item => item.PatternType is not null))
+                        {
+                            if (!valueType.IsClass && !valueType.IsInterface)
+                                throw Error("Type-pattern switches require a class or interface value", switchStatement.Value.Location);
+                            var caseReturns = new bool[switchStatement.Cases.Count];
+                            for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
+                            {
+                                var item = switchStatement.Cases[index];
+                                if (item.IsDefault)
                                 {
-                                    var caseScope = new Scope(scope, MarkVariableUsed);
-                                    caseScope.Declare(item.BindingName, new VariableSymbol(targetType, false, item, false));
-                                    caseReturns[index] = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                    if (item.PatternType is not null || item.BindingName is not null)
+                                        throw Error("Default switch cases cannot bind a value", item.Location);
                                 }
                                 else
                                 {
-                                    caseReturns[index] = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                    if (item.PatternType is null || item.Value is not null || item.CaseName is not null)
+                                        throw Error("Type-pattern switches require 'case is Type' labels", item.Location);
+                                    var targetType = AnalyzeTypePattern(item.PatternType, valueType, item.Location);
+                                    if (item.BindingName is not null)
+                                    {
+                                        var caseScope = new Scope(scope, MarkVariableUsed);
+                                        caseScope.Declare(item.BindingName, new VariableSymbol(targetType, false, item, false));
+                                        caseReturns[index] = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                    }
+                                    else
+                                    {
+                                        caseReturns[index] = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                    }
+                                    caseReturns[index] |= index + 1 < caseReturns.Length && caseReturns[index + 1];
+                                    continue;
                                 }
-                                caseReturns[index] |= index + 1 < caseReturns.Length && caseReturns[index + 1];
-                                continue;
+                                caseReturns[index] = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls)
+                                    || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
                             }
-                            caseReturns[index] = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls)
-                                || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                            return caseReturns.Length > 0 && caseReturns[0];
                         }
-                        return caseReturns.Length > 0 && caseReturns[0];
-                    }
 
-                    if (!IsSwitchComparable(valueType))
-                        throw Error($"Switch requires a comparable value, got {valueType}", switchStatement.Value.Location);
-                    var seenLabels = new HashSet<string>(StringComparer.Ordinal);
-                    var hasDefault = false;
-                    var caseReturnsForValue = new bool[switchStatement.Cases.Count];
-                    for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
-                    {
-                        var item = switchStatement.Cases[index];
-                        if (item.CaseName is not null || item.BindingName is not null)
-                            throw Error("Value switches require constant case labels", item.Location);
-                        if (item.IsDefault)
+                        if (!IsSwitchComparable(valueType))
+                            throw Error($"Switch requires a comparable value, got {valueType}", switchStatement.Value.Location);
+                        var seenLabels = new HashSet<string>(StringComparer.Ordinal);
+                        var hasDefault = false;
+                        var caseReturnsForValue = new bool[switchStatement.Cases.Count];
+                        for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
                         {
-                            if (hasDefault)
-                                throw Error("A switch can contain only one default case", item.Location);
-                            hasDefault = true;
-                        }
-                        else
-                        {
-                            if (item.Value is null)
-                                throw Error("Switch case is missing a value", item.Location);
-                            var labelType = AnalyzeExpression(item.Value, scope, functions, moduleName, imports,
+                            var item = switchStatement.Cases[index];
+                            if (item.CaseName is not null || item.BindingName is not null)
+                                throw Error("Value switches require constant case labels", item.Location);
+                            if (item.IsDefault)
+                            {
+                                if (hasDefault)
+                                    throw Error("A switch can contain only one default case", item.Location);
+                                hasDefault = true;
+                            }
+                            else
+                            {
+                                if (item.Value is null)
+                                    throw Error("Switch case is missing a value", item.Location);
+                                var labelType = AnalyzeExpression(item.Value, scope, functions, moduleName, imports,
+                                    expressionTypes, resolvedCalls);
+                                if (!IsConstantSwitchLabel(item.Value, labelType, valueType)
+                                    || (labelType != valueType
+                                        && !(valueType.IsPointer && item.Value is IntegerLiteralExpression { Lexeme: "0" })
+                                        && !CanAssign(valueType, item.Value, labelType)))
+                                    throw Error($"Switch case value must be a constant comparable with {valueType}", item.Location);
+                                if (!seenLabels.Add(SwitchLabelKey(item.Value)))
+                                    throw Error("Duplicate switch case value", item.Location);
+                            }
+
+                            var bodyReturns = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports,
                                 expressionTypes, resolvedCalls);
-                            if (!IsConstantSwitchLabel(item.Value, labelType, valueType)
-                                || (labelType != valueType
-                                    && !(valueType.IsPointer && item.Value is IntegerLiteralExpression { Lexeme: "0" })
-                                    && !CanAssign(valueType, item.Value, labelType)))
-                                throw Error($"Switch case value must be a constant comparable with {valueType}", item.Location);
-                            if (!seenLabels.Add(SwitchLabelKey(item.Value)))
-                                throw Error("Duplicate switch case value", item.Location);
+                            caseReturnsForValue[index] = bodyReturns
+                                || (index + 1 < caseReturnsForValue.Length && caseReturnsForValue[index + 1]);
                         }
-
-                        var bodyReturns = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports,
-                            expressionTypes, resolvedCalls);
-                        caseReturnsForValue[index] = bodyReturns
-                            || (index + 1 < caseReturnsForValue.Length && caseReturnsForValue[index + 1]);
+                        return hasDefault && caseReturnsForValue.Length > 0 && caseReturnsForValue[0];
                     }
-                    return hasDefault && caseReturnsForValue.Length > 0 && caseReturnsForValue[0];
+                    finally
+                    {
+                        _breakableDepth--;
+                    }
                 }
-                finally
-                {
-                    _breakableDepth--;
-                }
-            }
             case BreakStatement breakStatement when _breakableDepth == 0:
                 throw Error("'break' is only valid inside a loop or switch", breakStatement.Location);
             case ContinueStatement continueStatement when _loopDepth == 0:
@@ -1442,59 +1459,59 @@ public sealed partial class SemanticAnalyzer
                 AnalyzeReturn(returnStatement, function, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return true;
             case ThrowStatement throwStatement:
-            {
-                var thrownType = AnalyzeExpression(throwStatement.Value, scope, functions, moduleName, imports,
-                    expressionTypes, resolvedCalls);
-                if (!IsExceptionType(thrownType))
-                    throw Error($"Only exception class values can be thrown, got {thrownType}",
-                        throwStatement.Value.Location);
-                return true;
-            }
-            case TryStatement tryStatement:
-            {
-                var tryReturns = AnalyzeBlock(tryStatement.Body, scope, function, functions, moduleName, imports,
-                    expressionTypes, resolvedCalls);
-                var allCatchesReturn = true;
-                var catchAllSeen = false;
-                foreach (var (catchClause, index) in tryStatement.Catches.Select((item, index) => (item, index)))
                 {
-                    SemanticType? catchType = null;
-                    if (catchClause.ExceptionType is not null)
-                    {
-                        if (catchAllSeen)
-                            throw Error("A typed catch cannot follow a catch-all clause", catchClause.Location);
-                        catchType = ResolveType(catchClause.ExceptionType);
-                        if (!IsExceptionType(catchType))
-                            throw Error($"Catch type '{catchType}' must be an exception class",
-                                catchClause.ExceptionType.Location);
-                    }
-                    else
-                    {
-                        if (catchAllSeen)
-                            throw Error("A try statement cannot contain multiple catch-all clauses", catchClause.Location);
-                        catchAllSeen = true;
-                        if (index != tryStatement.Catches.Count - 1)
-                            throw Error("The catch-all clause must be last", catchClause.Location);
-                    }
-
-                    var catchScope = scope;
-                    if (catchClause.BindingName is not null)
-                    {
-                        catchScope = new Scope(scope, MarkVariableUsed);
-                        catchScope.Declare(catchClause.BindingName,
-                            new VariableSymbol(catchType!, false, catchClause, false));
-                    }
-
-                    var catchReturns = AnalyzeBlock(catchClause.Body, catchScope, function, functions, moduleName,
-                        imports, expressionTypes, resolvedCalls);
-                    allCatchesReturn &= catchReturns;
-                }
-
-                var finallyReturns = tryStatement.Finally is not null
-                    && AnalyzeBlock(tryStatement.Finally, scope, function, functions, moduleName, imports,
+                    var thrownType = AnalyzeExpression(throwStatement.Value, scope, functions, moduleName, imports,
                         expressionTypes, resolvedCalls);
-                return finallyReturns || (tryReturns && allCatchesReturn);
-            }
+                    if (!IsExceptionType(thrownType))
+                        throw Error($"Only exception class values can be thrown, got {thrownType}",
+                            throwStatement.Value.Location);
+                    return true;
+                }
+            case TryStatement tryStatement:
+                {
+                    var tryReturns = AnalyzeBlock(tryStatement.Body, scope, function, functions, moduleName, imports,
+                        expressionTypes, resolvedCalls);
+                    var allCatchesReturn = true;
+                    var catchAllSeen = false;
+                    foreach (var (catchClause, index) in tryStatement.Catches.Select((item, index) => (item, index)))
+                    {
+                        SemanticType? catchType = null;
+                        if (catchClause.ExceptionType is not null)
+                        {
+                            if (catchAllSeen)
+                                throw Error("A typed catch cannot follow a catch-all clause", catchClause.Location);
+                            catchType = ResolveType(catchClause.ExceptionType);
+                            if (!IsExceptionType(catchType))
+                                throw Error($"Catch type '{catchType}' must be an exception class",
+                                    catchClause.ExceptionType.Location);
+                        }
+                        else
+                        {
+                            if (catchAllSeen)
+                                throw Error("A try statement cannot contain multiple catch-all clauses", catchClause.Location);
+                            catchAllSeen = true;
+                            if (index != tryStatement.Catches.Count - 1)
+                                throw Error("The catch-all clause must be last", catchClause.Location);
+                        }
+
+                        var catchScope = scope;
+                        if (catchClause.BindingName is not null)
+                        {
+                            catchScope = new Scope(scope, MarkVariableUsed);
+                            catchScope.Declare(catchClause.BindingName,
+                                new VariableSymbol(catchType!, false, catchClause, false));
+                        }
+
+                        var catchReturns = AnalyzeBlock(catchClause.Body, catchScope, function, functions, moduleName,
+                            imports, expressionTypes, resolvedCalls);
+                        allCatchesReturn &= catchReturns;
+                    }
+
+                    var finallyReturns = tryStatement.Finally is not null
+                        && AnalyzeBlock(tryStatement.Finally, scope, function, functions, moduleName, imports,
+                            expressionTypes, resolvedCalls);
+                    return finallyReturns || (tryReturns && allCatchesReturn);
+                }
             case ExpressionStatement expressionStatement:
                 AnalyzeExpression(
                     expressionStatement.Expression,
@@ -1860,7 +1877,7 @@ public sealed partial class SemanticAnalyzer
         return SemanticType.Union(union.Name);
     }
 
-    private SemanticType AnalyzeArrayLiteral(ArrayLiteralExpression literal, Scope scope, IReadOnlyDictionary<string,List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression,SemanticType> types, IDictionary<CallExpression,FunctionSymbol> calls)
+    private SemanticType AnalyzeArrayLiteral(ArrayLiteralExpression literal, Scope scope, IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types, IDictionary<CallExpression, FunctionSymbol> calls)
     {
         if (literal.Elements.Count == 0) throw Error("Array literals cannot be empty", literal.Location);
         var element = AnalyzeExpression(literal.Elements[0], scope, functions, moduleName, imports, types, calls);
@@ -1872,7 +1889,7 @@ public sealed partial class SemanticAnalyzer
         return SemanticType.ArrayOf(element, literal.Elements.Count);
     }
 
-    private SemanticType AnalyzeIndex(IndexExpression index, Scope scope, IReadOnlyDictionary<string,List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression,SemanticType> types, IDictionary<CallExpression,FunctionSymbol> calls)
+    private SemanticType AnalyzeIndex(IndexExpression index, Scope scope, IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types, IDictionary<CallExpression, FunctionSymbol> calls)
     {
         var target = AnalyzeExpression(index.Target, scope, functions, moduleName, imports, types, calls);
         var indexType = AnalyzeExpression(index.Index, scope, functions, moduleName, imports, types, calls);
@@ -2640,9 +2657,12 @@ public sealed partial class SemanticAnalyzer
                 && TryGetConstantNumber(binary.Right, out var right):
                 value = binary.Operator switch
                 {
-                    TokenKind.Plus => left + right, TokenKind.Minus => left - right,
-                    TokenKind.Star => left * right, TokenKind.Slash when right != 0 => left / right,
-                    TokenKind.Percent when right != 0 => left % right, _ => double.NaN
+                    TokenKind.Plus => left + right,
+                    TokenKind.Minus => left - right,
+                    TokenKind.Star => left * right,
+                    TokenKind.Slash when right != 0 => left / right,
+                    TokenKind.Percent when right != 0 => left % right,
+                    _ => double.NaN
                 };
                 return !double.IsNaN(value);
             default:

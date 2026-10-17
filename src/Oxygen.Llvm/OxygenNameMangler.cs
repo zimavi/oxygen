@@ -6,7 +6,7 @@ namespace Oxygen.Llvm;
 public static class OxygenNameMangler
 {
     private const string ManglingPrefix = "_Ox_v0_";
-    
+
     public static string Mangle(string moduleName, FunctionSymbol function)
     {
         if (function.IsExternal && !string.IsNullOrWhiteSpace(function.NativeName))
@@ -26,10 +26,18 @@ public static class OxygenNameMangler
         : type.IsArray ? $"a{type.ArrayLength}_{EncodeType(type.ElementType!)}"
         : type.Primitive switch
         {
-            PrimitiveType.I8 => "i8", PrimitiveType.I16 => "i16", PrimitiveType.I32 => "i32",
-            PrimitiveType.I64 => "i64", PrimitiveType.U8 => "u8", PrimitiveType.U16 => "u16",
-            PrimitiveType.U32 => "u32", PrimitiveType.U64 => "u64", PrimitiveType.F32 => "f32",
-            PrimitiveType.F64 => "f64", PrimitiveType.Bool => "b", PrimitiveType.Void => "v",
+            PrimitiveType.I8 => "i8",
+            PrimitiveType.I16 => "i16",
+            PrimitiveType.I32 => "i32",
+            PrimitiveType.I64 => "i64",
+            PrimitiveType.U8 => "u8",
+            PrimitiveType.U16 => "u16",
+            PrimitiveType.U32 => "u32",
+            PrimitiveType.U64 => "u64",
+            PrimitiveType.F32 => "f32",
+            PrimitiveType.F64 => "f64",
+            PrimitiveType.Bool => "b",
+            PrimitiveType.Void => "v",
             _ when type.Kind == SemanticTypeKind.Pointer => "p" + EncodeType(type.Pointee!),
             _ when type.Kind == SemanticTypeKind.GenericParameter => "g" + type.GenericParameterName!.Length + type.GenericParameterName,
             _ when type.Kind == SemanticTypeKind.Enum => "e" + type.EnumName!.Length + type.EnumName,

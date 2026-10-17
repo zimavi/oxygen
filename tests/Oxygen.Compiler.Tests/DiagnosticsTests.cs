@@ -1,3 +1,4 @@
+using System;
 using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
 using Xunit;
@@ -106,5 +107,47 @@ public sealed class DiagnosticsTests
         Assert.Contains("\u001b[36mi32\u001b[0m", formatted);
         Assert.Contains("\u001b[35mreturn\u001b[0m", formatted);
         Assert.Contains("\u001b[33m42\u001b[0m", formatted);
+    }
+
+    [Fact]
+    public void FormatsCompilerDiagnosticsWithoutSourceContext()
+    {
+        var diagnostic = new Diagnostic(
+            DiagnosticPhase.Backend,
+            DiagnosticSeverity.Error,
+            "LLVM verification failed",
+            null,
+            new SourceSpan(new SourceLocation(1, 1), 1));
+
+        var formatted = new DiagnosticFormatter().Format(diagnostic);
+
+        Assert.Contains("compiler: error: LLVM verification failed", formatted);
+        Assert.DoesNotContain(" | ", formatted);
+    }
+
+    [Fact]
+    public void SemanticDiagnosticsDoNotEscapeAsExceptions()
+    {
+        var tokenizer = new Tokenizer();
+        var tokens = tokenizer.TokenizeWithDiagnostics(
+            "i32 main() { return missing; }",
+            "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+
+        var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer()
+            .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("not declared", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void CollectsUnterminatedBlockCommentWithoutThrowing()
+    {
+        var result = new Tokenizer().TokenizeWithDiagnostics("i32 /*", "main.oxy");
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal(DiagnosticPhase.Lexing, diagnostic.Phase);
+        Assert.Equal("Unterminated block comment", diagnostic.Message);
     }
 }

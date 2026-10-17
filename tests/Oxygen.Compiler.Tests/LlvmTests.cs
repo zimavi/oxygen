@@ -47,6 +47,41 @@ public sealed class LlvmTests
     }
 
     [Fact]
+    public void MultiWorkerBuildsEnableThinLtoBackendJobsForBothStages()
+    {
+        var options = new NativeBuildOptions
+        {
+            OutputPath = "program",
+            Jobs = 4
+        };
+
+        var compilationArguments = NativeBuildPipeline.CreateCompilationArguments(
+            "program.ll",
+            "program.o",
+            options);
+        var linkArguments = NativeBuildPipeline.CreateLinkArguments(
+            "program.o",
+            "program",
+            options);
+
+        Assert.Equal(["-O2", "-flto=thin", "-flto-jobs=4"], compilationArguments.Take(3));
+        Assert.Equal(["-O2", "-flto=thin", "-flto-jobs=4"], linkArguments.Take(3));
+    }
+
+    [Fact]
+    public void RejectsNonPositiveWorkerCounts()
+    {
+        var options = new NativeBuildOptions
+        {
+            OutputPath = "program",
+            Jobs = 0
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            NativeBuildPipeline.CreateLinkArguments("program.o", "program", options));
+    }
+
+    [Fact]
     public void CompilesPassedIrThenLinksConfiguredDependencies()
     {
         var runner = new RecordingToolRunner();

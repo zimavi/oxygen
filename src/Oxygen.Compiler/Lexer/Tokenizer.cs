@@ -126,7 +126,21 @@ public sealed class Tokenizer
 
             if (source[position] == '/' && Peek(source, position + 1) == '*')
             {
-                SkipBlockComment(source, ref position, ref line, ref column, location);
+                try
+                {
+                    SkipBlockComment(source, ref position, ref line, ref column, location);
+                }
+                catch (LexicalException exception) when (diagnostics is not null)
+                {
+                    diagnostics.Add(
+                        DiagnosticPhase.Lexing,
+                        exception.Message,
+                        exception.Location,
+                        sourceName: sourceName);
+                    if (position < source.Length)
+                        Advance(source[position], ref position, ref line, ref column);
+                }
+
                 continue;
             }
 

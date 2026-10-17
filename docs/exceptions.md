@@ -37,4 +37,6 @@ If an exception reaches the generated native entry point without a matching
 handler, the runtime prints the exception type, message, and stack trace to
 standard error, flushes the stream, and terminates with a non-zero exit status.
 This is distinct from compiler diagnostics, which are reported before native
-code is generated.
+code is generated. Compiler diagnostics are structured reports for invalid
+source, malformed native metadata, unsupported backend inputs, and native
+tool failures; see [Compiler diagnostics](diagnostics.md).
