@@ -95,6 +95,16 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesIntegerSwitchCasesAndDefault()
+    {
+        var unit = Parse("i32 main() { switch (1) { case 0: return 10; case 1: return 11; default: return 12; } }");
+
+        var switchStatement = Assert.IsType<SwitchStatement>(Assert.Single(unit.Functions[0].Body.Statements));
+        Assert.Equal("0", Assert.IsType<IntegerLiteralExpression>(switchStatement.Cases[0].Value).Lexeme);
+        Assert.True(switchStatement.Cases[2].IsDefault);
+    }
+
+    [Fact]
     public void ParsesParametersDeclarationsAssignmentsAndCalls()
     {
         var unit = Parse("i32 add(i32 left, i32 right) { var result = left + right; result = print(result); return result; }");

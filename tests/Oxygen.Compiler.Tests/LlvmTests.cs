@@ -490,6 +490,19 @@ public sealed class LlvmTests
     }
 
     [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsIntegerSwitchInstructionAndFallthrough()
+    {
+        var model = Analyze(
+            "i32 main() { i32 value = 1; switch (value) { case 0: return 10; case 1: return 20; default: return 30; } }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("switch i32", ir);
+        Assert.Contains("switch.body", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
     public void EmitsConditionalExpressionControlFlow()
     {
         var model = Analyze("i32 main() { return true ? 1 : 2; }");

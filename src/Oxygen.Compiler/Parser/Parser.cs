@@ -555,18 +555,34 @@ public sealed class Parser
         Consume(TokenKind.CloseParenthesis, "Expected ')' after switch value.");
         Consume(TokenKind.OpenBrace, "Expected '{' after switch value.");
         var cases = new List<SwitchCase>();
-        while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
+        while (Match(TokenKind.Case))
         {
-            var caseToken = Consume(TokenKind.Case, "Expected 'case'.");
-            var name = Consume(TokenKind.Identifier, "Expected a union case name.").Lexeme;
-            string? binding = null;
-            if (Match(TokenKind.OpenParenthesis))
+            var caseToken = Previous;
+            if (Check(TokenKind.Identifier)
+                && (Peek(1).Kind == TokenKind.Colon
+                    || (Peek(1).Kind == TokenKind.OpenParenthesis && Peek(4).Kind == TokenKind.Colon)))
             {
-                binding = Consume(TokenKind.Identifier, "Expected a case binding name.").Lexeme;
-                Consume(TokenKind.CloseParenthesis, "Expected ')' after case binding.");
+                var name = Advance().Lexeme;
+                string? binding = null;
+                if (Match(TokenKind.OpenParenthesis))
+                {
+                    binding = Consume(TokenKind.Identifier, "Expected a case binding name.").Lexeme;
+                    Consume(TokenKind.CloseParenthesis, "Expected ')' after case binding.");
+                }
+                Consume(TokenKind.Colon, "Expected ':' after switch case.");
+                cases.Add(new SwitchCase(name, null, false, binding, ParseStatement(), caseToken.Location));
+                continue;
             }
+
+            var caseValue = ParseExpression();
             Consume(TokenKind.Colon, "Expected ':' after switch case.");
-            cases.Add(new SwitchCase(name, binding, ParseStatement(), caseToken.Location));
+            cases.Add(new SwitchCase(null, caseValue, false, null, ParseStatement(), caseToken.Location));
+        }
+        if (Match(TokenKind.Default))
+        {
+            var defaultToken = Previous;
+            Consume(TokenKind.Colon, "Expected ':' after 'default'.");
+            cases.Add(new SwitchCase(null, null, true, null, ParseStatement(), defaultToken.Location));
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after switch.");
         return new SwitchStatement(value, cases, location);

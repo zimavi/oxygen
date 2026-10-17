@@ -344,7 +344,9 @@ public sealed record NewExpression(
     SourceLocation Location) : Expression(Location);
 
 public sealed record SwitchCase(
-    string CaseName,
+    string? CaseName,
+    Expression? Value,
+    bool IsDefault,
     string? BindingName,
     Statement Body,
     SourceLocation Location) : SyntaxNode(Location);

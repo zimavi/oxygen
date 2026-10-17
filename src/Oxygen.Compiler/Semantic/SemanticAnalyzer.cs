@@ -21,6 +21,7 @@ public sealed class SemanticAnalyzer
     private readonly Dictionary<string, ClassSymbol> _classesByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, InterfaceSymbol> _interfacesByName = new(StringComparer.Ordinal);
     private int _loopDepth;
+    private int _breakableDepth;
     private Dictionary<FunctionDeclaration, FunctionSymbol>? _functionSymbols;
     private IReadOnlyDictionary<string, SemanticType> _genericTypes =
         new Dictionary<string, SemanticType>(StringComparer.Ordinal);
@@ -121,6 +122,7 @@ public sealed class SemanticAnalyzer
         _classesByName.Clear();
         _interfacesByName.Clear();
         _loopDepth = 0;
+        _breakableDepth = 0;
 
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
         _functionSymbols = functions;
@@ -919,6 +921,7 @@ public sealed class SemanticAnalyzer
         }
 
         _loopDepth = 0;
+        _breakableDepth = 0;
         var hasReturn = AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (!function.ReturnType.IsVoid && !hasReturn)
         {
@@ -1000,7 +1003,9 @@ public sealed class SemanticAnalyzer
                 var whileType = AnalyzeExpression(whileStatement.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 RequireBoolean(whileType, whileStatement.Condition.Location);
                 _loopDepth++;
+                _breakableDepth++;
                 AnalyzeStatement(whileStatement.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                _breakableDepth--;
                 _loopDepth--;
                 return false;
             case ForStatement forStatement:
@@ -1013,36 +1018,90 @@ public sealed class SemanticAnalyzer
                     RequireBoolean(forType, forStatement.Condition.Location);
                 }
                 _loopDepth++;
+                _breakableDepth++;
                 AnalyzeStatement(forStatement.Body, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 if (forStatement.Increment is not null)
                     AnalyzeStatement(forStatement.Increment, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                _breakableDepth--;
                 _loopDepth--;
                 return false;
             case SwitchStatement switchStatement:
             {
                 var valueType = AnalyzeExpression(switchStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-                if (!valueType.IsUnion)
-                    throw Error($"Switch requires a union value, got {valueType}", switchStatement.Value.Location);
-                var union = _unionsByName[valueType.EnumName!];
-                var seen = new HashSet<string>(StringComparer.Ordinal);
-                var allReturn = true;
-                foreach (var item in switchStatement.Cases)
+                _breakableDepth++;
+                try
                 {
-                    if (!seen.Add(item.CaseName) || !union.CasesByName.TryGetValue(item.CaseName, out var unionCase))
-                        throw Error($"Unknown or duplicate union case '{item.CaseName}'", item.Location);
-                    if ((item.BindingName is null) != (unionCase.PayloadType is null))
-                        throw Error($"Union case '{item.CaseName}' {(unionCase.PayloadType is null ? "does not have" : "requires")} a payload binding", item.Location);
-                    var caseScope = new Scope(scope, MarkVariableUsed);
-                    if (item.BindingName is not null)
-                        caseScope.Declare(item.BindingName, new VariableSymbol(unionCase.PayloadType!, false, item, false));
-                    allReturn &= AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                    if (valueType.IsUnion)
+                    {
+                        var union = _unionsByName[valueType.EnumName!];
+                        var seen = new HashSet<string>(StringComparer.Ordinal);
+                        var caseReturns = new bool[switchStatement.Cases.Count];
+                        for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
+                        {
+                            var item = switchStatement.Cases[index];
+                            if (item.IsDefault || item.Value is not null)
+                                throw Error("Union switches require named union cases", item.Location);
+                            if (item.CaseName is null || !seen.Add(item.CaseName)
+                                || !union.CasesByName.TryGetValue(item.CaseName, out var unionCase))
+                                throw Error($"Unknown or duplicate union case '{item.CaseName}'", item.Location);
+                            if ((item.BindingName is null) != (unionCase.PayloadType is null))
+                                throw Error($"Union case '{item.CaseName}' {(unionCase.PayloadType is null ? "does not have" : "requires")} a payload binding", item.Location);
+                            var caseScope = new Scope(scope, MarkVariableUsed);
+                            if (item.BindingName is not null)
+                                caseScope.Declare(item.BindingName, new VariableSymbol(unionCase.PayloadType!, false, item, false));
+                            var bodyReturns = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                            caseReturns[index] = bodyReturns || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                        }
+                        if (seen.Count != union.Cases.Count)
+                            throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
+                        return caseReturns.Length > 0 && caseReturns[0];
+                    }
+
+                    if (!IsSwitchComparable(valueType))
+                        throw Error($"Switch requires a comparable value, got {valueType}", switchStatement.Value.Location);
+                    var seenLabels = new HashSet<string>(StringComparer.Ordinal);
+                    var hasDefault = false;
+                    var caseReturnsForValue = new bool[switchStatement.Cases.Count];
+                    for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
+                    {
+                        var item = switchStatement.Cases[index];
+                        if (item.CaseName is not null || item.BindingName is not null)
+                            throw Error("Value switches require constant case labels", item.Location);
+                        if (item.IsDefault)
+                        {
+                            if (hasDefault)
+                                throw Error("A switch can contain only one default case", item.Location);
+                            hasDefault = true;
+                        }
+                        else
+                        {
+                            if (item.Value is null)
+                                throw Error("Switch case is missing a value", item.Location);
+                            var labelType = AnalyzeExpression(item.Value, scope, functions, moduleName, imports,
+                                expressionTypes, resolvedCalls);
+                            if (!IsConstantSwitchLabel(item.Value, labelType, valueType)
+                                || (labelType != valueType
+                                    && !(valueType.IsPointer && item.Value is IntegerLiteralExpression { Lexeme: "0" })
+                                    && !CanAssign(valueType, item.Value, labelType)))
+                                throw Error($"Switch case value must be a constant comparable with {valueType}", item.Location);
+                            if (!seenLabels.Add(SwitchLabelKey(item.Value)))
+                                throw Error("Duplicate switch case value", item.Location);
+                        }
+
+                        var bodyReturns = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports,
+                            expressionTypes, resolvedCalls);
+                        caseReturnsForValue[index] = bodyReturns
+                            || (index + 1 < caseReturnsForValue.Length && caseReturnsForValue[index + 1]);
+                    }
+                    return hasDefault && caseReturnsForValue.Length > 0 && caseReturnsForValue[0];
                 }
-                if (seen.Count != union.Cases.Count)
-                    throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
-                return allReturn;
+                finally
+                {
+                    _breakableDepth--;
+                }
             }
-            case BreakStatement breakStatement when _loopDepth == 0:
-                throw Error("'break' is only valid inside a loop", breakStatement.Location);
+            case BreakStatement breakStatement when _breakableDepth == 0:
+                throw Error("'break' is only valid inside a loop or switch", breakStatement.Location);
             case ContinueStatement continueStatement when _loopDepth == 0:
                 throw Error("'continue' is only valid inside a loop", continueStatement.Location);
             case BreakStatement:
@@ -1909,6 +1968,36 @@ public sealed class SemanticAnalyzer
         type is PrimitiveType.I8 or PrimitiveType.I16 or PrimitiveType.I32 or PrimitiveType.I64
             or PrimitiveType.U8 or PrimitiveType.U16 or PrimitiveType.U32 or PrimitiveType.U64
             or PrimitiveType.USize or PrimitiveType.ISize;
+
+    private static bool IsSwitchComparable(SemanticType type) =>
+        type.IsInteger || type.IsEnum || type.Kind == SemanticTypeKind.String
+        || type.Primitive == PrimitiveType.Bool || type.IsPointer;
+
+    private static bool IsConstantSwitchLabel(Expression expression, SemanticType labelType, SemanticType selectorType)
+    {
+        if (selectorType.IsEnum)
+            return expression is MemberAccessExpression && labelType == selectorType;
+        if (selectorType.IsInteger)
+            return labelType.IsInteger
+                && expression is (IntegerLiteralExpression or UnaryExpression or BinaryExpression);
+        if (selectorType.Primitive == PrimitiveType.Bool)
+            return labelType.Primitive == PrimitiveType.Bool && expression is BooleanLiteralExpression;
+        if (selectorType.Kind == SemanticTypeKind.String)
+            return labelType.Kind == SemanticTypeKind.String && expression is StringLiteralExpression;
+        return selectorType.IsPointer && expression is IntegerLiteralExpression { Lexeme: "0" };
+    }
+
+    private static string SwitchLabelKey(Expression expression)
+    {
+        return expression switch
+        {
+            IntegerLiteralExpression integer when TryGetConstantInteger(integer, out var value) => $"i:{value}",
+            BooleanLiteralExpression boolean => $"b:{boolean.Value}",
+            StringLiteralExpression literal => $"s:{literal.Lexeme}",
+            MemberAccessExpression member => $"e:{member.Target}.{member.MemberName}",
+            _ => expression.ToString() ?? string.Empty
+        };
+    }
 
     private static bool IsUnsigned(PrimitiveType type) =>
         type is PrimitiveType.U8 or PrimitiveType.U16 or PrimitiveType.U32 or PrimitiveType.U64 or PrimitiveType.USize;

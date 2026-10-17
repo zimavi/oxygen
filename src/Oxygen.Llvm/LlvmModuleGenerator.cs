@@ -70,6 +70,7 @@ public sealed class LlvmModuleGenerator
     private static Stack<List<OwnedLocal>> _ownedScopes = new();
     private static LLVMValueRef _oxygenAlloc;
     private static LLVMValueRef _oxygenFree;
+    private static LLVMValueRef _memcmp;
     private static LLVMTypeRef ToLlvmStringType() =>
         LLVMTypeRef.CreateStruct([LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int64], false);
 
@@ -113,6 +114,10 @@ public sealed class LlvmModuleGenerator
                 [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false);
             _oxygenFree = GetOrDeclareRuntimeFunction(
                 module, "oxygen_free", freeType, llvmFunctions);
+            _memcmp = module.AddFunction("memcmp",
+                LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32,
+                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                        LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int64], false));
             foreach (var cls in model.Classes.Values)
             {
                 foreach (var ctor in cls.Constructors)
@@ -247,7 +252,7 @@ public sealed class LlvmModuleGenerator
             foreach (var statement in ctor.Declaration.Body.Statements)
                 EmitStatement(context, builder, function, statement, values, storage, storageRequirements,
                     model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
-                    new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth)>());
+                    new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>());
             builder.BuildRetVoid();
         }
 
@@ -263,7 +268,7 @@ public sealed class LlvmModuleGenerator
             foreach (var statement in cls.Destructor!.Body.Statements)
                 EmitStatement(context, builder, function, statement, values, storage,
                     new HashSet<string>(), model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
-                    new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth)>());
+                    new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>());
             builder.BuildRetVoid();
         }
 
@@ -345,7 +350,7 @@ public sealed class LlvmModuleGenerator
 
         var emittedReturnType = symbol.ReturnType;
         var returned = false;
-        var loops = new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth)>();
+        var loops = new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>();
         foreach (var statement in symbol.Declaration.Body.Statements)
         {
             returned = EmitStatement(
@@ -475,7 +480,7 @@ public sealed class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
         SemanticType emittedReturnType,
-        Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth)> loops)
+        Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)> loops)
     {
         switch (statement)
         {
@@ -641,38 +646,85 @@ public sealed class LlvmModuleGenerator
             }
             case SwitchStatement switchStatement:
             {
-                var value = EmitExpression(context, builder, switchStatement.Value, values, storage, model, llvmFunctions);
-                var union = model.Unions[model.ExpressionTypes[switchStatement.Value].EnumName!];
+                var selectorType = model.ExpressionTypes[switchStatement.Value];
+                var selector = EmitExpression(context, builder, switchStatement.Value, values, storage, model, llvmFunctions);
                 var end = function.AppendBasicBlock("switch.end");
-                var next = function.AppendBasicBlock("switch.case0");
-                builder.BuildBr(next);
-                var terminated = true;
-                for (var index = 0; index < switchStatement.Cases.Count; index++)
+                var bodies = switchStatement.Cases
+                    .Select((_, index) => function.AppendBasicBlock($"switch.body{index}"))
+                    .ToArray();
+                var defaultIndex = switchStatement.Cases
+                    .Select((item, index) => (item, index))
+                    .FirstOrDefault(pair => pair.item.IsDefault).index;
+                var defaultTarget = defaultIndex == 0 && !switchStatement.Cases[0].IsDefault
+                    ? end
+                    : defaultIndex < switchStatement.Cases.Count ? bodies[defaultIndex] : end;
+
+                if (selectorType.IsUnion)
                 {
-                    var item = switchStatement.Cases[index];
-                    var caseBlock = next;
-                    next = index + 1 < switchStatement.Cases.Count
-                        ? function.AppendBasicBlock($"switch.case{index + 1}")
-                        : end;
-                    builder.PositionAtEnd(caseBlock);
-                    var tag = builder.BuildExtractValue(value, 0, "union.tag");
-                    var caseIndex = union.Cases.Select((candidate, candidateIndex) => (candidate, candidateIndex))
-                        .First(pair => pair.candidate.Name == item.CaseName).candidateIndex;
-                    var match = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, tag,
-                        LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)caseIndex, false), "union.match");
-                    var bodyBlock = function.AppendBasicBlock($"switch.body{index}");
-                    builder.BuildCondBr(match, bodyBlock, next);
-                    builder.PositionAtEnd(bodyBlock);
-                    if (item.BindingName is not null)
+                    var union = model.Unions[selectorType.EnumName!];
+                    var tag = builder.BuildExtractValue(selector, 0, "union.tag");
+                    var dispatch = function.AppendBasicBlock("switch.dispatch");
+                    builder.BuildBr(dispatch);
+                    builder.PositionAtEnd(dispatch);
+                    var next = dispatch;
+                    foreach (var (item, index) in switchStatement.Cases.Select((item, index) => (item, index)))
                     {
-                        var payload = builder.BuildExtractValue(value, 1, "union.payload");
-                        values[item.BindingName] = payload;
+                        var caseIndex = union.Cases.Select((candidate, candidateIndex) => (candidate, candidateIndex))
+                            .First(pair => pair.candidate.Name == item.CaseName).candidateIndex;
+                        var match = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, tag,
+                            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)caseIndex, false), "union.match");
+                        var miss = index + 1 < switchStatement.Cases.Count
+                            ? function.AppendBasicBlock($"switch.next{index}")
+                            : defaultTarget;
+                        builder.BuildCondBr(match, bodies[index], miss);
+                        builder.PositionAtEnd(miss);
                     }
+                }
+                else if (IsNativeSwitchType(selectorType))
+                {
+                    var nativeSwitch = builder.BuildSwitch(selector, defaultTarget, (uint)switchStatement.Cases.Count);
+                    foreach (var (item, index) in switchStatement.Cases.Select((item, index) => (item, index)))
+                    {
+                        if (item.IsDefault)
+                            continue;
+                        nativeSwitch.AddCase(EmitSwitchConstant(item.Value!, selectorType, context, builder,
+                            values, storage, model, llvmFunctions), bodies[index]);
+                    }
+                }
+                else
+                {
+                    var next = function.AppendBasicBlock("switch.dispatch");
+                    builder.BuildBr(next);
+                    foreach (var (item, index) in switchStatement.Cases.Select((item, index) => (item, index)))
+                    {
+                        if (item.IsDefault)
+                            break;
+                        builder.PositionAtEnd(next);
+                        var label = EmitExpression(context, builder, item.Value!, values, storage, model, llvmFunctions);
+                        var match = EmitSwitchEquality(builder, selector, label, selectorType, model);
+                        var miss = index + 1 < switchStatement.Cases.Count
+                            ? function.AppendBasicBlock($"switch.next{index}")
+                            : defaultTarget;
+                        builder.BuildCondBr(match, bodies[index], miss);
+                        next = miss;
+                    }
+                }
+
+                var terminated = true;
+                loops.Push((end, end, _ownedScopes.Count, false));
+                for (var index = 0; index < bodies.Length; index++)
+                {
+                    builder.PositionAtEnd(bodies[index]);
+                    var item = switchStatement.Cases[index];
+                    if (item.BindingName is not null)
+                        values[item.BindingName] = builder.BuildExtractValue(selector, 1, "union.payload");
                     var bodyTerminated = EmitStatement(context, builder, function, item.Body, values, storage,
                         storageRequirements, model, llvmFunctions, emittedReturnType, loops);
                     terminated &= bodyTerminated;
-                    if (!bodyTerminated) builder.BuildBr(end);
+                    if (!bodyTerminated)
+                        builder.BuildBr(index + 1 < bodies.Length ? bodies[index + 1] : end);
                 }
+                loops.Pop();
                 builder.PositionAtEnd(end);
                 return terminated;
             }
@@ -686,7 +738,7 @@ public sealed class LlvmModuleGenerator
                 var condition = EmitExpression(context, builder, whileStatement.Condition, values, storage, model, llvmFunctions);
                 builder.BuildCondBr(condition, bodyBlock, endBlock);
                 builder.PositionAtEnd(bodyBlock);
-                loops.Push((endBlock, conditionBlock, _ownedScopes.Count));
+                loops.Push((endBlock, conditionBlock, _ownedScopes.Count, true));
                 var bodyTerminated = EmitStatement(context, builder, function, whileStatement.Body, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
                 loops.Pop();
                 if (!bodyTerminated) builder.BuildBr(conditionBlock);
@@ -711,7 +763,7 @@ public sealed class LlvmModuleGenerator
                 builder.PositionAtEnd(bodyBlock);
                 var forScopeDepth = _ownedScopes.Count;
                 _ownedScopes.Push([]);
-                loops.Push((endBlock, incrementBlock, forScopeDepth));
+                loops.Push((endBlock, incrementBlock, forScopeDepth, true));
                 var bodyTerminated = EmitStatement(context, builder, function, forStatement.Body, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
                 loops.Pop();
                 if (!bodyTerminated) builder.BuildBr(incrementBlock);
@@ -732,8 +784,9 @@ public sealed class LlvmModuleGenerator
                 builder.BuildBr(loops.Peek().Break);
                 return true;
             case ContinueStatement:
-                CleanupOwnedScopesTo(builder, values, storage, model, loops.Peek().ScopeDepth);
-                builder.BuildBr(loops.Peek().Continue);
+                var loop = loops.First(item => item.IsLoop);
+                CleanupOwnedScopesTo(builder, values, storage, model, loop.ScopeDepth);
+                builder.BuildBr(loop.Continue);
                 return true;
             default:
                 throw new InvalidOperationException($"Unsupported statement '{statement.GetType().Name}'.");
@@ -783,6 +836,50 @@ public sealed class LlvmModuleGenerator
             CallExpression call => EmitCall(context, builder, call, values, storage, model, llvmFunctions),
             _ => throw new InvalidOperationException($"Unsupported expression '{expression.GetType().Name}'.")
         };
+
+    private static bool IsNativeSwitchType(SemanticType type) =>
+        type.IsInteger || type.IsEnum || type.Primitive == PrimitiveType.Bool;
+
+    private static LLVMValueRef EmitSwitchConstant(
+        Expression expression,
+        SemanticType selectorType,
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var label = EmitExpression(context, builder, expression, values, storage, model, llvmFunctions);
+        return CoerceValue(builder, label, model.ExpressionTypes[expression], selectorType, model);
+    }
+
+    private static LLVMValueRef EmitSwitchEquality(
+        LLVMBuilderRef builder,
+        LLVMValueRef selector,
+        LLVMValueRef label,
+        SemanticType selectorType,
+        SemanticModel model)
+    {
+        if (selectorType.Kind == SemanticTypeKind.String)
+        {
+            var selectorPointer = builder.BuildExtractValue(selector, 0, "switch.string.pointer");
+            var labelPointer = builder.BuildExtractValue(label, 0, "switch.label.pointer");
+            var selectorLength = builder.BuildExtractValue(selector, 1, "switch.string.length");
+            var labelLength = builder.BuildExtractValue(label, 1, "switch.label.length");
+            var sameLength = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, selectorLength, labelLength,
+                "switch.string.length.match");
+            var contents = builder.BuildCall2(_memcmp.FunctionType, _memcmp,
+                new LLVMValueRef[] { selectorPointer, labelPointer, selectorLength }, "switch.string.compare");
+            var sameContents = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, contents,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false), "switch.string.match");
+            return builder.BuildAnd(sameLength, sameContents, "switch.string.equal");
+        }
+
+        if (selectorType.IsPointer)
+            return builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, selector, label, "switch.pointer.equal");
+        return builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, selector, label, "switch.equal");
+    }
 
     private static LLVMValueRef EmitNewExpression(
         LLVMContextRef context, LLVMBuilderRef builder, NewExpression expression,

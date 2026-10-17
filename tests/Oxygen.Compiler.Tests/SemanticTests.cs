@@ -196,6 +196,24 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AnalyzesIntegerSwitchAndAllowsSwitchBreak()
+    {
+        var model = Analyze(
+            "i32 main() { i32 value = 1; switch (value) { case 0: break; case 1: return 42; default: return 0; } return 1; }");
+
+        Assert.Equal("main", model.MainFunction!.Name);
+    }
+
+    [Fact]
+    public void RejectsDuplicateValueSwitchCases()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { switch (1) { case 1: return 1; case 1: return 2; default: return 0; } }"));
+
+        Assert.Contains("Duplicate switch case value", exception.Message);
+    }
+
+    [Fact]
     public void RejectsInvalidConstantEnumCast()
     {
         var exception = Assert.Throws<SemanticException>(() =>
