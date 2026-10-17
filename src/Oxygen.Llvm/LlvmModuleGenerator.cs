@@ -35,9 +35,18 @@ public static class OxygenNameMangler
             _ when type.Kind == SemanticTypeKind.Pointer => "p" + EncodeType(type.Pointee!),
             _ when type.Kind == SemanticTypeKind.GenericParameter => "g" + type.GenericParameterName!.Length + type.GenericParameterName,
             _ when type.Kind == SemanticTypeKind.Enum => "e" + type.EnumName!.Length + type.EnumName,
-            _ when type.Kind == SemanticTypeKind.Union => "u" + type.EnumName!.Length + type.EnumName,
+            _ when type.Kind == SemanticTypeKind.Union => EncodeNamedType("u", type.EnumName!, type.TypeArguments),
+            _ when type.Kind == SemanticTypeKind.Struct => EncodeNamedType("s", type.StructName!, type.TypeArguments),
+            _ when type.Kind == SemanticTypeKind.Class => EncodeNamedType("c", type.StructName!, type.TypeArguments),
+            _ when type.Kind == SemanticTypeKind.Interface => EncodeNamedType("i", type.StructName!, type.TypeArguments),
             _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
         };
+
+    private static string EncodeNamedType(string prefix, string name, IReadOnlyList<SemanticType>? arguments) =>
+        prefix + name.Length + name +
+        (arguments is { Count: > 0 }
+            ? $"_a{arguments.Count}_{string.Concat(arguments.Select(EncodeType))}"
+            : string.Empty);
 
     public static string MangleConstructor(string moduleName, ClassSymbol cls, ConstructorSymbol constructor) =>
         $"_Ox_v0_m{moduleName.Length}{moduleName}_c{cls.Name.Length}{cls.Name}_p{constructor.Parameters.Count}_{string.Concat(constructor.Parameters.Select(p => EncodeType(p.Type)))}";

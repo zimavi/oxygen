@@ -40,6 +40,34 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void DefaultsEnumUnderlyingTypeToI32()
+    {
+        var unit = Parse("enum Color { Red, Green } i32 main() { return 0; }");
+
+        Assert.Equal(PrimitiveType.I32, Assert.Single(unit.Enums).UnderlyingType);
+    }
+
+    [Fact]
+    public void ParsesGenericAggregateDeclarationsAndTypeUses()
+    {
+        var unit = Parse(
+            "struct Pair<T, U> { T first; U second; } union Result<T> { Ok(T); } " +
+            "i32 main() { Pair<i32, Pair<i64, i32>> value; return 0; }");
+
+        var pair = Assert.Single(unit.Structs);
+        Assert.Equal(["T", "U"], pair.DeclaredTypeParameters.Select(parameter => parameter.Name));
+        var result = Assert.Single(unit.Unions);
+        Assert.Equal(["T"], result.DeclaredTypeParameters.Select(parameter => parameter.Name));
+        var variable = Assert.IsType<VariableDeclarationStatement>(
+            Assert.Single(Assert.Single(unit.Functions).Body.Statements.Take(1)));
+        Assert.Equal("Pair", variable.Type.NamedType);
+        Assert.Equal(["i32", "Pair"], variable.Type.DeclaredTypeArguments
+            .Select(argument => argument.NamedType ?? argument.Primitive?.ToString()?.ToLowerInvariant()));
+        Assert.Equal(["i64", "i32"], variable.Type.DeclaredTypeArguments[1].DeclaredTypeArguments
+            .Select(argument => argument.Primitive?.ToString().ToLowerInvariant()));
+    }
+
+    [Fact]
     public void ParsesTaggedUnionsAndSwitchCases()
     {
         var unit = Parse(

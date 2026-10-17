@@ -163,6 +163,7 @@ public sealed class Parser
         var visibility = ParseVisibility();
         Consume(TokenKind.Class, "Expected 'class'.");
         var name = Consume(TokenKind.Identifier, "Expected a class name.").Lexeme;
+        var typeParameters = ParseTypeParameters();
         string? baseType = null;
         var interfaces = new List<string>();
         if (Match(TokenKind.Colon))
@@ -222,7 +223,7 @@ public sealed class Parser
         Consume(TokenKind.CloseBrace, "Expected '}' after class declaration.");
         Match(TokenKind.Semicolon);
         return new ClassDeclaration(name, baseType, interfaces, fields, methods, constructors, destructor, visibility,
-            location, annotations);
+            location, annotations, typeParameters);
     }
 
     private InterfaceDeclaration ParseInterface()
@@ -232,6 +233,7 @@ public sealed class Parser
         var visibility = ParseVisibility();
         Consume(TokenKind.Interface, "Expected 'interface'.");
         var name = Consume(TokenKind.Identifier, "Expected an interface name.").Lexeme;
+        var typeParameters = ParseTypeParameters();
         Consume(TokenKind.OpenBrace, "Expected '{' after interface name.");
         var methods = new List<FunctionDeclaration>();
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
@@ -247,7 +249,7 @@ public sealed class Parser
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after interface declaration.");
         Match(TokenKind.Semicolon);
-        return new InterfaceDeclaration(name, methods, visibility, location, annotations);
+        return new InterfaceDeclaration(name, methods, visibility, location, annotations, typeParameters);
     }
 
     private IReadOnlyList<ParameterDeclaration> ParseParameters()
@@ -284,6 +286,7 @@ public sealed class Parser
         Match(TokenKind.Private);
         Consume(TokenKind.Union, "Expected 'union'.");
         var name = Consume(TokenKind.Identifier, "Expected a union name.").Lexeme;
+        var typeParameters = ParseTypeParameters();
         Consume(TokenKind.OpenBrace, "Expected '{' after union name.");
         var cases = new List<UnionCaseDeclaration>();
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
@@ -300,7 +303,7 @@ public sealed class Parser
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after union declaration.");
         Match(TokenKind.Semicolon);
-        return new UnionDeclaration(name, cases, visibility, location, annotations);
+        return new UnionDeclaration(name, cases, visibility, location, annotations, typeParameters);
     }
 
     private EnumDeclaration ParseEnum()
@@ -314,12 +317,15 @@ public sealed class Parser
             Match(TokenKind.Private);
         Consume(TokenKind.Enum, "Expected 'enum'.");
         var name = Consume(TokenKind.Identifier, "Expected an enum name.").Lexeme;
-        Consume(TokenKind.Colon, "Expected ':' after enum name.");
-        if (!PrimitiveTypes.TryGetValue(Current.Kind, out var underlying)
-            || underlying is PrimitiveType.F32 or PrimitiveType.F64 or PrimitiveType.Bool or PrimitiveType.Void)
-            throw Error("Enum underlying type must be a fixed-width integer type.", Current);
-        Advance();
-        Consume(TokenKind.OpenBrace, "Expected '{' after enum underlying type.");
+        var underlying = PrimitiveType.I32;
+        if (Match(TokenKind.Colon))
+        {
+            if (!PrimitiveTypes.TryGetValue(Current.Kind, out underlying)
+                || underlying is PrimitiveType.F32 or PrimitiveType.F64 or PrimitiveType.Bool or PrimitiveType.Void)
+                throw Error("Enum underlying type must be a fixed-width integer type.", Current);
+            Advance();
+        }
+        Consume(TokenKind.OpenBrace, "Expected '{' after enum declaration.");
         var members = new List<EnumMemberDeclaration>();
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
@@ -352,6 +358,7 @@ public sealed class Parser
             Match(TokenKind.Private);
         Consume(TokenKind.Struct, "Expected 'struct'.");
         var name = Consume(TokenKind.Identifier, "Expected a struct name.").Lexeme;
+        var typeParameters = ParseTypeParameters();
         Consume(TokenKind.OpenBrace, "Expected '{' after struct name.");
         var fields = new List<StructFieldDeclaration>();
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
@@ -364,7 +371,7 @@ public sealed class Parser
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after struct declaration.");
         Match(TokenKind.Semicolon);
-        return new StructDeclaration(name, fields, visibility, location, annotations);
+        return new StructDeclaration(name, fields, visibility, location, annotations, typeParameters);
     }
 
     private (string? Name, Visibility Visibility) ParseModuleDeclaration()
@@ -519,7 +526,8 @@ public sealed class Parser
             return ParseSwitch(Previous.Location);
 
         if (Check(TokenKind.Const) || Check(TokenKind.Var) || IsType(Current.Kind)
-            || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier))
+            || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier)
+            || IsGenericVariableDeclarationStart())
         {
             return ParseVariableDeclaration();
         }
@@ -883,7 +891,9 @@ public sealed class Parser
         if (Check(TokenKind.Identifier))
         {
             var token = Advance();
-            return ParsePointerSuffix(new TypeSyntax(null, false, token.Location, NamedType: token.Lexeme));
+            var typeArguments = ParseNamedTypeArguments();
+            return ParsePointerSuffix(new TypeSyntax(null, false, token.Location, NamedType: token.Lexeme,
+                TypeArguments: typeArguments));
         }
 
         throw Error(
@@ -907,12 +917,46 @@ public sealed class Parser
         return parameters;
     }
 
+    private bool IsGenericVariableDeclarationStart()
+    {
+        if (!Check(TokenKind.Identifier) || Peek(1).Kind != TokenKind.LessThan)
+            return false;
+
+        var index = _position + 1;
+        var depth = 0;
+        while (index < _tokens.Count)
+        {
+            if (_tokens[index].Kind == TokenKind.LessThan)
+                depth++;
+            else if (_tokens[index].Kind == TokenKind.GreaterThan && --depth == 0)
+                return index + 1 < _tokens.Count && _tokens[index + 1].Kind == TokenKind.Identifier;
+            index++;
+        }
+
+        return false;
+    }
+
     private IReadOnlyList<TypeSyntax>? ParseTypeArguments()
     {
         if (!Check(TokenKind.LessThan) || !LooksLikeTypeArgumentCall())
             return null;
 
         Advance();
+        var arguments = new List<TypeSyntax>();
+        do
+        {
+            arguments.Add(ParseType(allowInferred: false));
+        } while (Match(TokenKind.Comma));
+
+        Consume(TokenKind.GreaterThan, "Expected '>' after generic type arguments.");
+        return arguments;
+    }
+
+    private IReadOnlyList<TypeSyntax>? ParseNamedTypeArguments()
+    {
+        if (!Match(TokenKind.LessThan))
+            return null;
+
         var arguments = new List<TypeSyntax>();
         do
         {

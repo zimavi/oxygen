@@ -1,7 +1,16 @@
 # Enums
 
-Enums are closed sets of named values with an explicit fixed-width integer
-representation:
+Enums are closed sets of named values with a fixed-width integer
+representation. If the underlying type is omitted, it defaults to `i32`:
+
+```oxygen
+enum Status {
+    Ready,
+    Done
+}
+```
+
+An explicit underlying type may still be selected:
 
 ```oxygen
 enum Color : i32 {

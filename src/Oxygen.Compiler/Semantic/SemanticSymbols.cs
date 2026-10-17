@@ -13,9 +13,11 @@ public sealed record StructSymbol(
     StructDeclaration Declaration,
     Visibility Visibility,
     bool IsPacked = false,
-    uint? Alignment = null)
+    uint? Alignment = null,
+    IReadOnlyList<string>? TypeParameters = null)
 {
     public string QualifiedName => $"{ModuleName}.{Name}";
+    public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
 }
 
 public sealed record ClassFieldSymbol(string Name, SemanticType Type, ClassFieldDeclaration Declaration, Visibility Visibility);
@@ -34,16 +36,22 @@ public sealed record ClassSymbol(
     IReadOnlyList<ConstructorSymbol> Constructors,
     DestructorDeclaration? Destructor,
     ClassDeclaration Declaration,
-    Visibility Visibility)
+    Visibility Visibility,
+    IReadOnlyList<string>? TypeParameters = null)
 {
     public string QualifiedName => $"{ModuleName}.{Name}";
+    public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
 }
 public sealed record InterfaceSymbol(
     string Name,
     string ModuleName,
     IReadOnlyList<FunctionSymbol> Methods,
     InterfaceDeclaration Declaration,
-    Visibility Visibility);
+    Visibility Visibility,
+    IReadOnlyList<string>? TypeParameters = null)
+{
+    public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
+}
 
 public sealed record EnumMemberSymbol(string Name, int Value, EnumMemberDeclaration Declaration);
 
@@ -60,8 +68,10 @@ public sealed record EnumSymbol(
 
 public sealed record UnionCaseSymbol(string Name, SemanticType? PayloadType, UnionCaseDeclaration Declaration);
 public sealed record UnionSymbol(
-    string Name, IReadOnlyList<UnionCaseSymbol> Cases, UnionDeclaration Declaration, Visibility Visibility)
+    string Name, IReadOnlyList<UnionCaseSymbol> Cases, UnionDeclaration Declaration, Visibility Visibility,
+    IReadOnlyList<string>? TypeParameters = null)
 {
+    public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
     public IReadOnlyDictionary<string, UnionCaseSymbol> CasesByName =>
         Cases.ToDictionary(item => item.Name, StringComparer.Ordinal);
 }

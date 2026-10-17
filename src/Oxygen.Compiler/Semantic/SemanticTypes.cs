@@ -26,17 +26,22 @@ public sealed record SemanticType(
 {
     public int ArrayLength { get; init; }
     public SemanticType? ElementType { get; init; }
+    public IReadOnlyList<SemanticType>? TypeArguments { get; init; }
     public static SemanticType String => new(SemanticTypeKind.String, null);
 
     public static SemanticType FromPrimitive(PrimitiveType primitive) => new(SemanticTypeKind.Primitive, primitive);
 
     public static SemanticType PointerTo(SemanticType pointee) => new(SemanticTypeKind.Pointer, null, pointee);
 
-    public static SemanticType Struct(string name) => new(SemanticTypeKind.Struct, null, null, name);
-    public static SemanticType Class(string name) => new(SemanticTypeKind.Class, null, null, name);
-    public static SemanticType Interface(string name) => new(SemanticTypeKind.Interface, null, null, name);
+    public static SemanticType Struct(string name, IReadOnlyList<SemanticType>? typeArguments = null) =>
+        new(SemanticTypeKind.Struct, null, null, name) { TypeArguments = typeArguments };
+    public static SemanticType Class(string name, IReadOnlyList<SemanticType>? typeArguments = null) =>
+        new(SemanticTypeKind.Class, null, null, name) { TypeArguments = typeArguments };
+    public static SemanticType Interface(string name, IReadOnlyList<SemanticType>? typeArguments = null) =>
+        new(SemanticTypeKind.Interface, null, null, name) { TypeArguments = typeArguments };
     public static SemanticType Enum(string name) => new(SemanticTypeKind.Enum, null, null, null, name);
-    public static SemanticType Union(string name) => new(SemanticTypeKind.Union, null, null, null, name);
+    public static SemanticType Union(string name, IReadOnlyList<SemanticType>? typeArguments = null) =>
+        new(SemanticTypeKind.Union, null, null, null, name) { TypeArguments = typeArguments };
     public static SemanticType GenericParameter(string name) =>
         new(SemanticTypeKind.GenericParameter, null, null, null, null, name);
     public static SemanticType ArrayOf(SemanticType element, int length) => new(SemanticTypeKind.Array, null) { ElementType = element, ArrayLength = length };
@@ -63,13 +68,18 @@ public sealed record SemanticType(
         {
             SemanticTypeKind.String => "string",
             SemanticTypeKind.Pointer => $"{Pointee}*",
-            SemanticTypeKind.Struct => StructName ?? "struct",
-            SemanticTypeKind.Class => StructName ?? "class",
-            SemanticTypeKind.Interface => StructName ?? "interface",
+            SemanticTypeKind.Struct => FormatNamed(StructName ?? "struct"),
+            SemanticTypeKind.Class => FormatNamed(StructName ?? "class"),
+            SemanticTypeKind.Interface => FormatNamed(StructName ?? "interface"),
             SemanticTypeKind.Array => $"{ElementType}[{ArrayLength}]",
             SemanticTypeKind.Enum => EnumName ?? "enum",
-            SemanticTypeKind.Union => EnumName ?? "union",
+            SemanticTypeKind.Union => FormatNamed(EnumName ?? "union"),
             SemanticTypeKind.GenericParameter => GenericParameterName ?? "generic",
             _ => Primitive?.ToString().ToLowerInvariant() ?? "unknown"
         };
+
+    private string FormatNamed(string name) =>
+        TypeArguments is { Count: > 0 }
+            ? $"{name}<{string.Join(", ", TypeArguments)}>"
+            : name;
 }

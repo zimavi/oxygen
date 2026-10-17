@@ -39,9 +39,11 @@ public sealed record UnionDeclaration(
     IReadOnlyList<UnionCaseDeclaration> Cases,
     Visibility Visibility,
     SourceLocation Location,
-    IReadOnlyList<AnnotationSyntax>? Annotations = null) : SyntaxNode(Location)
+    IReadOnlyList<AnnotationSyntax>? Annotations = null,
+    IReadOnlyList<TypeParameterSyntax>? TypeParameters = null) : SyntaxNode(Location)
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+    public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
 }
 
 public sealed record EnumMemberDeclaration(
@@ -70,9 +72,11 @@ public sealed record StructDeclaration(
     IReadOnlyList<StructFieldDeclaration> Fields,
     Visibility Visibility,
     SourceLocation Location,
-    IReadOnlyList<AnnotationSyntax>? Annotations = null) : SyntaxNode(Location)
+    IReadOnlyList<AnnotationSyntax>? Annotations = null,
+    IReadOnlyList<TypeParameterSyntax>? TypeParameters = null) : SyntaxNode(Location)
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+    public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
 }
 
 public sealed record ClassFieldDeclaration(
@@ -104,9 +108,11 @@ public sealed record ClassDeclaration(
     DestructorDeclaration? Destructor,
     Visibility Visibility,
     SourceLocation Location,
-    IReadOnlyList<AnnotationSyntax>? Annotations = null) : SyntaxNode(Location)
+    IReadOnlyList<AnnotationSyntax>? Annotations = null,
+    IReadOnlyList<TypeParameterSyntax>? TypeParameters = null) : SyntaxNode(Location)
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+    public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
 }
 
 public sealed record InterfaceDeclaration(
@@ -114,9 +120,11 @@ public sealed record InterfaceDeclaration(
     IReadOnlyList<FunctionDeclaration> Methods,
     Visibility Visibility,
     SourceLocation Location,
-    IReadOnlyList<AnnotationSyntax>? Annotations = null) : SyntaxNode(Location)
+    IReadOnlyList<AnnotationSyntax>? Annotations = null,
+    IReadOnlyList<TypeParameterSyntax>? TypeParameters = null) : SyntaxNode(Location)
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
+    public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
 }
 
 public sealed record AnnotationSyntax(
@@ -178,10 +186,12 @@ public sealed record TypeSyntax(
     TypeSyntax? Pointee = null,
     string? NamedType = null,
     int? ArrayLength = null,
-    TypeSyntax? ElementType = null) : SyntaxNode(Location)
+    TypeSyntax? ElementType = null,
+    IReadOnlyList<TypeSyntax>? TypeArguments = null) : SyntaxNode(Location)
 {
     public bool IsPointer => Pointee is not null;
     public bool IsArray => ArrayLength is not null;
+    public IReadOnlyList<TypeSyntax> DeclaredTypeArguments => TypeArguments ?? [];
 }
 
 public abstract record Statement(SourceLocation Location) : SyntaxNode(Location);

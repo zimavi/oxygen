@@ -155,66 +155,82 @@ public sealed class SemanticAnalyzer
             }
             foreach (var declaration in unit.Unions)
             {
+                ValidateTypeParameters(declaration.DeclaredTypeParameters);
                 if (_enumsByName.ContainsKey(declaration.Name) || _structsByName.ContainsKey(declaration.Name)
                     || _unionsByName.ContainsKey(declaration.Name))
                     throw Error($"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
                 var names = new HashSet<string>(StringComparer.Ordinal);
-                var cases = new List<UnionCaseSymbol>();
-                foreach (var item in declaration.Cases)
+                var cases = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                 {
-                    if (!names.Add(item.Name))
-                        throw Error($"Union '{declaration.Name}' contains duplicate case '{item.Name}'", item.Location);
-                    var payloadType = item.PayloadType is null ? null : ResolveType(item.PayloadType);
-                    if (payloadType is not null && payloadType != SemanticType.FromPrimitive(PrimitiveType.I32))
-                        throw Error("Union payloads currently support only i32", item.Location);
-                    cases.Add(new UnionCaseSymbol(item.Name, payloadType, item));
-                }
-                _unionsByName.Add(declaration.Name, new UnionSymbol(declaration.Name, cases, declaration, declaration.Visibility));
+                    var result = new List<UnionCaseSymbol>();
+                    foreach (var item in declaration.Cases)
+                    {
+                        if (!names.Add(item.Name))
+                            throw Error($"Union '{declaration.Name}' contains duplicate case '{item.Name}'", item.Location);
+                        var payloadType = item.PayloadType is null ? null : ResolveType(item.PayloadType);
+                        if (payloadType is not null && !payloadType.IsGenericParameter
+                            && payloadType != SemanticType.FromPrimitive(PrimitiveType.I32))
+                            throw Error("Union payloads currently support only i32", item.Location);
+                        result.Add(new UnionCaseSymbol(item.Name, payloadType, item));
+                    }
+                    return result;
+                });
+                _unionsByName.Add(declaration.Name, new UnionSymbol(declaration.Name, cases, declaration,
+                    declaration.Visibility, declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
             }
             foreach (var declaration in unit.Structs)
             {
+                ValidateTypeParameters(declaration.DeclaredTypeParameters);
                 if (_structsByName.ContainsKey(declaration.Name))
                     throw Error($"A struct named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
                 var annotations = ParseStructLayout(declaration);
                 _structsByName.Add(declaration.Name,
                     new StructSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
-                        annotations.IsPacked, annotations.Alignment));
+                        annotations.IsPacked, annotations.Alignment,
+                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
             }
             foreach (var declaration in unit.Interfaces)
             {
+                ValidateTypeParameters(declaration.DeclaredTypeParameters);
                 EnsureTypeNameAvailable(declaration.Name, declaration.Location);
                 _interfacesByName.Add(declaration.Name,
-                    new InterfaceSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility));
+                    new InterfaceSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
+                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
             }
             foreach (var declaration in unit.Classes)
             {
+                ValidateTypeParameters(declaration.DeclaredTypeParameters);
                 EnsureTypeNameAvailable(declaration.Name, declaration.Location);
                 _classesByName.Add(declaration.Name,
                     new ClassSymbol(declaration.Name, moduleName, declaration.BaseType,
-                        declaration.Interfaces, [], [], [], declaration.Destructor, declaration, declaration.Visibility));
+                        declaration.Interfaces, [], [], [], declaration.Destructor, declaration, declaration.Visibility,
+                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
             }
         }
         foreach (var unit in compilationUnits)
         {
             foreach (var declaration in unit.Interfaces)
             {
-                var methods = declaration.Methods.Select(method =>
-                    CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray();
+                var methods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
+                    declaration.Methods.Select(method =>
+                        CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray());
                 if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1))
                     throw Error($"Interface '{declaration.Name}' contains duplicate methods", declaration.Location);
                 _interfacesByName[declaration.Name] = _interfacesByName[declaration.Name] with { Methods = methods };
             }
             foreach (var declaration in unit.Classes)
             {
-                var fields = declaration.Fields.Select(field =>
-                    new ClassFieldSymbol(field.Name, ResolveType(field.Type), field, field.Visibility)).ToArray();
+                var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
+                    declaration.Fields.Select(field =>
+                        new ClassFieldSymbol(field.Name, ResolveType(field.Type), field, field.Visibility)).ToArray());
                 if (fields.GroupBy(field => field.Name, StringComparer.Ordinal).Any(group => group.Count() > 1))
                     throw Error($"Class '{declaration.Name}' contains duplicate fields", declaration.Location);
-                var methods = declaration.Methods.Select(method =>
-                    CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray();
+                var methods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
+                    declaration.Methods.Select(method =>
+                        CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray());
                 if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1))
                     throw Error($"Class '{declaration.Name}' contains duplicate methods", declaration.Location);
-                var constructors = declaration.Constructors.Select(constructor =>
+                var constructors = WithGenericTypes(declaration.DeclaredTypeParameters, () => declaration.Constructors.Select(constructor =>
                 {
                     var parameterNames = new HashSet<string>(StringComparer.Ordinal);
                     if (constructor.Parameters.Any(parameter => !parameterNames.Add(parameter.Name)))
@@ -223,7 +239,7 @@ public sealed class SemanticAnalyzer
                         constructor.Parameters.Select(parameter => new ParameterSymbol(
                             parameter.Name, ResolveType(parameter.Type), parameter)).ToArray(),
                         constructor, constructor.Visibility);
-                }).ToArray();
+                }).ToArray());
                 if (constructors.GroupBy(constructor => string.Join(",", constructor.Parameters.Select(parameter => parameter.Type)))
                     .Any(group => group.Count() > 1))
                     throw Error($"Class '{declaration.Name}' contains duplicate constructors", declaration.Location);
@@ -244,9 +260,9 @@ public sealed class SemanticAnalyzer
         {
             foreach (var declaration in unit.Structs)
             {
-                var fields = declaration.Fields
+                var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () => declaration.Fields
                     .Select(field => new StructFieldSymbol(field.Name, ResolveType(field.Type), field))
-                    .ToArray();
+                    .ToArray());
                 if (fields.Select(field => field.Name).Distinct(StringComparer.Ordinal).Count() != fields.Length)
                     throw Error($"Struct '{declaration.Name}' contains duplicate fields", declaration.Location,
                         declaration.Name.Length);
@@ -754,7 +770,11 @@ public sealed class SemanticAnalyzer
         if (syntax.NamedType is not null)
         {
             if (_genericTypes.TryGetValue(syntax.NamedType, out var generic))
+            {
+                if (syntax.DeclaredTypeArguments.Count != 0)
+                    throw Error($"Generic parameter '{syntax.NamedType}' cannot have type arguments", syntax.Location);
                 return syntax.IsPointer ? SemanticType.PointerTo(generic) : generic;
+            }
             if (_enumsByName.ContainsKey(syntax.NamedType))
             {
                 if (syntax.IsPointer)
@@ -763,23 +783,28 @@ public sealed class SemanticAnalyzer
             }
             if (_unionsByName.ContainsKey(syntax.NamedType))
             {
+                ValidateTypeArgumentCount(syntax, _unionsByName[syntax.NamedType].DeclaredTypeParameters.Count);
+                var union = SemanticType.Union(syntax.NamedType, ResolveTypeArguments(syntax));
                 if (syntax.IsPointer)
-                    return SemanticType.PointerTo(SemanticType.Union(syntax.NamedType));
-                return SemanticType.Union(syntax.NamedType);
+                    return SemanticType.PointerTo(union);
+                return union;
             }
             if (_classesByName.ContainsKey(syntax.NamedType))
             {
-                var namedClass = SemanticType.Class(syntax.NamedType);
+                ValidateTypeArgumentCount(syntax, _classesByName[syntax.NamedType].DeclaredTypeParameters.Count);
+                var namedClass = SemanticType.Class(syntax.NamedType, ResolveTypeArguments(syntax));
                 return syntax.IsPointer ? SemanticType.PointerTo(namedClass) : namedClass;
             }
             if (_interfacesByName.ContainsKey(syntax.NamedType))
             {
-                var namedInterface = SemanticType.Interface(syntax.NamedType);
+                ValidateTypeArgumentCount(syntax, _interfacesByName[syntax.NamedType].DeclaredTypeParameters.Count);
+                var namedInterface = SemanticType.Interface(syntax.NamedType, ResolveTypeArguments(syntax));
                 return syntax.IsPointer ? SemanticType.PointerTo(namedInterface) : namedInterface;
             }
             if (!_structsByName.ContainsKey(syntax.NamedType))
                 throw Error($"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
-            var named = SemanticType.Struct(syntax.NamedType);
+            ValidateTypeArgumentCount(syntax, _structsByName[syntax.NamedType].DeclaredTypeParameters.Count);
+            var named = SemanticType.Struct(syntax.NamedType, ResolveTypeArguments(syntax));
             return syntax.IsPointer ? SemanticType.PointerTo(named) : named;
         }
 
@@ -790,6 +815,44 @@ public sealed class SemanticAnalyzer
 
         var type = SemanticType.FromPrimitive(syntax.Primitive.Value);
         return syntax.IsPointer ? SemanticType.PointerTo(type) : type;
+    }
+
+    private IReadOnlyList<SemanticType>? ResolveTypeArguments(TypeSyntax syntax) =>
+        syntax.DeclaredTypeArguments.Count == 0
+            ? null
+            : syntax.DeclaredTypeArguments.Select(ResolveType).ToArray();
+
+    private void ValidateTypeArgumentCount(TypeSyntax syntax, int expected)
+    {
+        if (syntax.DeclaredTypeArguments.Count != expected)
+            throw Error($"Type '{syntax.NamedType}' expects {expected} type argument(s), but received " +
+                        $"{syntax.DeclaredTypeArguments.Count}", syntax.Location);
+    }
+
+    private void ValidateTypeParameters(IReadOnlyList<TypeParameterSyntax> parameters)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var parameter in parameters)
+            if (!names.Add(parameter.Name))
+                throw Error($"Duplicate generic type parameter '{parameter.Name}'", parameter.Location,
+                    parameter.Name.Length);
+    }
+
+    private T WithGenericTypes<T>(IReadOnlyList<TypeParameterSyntax> parameters, Func<T> action)
+    {
+        var previous = _genericTypes;
+        _genericTypes = parameters.ToDictionary(
+            parameter => parameter.Name,
+            parameter => SemanticType.GenericParameter(parameter.Name),
+            StringComparer.Ordinal);
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            _genericTypes = previous;
+        }
     }
 
     private static (bool IsPacked, uint? Alignment) ParseStructLayout(StructDeclaration declaration)
@@ -1935,14 +1998,17 @@ public sealed class SemanticAnalyzer
                     ? new TypeSyntax(value.Primitive, false, location)
                     : value.Kind == SemanticTypeKind.String
                         ? new TypeSyntax(null, false, location, IsString: true)
-                        : new TypeSyntax(null, false, location, NamedType: value.StructName ?? value.EnumName ?? value.GenericParameterName);
+                        : new TypeSyntax(null, false, location,
+                            NamedType: value.StructName ?? value.EnumName ?? value.GenericParameterName,
+                            TypeArguments: value.TypeArguments?.Select(argument => FromSemantic(argument, location)).ToArray());
         TypeSyntax Type(TypeSyntax syntax) =>
             syntax.NamedType is not null && types.TryGetValue(syntax.NamedType, out var substituted)
                 ? FromSemantic(substituted, syntax.Location)
                 : syntax with
                 {
                     Pointee = syntax.Pointee is null ? null : Type(syntax.Pointee),
-                    ElementType = syntax.ElementType is null ? null : Type(syntax.ElementType)
+                    ElementType = syntax.ElementType is null ? null : Type(syntax.ElementType),
+                    TypeArguments = syntax.TypeArguments?.Select(Type).ToArray()
                 };
         Expression Expr(Expression expression) => expression switch
         {
