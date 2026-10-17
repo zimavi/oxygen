@@ -180,7 +180,26 @@ public sealed class Parser
         DestructorDeclaration? destructor = null;
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
-            var memberVisibility = ParseVisibility();
+            var memberVisibility = Visibility.Private;
+            var hasVisibility = false;
+            var isVirtual = false;
+            var isOverride = false;
+            while (Current.Kind is TokenKind.Public or TokenKind.Private or TokenKind.Virtual or TokenKind.Override)
+            {
+                if (Current.Kind is TokenKind.Public or TokenKind.Private)
+                {
+                    if (hasVisibility)
+                        throw Error("A class member may specify visibility only once.", Current);
+                    memberVisibility = ParseVisibility();
+                    hasVisibility = true;
+                }
+                else if (Match(TokenKind.Virtual))
+                    isVirtual = true;
+                else if (Match(TokenKind.Override))
+                    isOverride = true;
+            }
+            if (isVirtual && isOverride)
+                throw Error("A class method cannot be both 'virtual' and 'override'.", Current);
             if (Check(TokenKind.Tilde))
             {
                 var destructorLocation = Advance().Location;
@@ -212,10 +231,12 @@ public sealed class Parser
             {
                 var parameters = ParseParameters();
                 methods.Add(new FunctionDeclaration(type, memberName, parameters, ParseBlock(), memberVisibility,
-                    memberLocation));
+                    memberLocation, IsVirtual: isVirtual, IsOverride: isOverride));
             }
             else
             {
+                if (isVirtual || isOverride)
+                    throw Error("Only class methods may use 'virtual' or 'override'.", Current);
                 Consume(TokenKind.Semicolon, "Expected ';' after class field.");
                 fields.Add(new ClassFieldDeclaration(type, memberName, memberVisibility, memberLocation));
             }

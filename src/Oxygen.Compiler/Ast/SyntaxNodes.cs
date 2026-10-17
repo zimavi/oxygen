@@ -145,7 +145,9 @@ public sealed record FunctionDeclaration(
     SourceLocation Location,
     IReadOnlyList<AnnotationSyntax>? Annotations = null,
     bool IsExternalDeclaration = false,
-    IReadOnlyList<TypeParameterSyntax>? TypeParameters = null) : SyntaxNode(Location)
+    IReadOnlyList<TypeParameterSyntax>? TypeParameters = null,
+    bool IsVirtual = false,
+    bool IsOverride = false) : SyntaxNode(Location)
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
     public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];

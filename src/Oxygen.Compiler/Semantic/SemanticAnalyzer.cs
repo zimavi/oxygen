@@ -248,7 +248,7 @@ public sealed class SemanticAnalyzer
                 if (constructors.Length == 0)
                     constructors = [new ConstructorSymbol(declaration.Name, [],
                         new ConstructorDeclaration(declaration.Name, [], new BlockStatement([], declaration.Location),
-                            Visibility.Public, declaration.Location), Visibility.Public)];
+                            Visibility.Public, declaration.Location), Visibility.Public, true)];
                 if (declaration.Destructor is not null && declaration.Destructor.ClassName != declaration.Name)
                     throw Error($"Destructor name must be '{declaration.Name}'", declaration.Destructor.Location);
                 _classesByName[declaration.Name] = _classesByName[declaration.Name] with
@@ -258,6 +258,11 @@ public sealed class SemanticAnalyzer
             }
         }
         ValidateClassHierarchy();
+        foreach (var className in _classesByName.Keys.ToArray())
+            _classesByName[className] = _classesByName[className] with
+            {
+                Fields = GetClassFields(className, [])
+            };
         foreach (var unit in compilationUnits)
         {
             foreach (var declaration in unit.Structs)
@@ -572,6 +577,24 @@ public sealed class SemanticAnalyzer
                     throw Error($"Interface '{interfaceName}' is not declared", classSymbol.Declaration.Location);
             var inherited = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
                 ? [] : GetClassMethods(classSymbol.BaseTypeName, []);
+            foreach (var method in classSymbol.Methods)
+            {
+                var overridden = inherited.FirstOrDefault(candidate => MethodSignature(candidate) == MethodSignature(method));
+                if (method.Declaration.IsOverride)
+                {
+                    if (overridden is null)
+                        throw Error($"Method '{method.Name}' is marked 'override' but does not override a base method",
+                            method.Declaration.Location, method.Name.Length);
+                    if (!overridden.Declaration.IsVirtual && !overridden.Declaration.IsOverride)
+                        throw Error($"Method '{method.Name}' cannot override non-virtual method '{overridden.Name}'",
+                            method.Declaration.Location, method.Name.Length);
+                }
+                else if (overridden is not null && (overridden.Declaration.IsVirtual || overridden.Declaration.IsOverride))
+                {
+                    throw Error($"Method '{method.Name}' overrides a virtual method and must be marked 'override'",
+                        method.Declaration.Location, method.Name.Length);
+                }
+            }
             foreach (var contract in interfaceNames.SelectMany(name => GetInterfaceMethods(name, [])))
             {
                 if (!classSymbol.Methods.Concat(inherited).Any(method =>
@@ -591,7 +614,29 @@ public sealed class SemanticAnalyzer
         var cls = _classesByName[name];
         var methods = cls.BaseTypeName is null ? [] : GetClassMethods(cls.BaseTypeName, active);
         active.Remove(name);
-        return methods.Concat(cls.Methods).ToArray();
+        var result = methods.ToList();
+        foreach (var method in cls.Methods)
+        {
+            var index = result.FindIndex(candidate => MethodSignature(candidate) == MethodSignature(method));
+            if (index >= 0) result[index] = method;
+            else result.Add(method);
+        }
+        return result;
+    }
+
+    private IReadOnlyList<ClassFieldSymbol> GetClassFields(string name, HashSet<string> active)
+    {
+        if (!active.Add(name))
+            throw Error($"Class inheritance cycle involving '{name}'", _classesByName[name].Declaration.Location);
+        var cls = _classesByName[name];
+        var inherited = cls.BaseTypeName is not null && _classesByName.ContainsKey(cls.BaseTypeName)
+            ? GetClassFields(cls.BaseTypeName, active)
+            : [];
+        active.Remove(name);
+        var fields = inherited.Concat(cls.Fields).ToArray();
+        if (fields.GroupBy(field => field.Name, StringComparer.Ordinal).Any(group => group.Count() > 1))
+            throw Error($"Class '{name}' contains a field that hides an inherited field", cls.Declaration.Location);
+        return fields;
     }
 
     private IReadOnlyList<FunctionSymbol> GetInterfaceMethods(string name, HashSet<string> active)

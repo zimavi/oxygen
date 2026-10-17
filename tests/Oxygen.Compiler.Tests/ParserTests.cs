@@ -26,6 +26,18 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesVirtualAndOverrideMethodModifiers()
+    {
+        var unit = Parse("class Base { public virtual i32 value() { return 1; } } " +
+                         "class Child : Base { override public i32 value() { return 2; } } " +
+                         "i32 main() { return 0; }");
+
+        Assert.True(unit.Classes[0].Methods[0].IsVirtual);
+        Assert.False(unit.Classes[0].Methods[0].IsOverride);
+        Assert.True(unit.Classes[1].Methods[0].IsOverride);
+    }
+
+    [Fact]
     public void ParsesRightAssociativeConditionalExpressions()
     {
         var unit = Parse("i32 main() { return true ? 1 : false ? 2 : 3; }");

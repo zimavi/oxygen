@@ -60,6 +60,23 @@ continues to work when no parameter or local has the same name; use `this.field`
 to explicitly access the field when a name is shadowed. `this` is only valid in
 class instance bodies, not in free functions.
 
+Class methods can opt into vtable dispatch with `virtual`. An overriding
+method must use `override`; overriding a non-virtual method, or omitting
+`override` when replacing a virtual method, is a semantic error:
+
+```oxygen
+class Animal {
+    virtual i32 value() { return 1; }
+}
+
+class Cat : Animal {
+    override i32 value() { return 2; }
+}
+```
+
+Calls through a class reference use the object's vtable and select the
+most-derived override.
+
 The current LLVM backend represents a class instance as a heap pointer to an
 object layout containing a vtable slot followed by class fields. It emits
 allocation, field access, constructors, destructors, and direct class-method
@@ -87,6 +104,11 @@ The reverse conversion is a checked explicit cast:
 Cat cat = cast<Cat>(animal);
 Cat sameCat = cast<Cat>(printable);
 ```
+
+When a class has no explicit constructor, the compiler synthesizes a public
+parameterless constructor. It zero-initializes every declared and inherited
+field using a valid type-specific zero value: numeric zero, `false`, null
+references and pointers, or a zero aggregate.
 
 Runtime type patterns use `is` and can optionally bind the checked value:
 
@@ -117,5 +139,6 @@ manual pointer management remains unchanged.
 
 Destructor dispatch is direct for the declared class. Virtual destructor
 dispatch and partially initialized-constructor cleanup are not yet enabled.
-Interface vtable population and indirect interface calls are also pending;
-interface fat values must not be treated as directly callable class pointers.
+Interface vtable population and indirect interface calls are also not yet
+enabled; interface fat values must not be treated as directly callable class
+pointers.

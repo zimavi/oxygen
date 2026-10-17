@@ -11,6 +11,15 @@ namespace Oxygen.Compiler.Tests;
 
 public sealed class SemanticTests
 {
+    [Fact]
+    public void RequiresOverrideForVirtualBaseMethod()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Base { virtual i32 value() { return 1; } } " +
+            "class Child : Base { i32 value() { return 2; } } i32 main() { return 0; }"));
+        Assert.Contains("must be marked 'override'", exception.Message);
+    }
+
     private readonly Tokenizer _tokenizer = new(Log.Logger);
 
     [Fact]

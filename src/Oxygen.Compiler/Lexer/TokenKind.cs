@@ -23,6 +23,8 @@ public enum TokenKind
     Var,
     Const,
     Extern,
+    Virtual,
+    Override,
     I8,
     I16,
     I32,

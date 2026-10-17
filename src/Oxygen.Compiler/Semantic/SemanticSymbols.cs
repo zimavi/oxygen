@@ -25,7 +25,8 @@ public sealed record ConstructorSymbol(
     string ClassName,
     IReadOnlyList<ParameterSymbol> Parameters,
     ConstructorDeclaration Declaration,
-    Visibility Visibility);
+    Visibility Visibility,
+    bool IsSynthesized = false);
 public sealed record ClassSymbol(
     string Name,
     string ModuleName,

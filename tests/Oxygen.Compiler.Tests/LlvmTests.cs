@@ -223,6 +223,37 @@ public sealed class LlvmTests
     }
 
     [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsSynthesizedConstructorAggregateZeroInitialization()
+    {
+        var model = Analyze(
+            "struct Point { i32 x; bool visible; } " +
+            "class Holder { i32 count; Point point; string name; } " +
+            "i32 main() { Holder value = new Holder(); return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("store i32 0", ir);
+        Assert.Contains("zeroinitializer", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsVirtualClassCallThroughVtableSlot()
+    {
+        var model = Analyze(
+            "class Base { virtual i32 value() { return 1; } } " +
+            "class Child : Base { override i32 value() { return 2; } } " +
+            "i32 main() { Base value = new Child(); return value.value(); }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("vtable.slot", ir);
+        Assert.Contains("call i32", ir);
+        Assert.Contains("bitcast", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
     public void EmitsArrayElementPassedToAFunction()
     {
         var model = Analyze(
