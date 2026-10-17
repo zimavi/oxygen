@@ -27,6 +27,8 @@ public sealed class Tokenizer
             ["import"] = TokenKind.Import,
             ["public"] = TokenKind.Public,
             ["private"] = TokenKind.Private,
+            ["protected"] = TokenKind.Protected,
+            ["internal"] = TokenKind.Internal,
             ["var"] = TokenKind.Var,
             ["const"] = TokenKind.Const,
             ["extern"] = TokenKind.Extern,

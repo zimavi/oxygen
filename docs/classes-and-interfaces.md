@@ -77,11 +77,79 @@ class Cat : Animal {
 Calls through a class reference use the object's vtable and select the
 most-derived override.
 
+## Properties
+
+Classes and interfaces may declare C#-style properties.  Auto accessors use
+the class storage layout (and therefore have the same native behavior as a
+backing field). The backend emits explicit callable getter/setter functions
+for both auto and body-backed accessors:
+
+```oxygen
+class Account {
+    public i32 Balance { get; private set; }
+    public i32 Id { get; init; }
+}
+
+interface Named {
+    string Name { get; }
+}
+```
+
+An accessor may be an auto accessor, terminated by `;`, or may contain an
+explicit body:
+
+```oxygen
+class Account {
+    i32 balance;
+
+    public i32 Balance {
+        get { return balance; }
+        private set { balance = value; }
+    }
+}
+```
+
+The supported accessors are `get`, `set`, and constructor-only `init`. A
+property may declare at most one accessor of each kind. `set` and `init` are
+alternative write accessors; a property cannot declare both. An `init`
+accessor may be assigned from a constructor, but not from an ordinary method
+or after construction.
+
+An interface property declares an accessor contract and never contributes
+storage. An implementing class must provide compatible accessors, either as
+auto accessors or with explicit bodies:
+
+```oxygen
+interface Named {
+    string Name { get; }
+}
+
+class Person : Named {
+    public string Name { get; }
+}
+```
+
+Property reads use the getter and assignments use the setter or constructor
+initializer. This remains true for explicit bodies, inherited properties,
+base-typed references, and interface-typed references.
+
+Accessor visibility may be specified independently with `public`, `private`,
+`protected`, or `internal`.  Property names participate in class/interface
+contract checking and auto properties are lowered as backing storage. A
+property with `init` may only be assigned from a constructor; a property with
+only `get` is read-only. Accessor visibility is checked at each use site.
+Virtual properties follow the same `virtual`/`override` rules as virtual
+methods, including replacement of inherited backing storage. Virtual accessor
+calls share the object dispatch slots used by virtual methods.
+
 The current LLVM backend represents a class instance as a heap pointer to an
 object layout containing a vtable slot followed by class fields. It emits
 allocation, field access, constructors, destructors, and direct class-method
-calls. Interface values have a two-word object/table representation reserved
-for dynamic dispatch.
+calls. Interface values use a two-word object/table representation. The first word
+is the object pointer and the second points at an internal per-class,
+per-interface callable table. Method calls and property getter/setter calls
+load their implementation from that table; class-to-interface casts and
+pattern bindings install the appropriate table pointer.
 
 ## Value classes and storage
 
@@ -180,6 +248,10 @@ manual pointer management remains unchanged.
 
 Destructor dispatch is direct for the declared class. Virtual destructor
 dispatch and partially initialized-constructor cleanup are not yet enabled.
-Interface vtable population and indirect interface calls are also not yet
-enabled; interface fat values must not be treated as directly callable class
-pointers.
+Interface method and property declarations use an explicit receiver ABI.
+Interface calls extract the object word from the fat value before invoking the
+selected callable. Table entries contain the generated class implementation
+symbols, including synthesized auto-property accessors and explicit accessor
+functions. The table is selected by the class-to-interface conversion, so
+calls through an interface reference use the implementation belonging to the
+runtime class.

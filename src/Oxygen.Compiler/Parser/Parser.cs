@@ -175,6 +175,7 @@ public sealed partial class Parser
 
         Consume(TokenKind.OpenBrace, "Expected '{' after class declaration.");
         var fields = new List<ClassFieldDeclaration>();
+        var properties = new List<PropertyDeclaration>();
         var methods = new List<FunctionDeclaration>();
         var constructors = new List<ConstructorDeclaration>();
         DestructorDeclaration? destructor = null;
@@ -184,9 +185,10 @@ public sealed partial class Parser
             var hasVisibility = false;
             var isVirtual = false;
             var isOverride = false;
-            while (Current.Kind is TokenKind.Public or TokenKind.Private or TokenKind.Virtual or TokenKind.Override)
+            while (Current.Kind is TokenKind.Public or TokenKind.Private or TokenKind.Protected or TokenKind.Internal
+                   or TokenKind.Virtual or TokenKind.Override)
             {
-                if (Current.Kind is TokenKind.Public or TokenKind.Private)
+                if (Current.Kind is TokenKind.Public or TokenKind.Private or TokenKind.Protected or TokenKind.Internal)
                 {
                     if (hasVisibility)
                         throw Error("A class member may specify visibility only once.", Current);
@@ -226,12 +228,16 @@ public sealed partial class Parser
 
             var memberLocation = Current.Location;
             var type = ParseType(allowInferred: false);
-            var memberName = Consume(TokenKind.Identifier, "Expected a class member name.").Lexeme;
+            var memberName = ConsumeIdentifierLike("Expected a class member name.").Lexeme;
             if (Check(TokenKind.OpenParenthesis))
             {
                 var parameters = ParseParameters();
                 methods.Add(new FunctionDeclaration(type, memberName, parameters, ParseBlock(), memberVisibility,
                     memberLocation, IsVirtual: isVirtual, IsOverride: isOverride));
+            }
+            else if (Check(TokenKind.OpenBrace))
+            {
+                properties.Add(ParseProperty(type, memberName, memberVisibility, memberLocation, isVirtual, isOverride));
             }
             else
             {
@@ -243,7 +249,7 @@ public sealed partial class Parser
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after class declaration.");
         Match(TokenKind.Semicolon);
-        return new ClassDeclaration(name, baseType, interfaces, fields, methods, constructors, destructor, visibility,
+        return new ClassDeclaration(name, baseType, interfaces, fields, properties, methods, constructors, destructor, visibility,
             location, annotations, typeParameters);
     }
 
@@ -257,12 +263,18 @@ public sealed partial class Parser
         var typeParameters = ParseTypeParameters();
         Consume(TokenKind.OpenBrace, "Expected '{' after interface name.");
         var methods = new List<FunctionDeclaration>();
+        var properties = new List<PropertyDeclaration>();
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
             var memberVisibility = ParseVisibility();
             var methodLocation = Current.Location;
             var returnType = ParseType(allowInferred: false);
-            var methodName = Consume(TokenKind.Identifier, "Expected an interface method name.").Lexeme;
+            var methodName = ConsumeIdentifierLike("Expected an interface method name.").Lexeme;
+            if (Check(TokenKind.OpenBrace))
+            {
+                properties.Add(ParseProperty(returnType, methodName, memberVisibility, methodLocation));
+                continue;
+            }
             var parameters = ParseParameters();
             Consume(TokenKind.Semicolon, "Expected ';' after interface method.");
             methods.Add(new FunctionDeclaration(returnType, methodName, parameters,
@@ -270,7 +282,55 @@ public sealed partial class Parser
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after interface declaration.");
         Match(TokenKind.Semicolon);
-        return new InterfaceDeclaration(name, methods, visibility, location, annotations, typeParameters);
+        return new InterfaceDeclaration(name, methods, properties, visibility, location, annotations, typeParameters);
+    }
+
+    private PropertyDeclaration ParseProperty(TypeSyntax type, string name, Visibility visibility,
+        SourceLocation location, bool isVirtual = false, bool isOverride = false)
+    {
+        Consume(TokenKind.OpenBrace, "Expected '{' after property name.");
+        var accessors = new List<PropertyAccessorDeclaration>();
+        while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
+        {
+            var accessorVisibility = visibility;
+            if (Current.Kind is TokenKind.Public or TokenKind.Private or TokenKind.Protected or TokenKind.Internal)
+                accessorVisibility = ParseVisibility();
+            var accessorToken = Advance();
+            var accessorName = accessorToken.Lexeme;
+            var kind = accessorToken.Kind switch
+            {
+                TokenKind.Get => PropertyAccessorKind.Get,
+                TokenKind.Set => PropertyAccessorKind.Set,
+                TokenKind.Init => PropertyAccessorKind.Init,
+                TokenKind.Identifier when accessorName == "get" => PropertyAccessorKind.Get,
+                TokenKind.Identifier when accessorName == "set" => PropertyAccessorKind.Set,
+                TokenKind.Identifier when accessorName == "init" => PropertyAccessorKind.Init,
+                _ => throw Error("Expected 'get', 'set', or 'init' in property.", accessorToken)
+            };
+            BlockStatement? body = null;
+            var auto = false;
+            if (Match(TokenKind.Semicolon))
+                auto = true;
+            else
+                body = ParseBlock();
+            accessors.Add(new PropertyAccessorDeclaration(kind, accessorVisibility, body, auto, accessorToken.Location));
+        }
+        Consume(TokenKind.CloseBrace, "Expected '}' after property accessors.");
+        Match(TokenKind.Semicolon);
+        if (accessors.Count == 0)
+            throw Error("A property must declare at least one accessor.", Current);
+        if (accessors.Count(a => a.Kind == PropertyAccessorKind.Get) > 1
+            || accessors.Count(a => a.Kind == PropertyAccessorKind.Set) > 1
+            || accessors.Count(a => a.Kind == PropertyAccessorKind.Init) > 1)
+            throw Error("A property cannot declare the same accessor more than once.", Current);
+        return new PropertyDeclaration(type, name, visibility, accessors, location, isVirtual, isOverride);
+    }
+
+    private Token ConsumeIdentifierLike(string message)
+    {
+        if (Current.Kind is TokenKind.Identifier or TokenKind.Get or TokenKind.Set or TokenKind.Init)
+            return Advance();
+        throw Error(message, Current);
     }
 
     private IReadOnlyList<ParameterDeclaration> ParseParameters()
@@ -295,6 +355,10 @@ public sealed partial class Parser
     {
         if (Match(TokenKind.Public))
             return Visibility.Public;
+        if (Match(TokenKind.Protected))
+            return Visibility.Protected;
+        if (Match(TokenKind.Internal))
+            return Visibility.Internal;
         Match(TokenKind.Private);
         return Visibility.Private;
     }
@@ -847,7 +911,7 @@ public sealed partial class Parser
             }
             else if (Match(TokenKind.Dot))
             {
-                var member = Consume(TokenKind.Identifier, "Expected an identifier after '.'.");
+                var member = ConsumeIdentifierLike("Expected an identifier after '.'.");
                 expression = new MemberAccessExpression(expression, member.Lexeme, expression.Location);
             }
             else if (Match(TokenKind.PlusPlus))
@@ -897,7 +961,7 @@ public sealed partial class Parser
                 var name = token.Lexeme;
                 var qualifiedParts = new List<string> { name };
                 while (Match(TokenKind.Dot))
-                    qualifiedParts.Add(Consume(TokenKind.Identifier, "Expected an identifier after '.'.").Lexeme);
+                    qualifiedParts.Add(ConsumeIdentifierLike("Expected an identifier after '.'.").Lexeme);
                 name = string.Join(".", qualifiedParts);
 
                 var typeArguments = ParseTypeArguments();

@@ -364,6 +364,39 @@ public sealed class LlvmTests
     }
 
     [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsCallableInterfaceMethodTableAndIndirectCall()
+    {
+        var model = Analyze(
+            "interface Printable { i32 value(); } " +
+            "class Item : Printable { i32 value() { return 7; } } " +
+            "i32 main() { Printable printable = new Item(); return printable.value(); }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("oxygen.interface.table.Item.Printable", ir);
+        Assert.Contains("interface.slot", ir);
+        Assert.Contains("interface.call", ir);
+        Assert.Contains("load ptr", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsCallableInterfacePropertyTableAndIndirectAccessors()
+    {
+        var model = Analyze(
+            "interface Named { i32 Value { get; set; } } " +
+            "class Item : Named { i32 Value { get; set; } } " +
+            "i32 main() { Named named = new Item(); named.Value = 3; return named.Value; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("oxygen.interface.table.Item.Named", ir);
+        Assert.Contains("interface.property.slot", ir);
+        Assert.Contains("interface.property.call", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
     public void EmitsOneDestructorForAnInnerClassTransferredToAnOuterLocal()
     {
         var model = Analyze(

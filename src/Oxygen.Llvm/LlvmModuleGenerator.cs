@@ -18,6 +18,10 @@ public sealed class LlvmModuleGenerator
     private static readonly Dictionary<string, LLVMValueRef> _runtimeTypeInfos = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, LLVMValueRef> _constructors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, LLVMValueRef> _destructors = new(StringComparer.Ordinal);
+    private static readonly Dictionary<(string ClassName, string PropertyName, PropertyAccessorKind Kind), FunctionSymbol> _propertyAccessors = new();
+    private static readonly HashSet<FunctionSymbol> _accessorSymbols = [];
+    private static readonly Dictionary<(string ClassName, string InterfaceName), LLVMValueRef> _interfaceTables = new();
+    private static readonly Dictionary<string, IReadOnlyList<FunctionSymbol>> _interfaceSlots = new(StringComparer.Ordinal);
     private static int _virtualSlotCount;
     private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type);
     private static Stack<List<OwnedLocal>> _ownedScopes = new();
@@ -44,8 +48,17 @@ public sealed class LlvmModuleGenerator
         var context = LLVMContextRef.Create();
         var module = context.CreateModuleWithName(moduleName);
         var builder = context.CreateBuilder();
+        _propertyAccessors.Clear();
+        _accessorSymbols.Clear();
+        _interfaceTables.Clear();
+        _interfaceSlots.Clear();
+        var accessorSymbols = model.Classes.Values.SelectMany(cls => CreatePropertyAccessorSymbols(cls, model))
+            .Concat(model.Interfaces.Values.SelectMany(iface => CreateInterfaceAccessorSymbols(iface))).ToList();
         var symbols = model.Functions.Values
             .Concat(model.ResolvedCalls.Values)
+            .Concat(model.Classes.Values.SelectMany(cls => cls.Methods))
+            .Concat(model.Interfaces.Values.SelectMany(iface => iface.Methods))
+            .Concat(accessorSymbols)
             .Where(symbol => !symbol.IsGeneric)
             .Distinct()
             .ToList();
@@ -79,6 +92,13 @@ public sealed class LlvmModuleGenerator
             {
                 var functionType = ToLlvmFunctionType(symbol, model);
                 llvmFunctions[symbol] = module.AddFunction(OxygenNameMangler.Mangle(symbol.ModuleName, symbol), functionType);
+            }
+            foreach (var iface in model.Interfaces.Values)
+            {
+                var slots = GetInterfaceSlots(iface);
+                _interfaceSlots[iface.Name] = slots;
+                foreach (var cls in model.Classes.Values.Where(cls => ClassImplementsInterface(cls.Name, iface.Name, model)))
+                    AddInterfaceTable(module, cls, iface, slots, llvmFunctions, model);
             }
             var allocType = LLVMTypeRef.CreateFunction(
                 LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), [LLVMTypeRef.Int64], false);
@@ -210,8 +230,162 @@ public sealed class LlvmModuleGenerator
             if (slot >= 0) methods[slot] = method;
             else methods.Add(method);
         }
+        foreach (var accessor in GetClassAccessors(cls, model)
+                     .Where(accessor => accessor.Declaration.IsVirtual || accessor.Declaration.IsOverride))
+        {
+            var slot = methods.FindIndex(candidate => candidate.Name == accessor.Name
+                && candidate.Parameters.Select(parameter => parameter.Type)
+                    .SequenceEqual(accessor.Parameters.Select(parameter => parameter.Type)));
+            if (slot >= 0) methods[slot] = accessor;
+            else methods.Add(accessor);
+        }
         return methods;
     }
+
+    private static IReadOnlyList<FunctionSymbol> GetClassAccessors(ClassSymbol cls, SemanticModel model) =>
+        cls.DeclaredProperties.SelectMany(property => property.Declaration.Accessors
+            .Where(accessor => accessor.Kind is PropertyAccessorKind.Get or PropertyAccessorKind.Set)
+            .Select(accessor => _propertyAccessors[(cls.Name, property.Name, accessor.Kind)])).ToArray();
+
+    private static IEnumerable<FunctionSymbol> CreatePropertyAccessorSymbols(ClassSymbol cls, SemanticModel model)
+    {
+        foreach (var property in cls.DeclaredProperties)
+        foreach (var accessor in property.Declaration.Accessors.Where(accessor =>
+                     accessor.Kind is PropertyAccessorKind.Get or PropertyAccessorKind.Set))
+        {
+            var name = accessor.Kind == PropertyAccessorKind.Get
+                ? $"get_{property.Name}" : $"set_{property.Name}";
+            var parameters = accessor.Kind == PropertyAccessorKind.Set
+                ? new[] { new ParameterSymbol("value", property.Type,
+                    new ParameterDeclaration(ToTypeSyntax(property.Type, accessor.Location), "value", accessor.Location)) }
+                : Array.Empty<ParameterSymbol>();
+            var declaration = new FunctionDeclaration(
+                accessor.Kind == PropertyAccessorKind.Get
+                    ? ToTypeSyntax(property.Type, accessor.Location)
+                    : new TypeSyntax(PrimitiveType.Void, false, accessor.Location),
+                name, parameters.Select(parameter => parameter.Declaration).ToArray(),
+                accessor.Body ?? new BlockStatement([], accessor.Location), accessor.Visibility, accessor.Location,
+                IsVirtual: property.Declaration.IsVirtual, IsOverride: property.Declaration.IsOverride);
+            var symbol = new FunctionSymbol(name,
+                accessor.Kind == PropertyAccessorKind.Get ? property.Type : SemanticType.FromPrimitive(PrimitiveType.Void),
+                parameters, declaration, $"{cls.ModuleName}.{cls.Name}", accessor.Visibility);
+            _propertyAccessors[(cls.Name, property.Name, accessor.Kind)] = symbol;
+            _accessorSymbols.Add(symbol);
+            yield return symbol;
+        }
+    }
+
+    private static IEnumerable<FunctionSymbol> CreateInterfaceAccessorSymbols(InterfaceSymbol iface)
+        {
+            foreach (var property in iface.DeclaredProperties)
+            foreach (var accessor in property.Declaration.Accessors.Where(accessor =>
+                         accessor.Kind is PropertyAccessorKind.Get or PropertyAccessorKind.Set))
+            {
+                var name = accessor.Kind == PropertyAccessorKind.Get
+                    ? $"get_{property.Name}" : $"set_{property.Name}";
+                var parameters = accessor.Kind == PropertyAccessorKind.Set
+                    ? new[] { new ParameterSymbol("value", property.Type,
+                        new ParameterDeclaration(ToTypeSyntax(property.Type, accessor.Location), "value", accessor.Location)) }
+                    : Array.Empty<ParameterSymbol>();
+                var declaration = new FunctionDeclaration(
+                    accessor.Kind == PropertyAccessorKind.Get
+                        ? ToTypeSyntax(property.Type, accessor.Location)
+                        : new TypeSyntax(PrimitiveType.Void, false, accessor.Location),
+                    name, parameters.Select(parameter => parameter.Declaration).ToArray(),
+                    new BlockStatement([], accessor.Location), accessor.Visibility, accessor.Location,
+                    IsExternalDeclaration: true);
+                var symbol = new FunctionSymbol(name,
+                    accessor.Kind == PropertyAccessorKind.Get ? property.Type : SemanticType.FromPrimitive(PrimitiveType.Void),
+                    parameters, declaration, $"{iface.ModuleName}.{iface.Name}", accessor.Visibility,
+                    IsExternal: true);
+                _propertyAccessors[(iface.Name, property.Name, accessor.Kind)] = symbol;
+                _accessorSymbols.Add(symbol);
+                yield return symbol;
+            }
+        }
+
+    private static IReadOnlyList<FunctionSymbol> GetInterfaceSlots(InterfaceSymbol iface)
+        {
+            var slots = iface.Methods.ToList();
+            foreach (var property in iface.DeclaredProperties)
+            foreach (var accessor in property.Declaration.Accessors.Where(accessor =>
+                         accessor.Kind is PropertyAccessorKind.Get or PropertyAccessorKind.Set))
+                if (_propertyAccessors.TryGetValue((iface.Name, property.Name, accessor.Kind), out var symbol))
+                    slots.Add(symbol);
+            return slots;
+        }
+
+    private static void AddInterfaceTable(
+            LLVMModuleRef module,
+            ClassSymbol cls,
+            InterfaceSymbol iface,
+            IReadOnlyList<FunctionSymbol> slots,
+            IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
+            SemanticModel model)
+        {
+            var entries = slots.Select(slot => ResolveInterfaceImplementation(cls, iface, slot, model))
+                .Select(implementation => LLVMValueRef.CreateConstBitCast(
+                    llvmFunctions[implementation], LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)))
+                .ToArray();
+            var tableType = LLVMTypeRef.CreateArray(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), (uint)Math.Max(1, entries.Length));
+            var initializer = entries.Length == 0
+                ? LLVMValueRef.CreateConstNull(tableType)
+                : LLVMValueRef.CreateConstArray(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), entries);
+            var table = module.AddGlobal(tableType, $"oxygen.interface.table.{cls.Name}.{iface.Name}");
+            table.Linkage = LLVMLinkage.LLVMInternalLinkage;
+            table.Initializer = initializer;
+            _interfaceTables[(cls.Name, iface.Name)] = table;
+        }
+
+    private static FunctionSymbol ResolveInterfaceImplementation(ClassSymbol cls, InterfaceSymbol iface, FunctionSymbol contract,
+            SemanticModel model)
+        {
+            if (contract.Name.StartsWith("get_", StringComparison.Ordinal)
+                || contract.Name.StartsWith("set_", StringComparison.Ordinal))
+            {
+                var propertyName = contract.Name[4..];
+                var kind = contract.Name.StartsWith("get_", StringComparison.Ordinal)
+                    ? PropertyAccessorKind.Get : PropertyAccessorKind.Set;
+                var (owner, property) = FindClassProperty(cls, propertyName, model);
+                return _propertyAccessors[(owner.Name, property.Name, kind)];
+            }
+            return GetClassMethodsForDispatch(cls, model)
+                .First(method => method.Name == contract.Name
+                    && method.Parameters.Select(parameter => parameter.Type)
+                        .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type)));
+        }
+
+    private static (ClassSymbol Owner, PropertySymbol Property) FindClassProperty(ClassSymbol cls, string name, SemanticModel model)
+        {
+            var property = cls.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == name);
+            if (property is not null) return (cls, property);
+            if (cls.BaseTypeName is not null && model.Classes.TryGetValue(cls.BaseTypeName, out var baseClass))
+                return FindClassProperty(baseClass, name, model);
+            throw new InvalidOperationException($"Class '{cls.Name}' has no property '{name}'.");
+        }
+
+    private static IReadOnlyList<FunctionSymbol> GetClassMethodsForDispatch(ClassSymbol cls, SemanticModel model)
+        {
+            var methods = cls.BaseTypeName is not null && model.Classes.TryGetValue(cls.BaseTypeName, out var baseClass)
+                ? GetClassMethodsForDispatch(baseClass, model).ToList()
+                : [];
+            foreach (var method in cls.Methods)
+            {
+                var index = methods.FindIndex(candidate => candidate.Name == method.Name
+                    && candidate.Parameters.Select(parameter => parameter.Type)
+                        .SequenceEqual(method.Parameters.Select(parameter => parameter.Type)));
+                if (index >= 0) methods[index] = method;
+                else methods.Add(method);
+            }
+            return methods;
+        }
+
+    private static TypeSyntax ToTypeSyntax(SemanticType type, SourceLocation location) =>
+        type.Kind == SemanticTypeKind.Primitive
+            ? new TypeSyntax(type.Primitive, false, location)
+            : type.Kind == SemanticTypeKind.String
+                ? new TypeSyntax(null, false, location, IsString: true)
+                : new TypeSyntax(null, false, location, NamedType: type.StructName ?? type.EnumName);
 
     private static int FieldOffset(ClassSymbol cls, SemanticModel model, int fieldIndex) =>
         cls.IsValue ? fieldIndex : 1 + _virtualSlotCount + fieldIndex;
@@ -462,6 +636,28 @@ public sealed class LlvmModuleGenerator
                 _ownedScopes.Peek().Add(new OwnedLocal(null, symbol.Parameters[index].Name, symbol.Parameters[index].Type));
         }
 
+        if (_accessorSymbols.Contains(symbol))
+        {
+            var owner = model.Classes.Values.First(cls => cls.Name == symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..]);
+            var property = owner.DeclaredProperties.First(property =>
+                symbol.Name == $"get_{property.Name}" || symbol.Name == $"set_{property.Name}");
+            var accessor = property.Declaration.Accessors.First(accessor =>
+                symbol.Name == (accessor.Kind == PropertyAccessorKind.Get
+                    ? $"get_{property.Name}" : $"set_{property.Name}"));
+            if (accessor.IsAuto)
+            {
+                var address = storage["this." + property.Name];
+                if (accessor.Kind == PropertyAccessorKind.Get)
+                    builder.BuildRet(builder.BuildLoad2(ToLlvmType(property.Type, model), address,
+                        "property.get"));
+                else
+                    builder.BuildStore(values["value"], address);
+                if (accessor.Kind == PropertyAccessorKind.Set)
+                    builder.BuildRetVoid();
+                return;
+            }
+        }
+
         var emittedReturnType = symbol.ReturnType;
         var returned = false;
         var loops = new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>();
@@ -669,9 +865,55 @@ public sealed class LlvmModuleGenerator
                     && member.Target is IdentifierExpression targetIdentifier)
                 {
                     var targetType = model.ExpressionTypes[member.Target];
+                    if (targetType.IsInterface)
+                    {
+                        var iface = model.Interfaces[targetType.StructName!];
+                        var setter = _propertyAccessors[(iface.Name, member.MemberName, PropertyAccessorKind.Set)];
+                        var receiver = values.TryGetValue(targetIdentifier.Name, out var interfaceValue)
+                            ? interfaceValue
+                            : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
+                        var table = builder.BuildExtractValue(receiver, 1, "interface.table");
+                        var objectValue = builder.BuildExtractValue(receiver, 0, "interface.data");
+                        var slot = _interfaceSlots[iface.Name].ToList().IndexOf(setter);
+                        var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), table,
+                            [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)slot, false)],
+                            (ReadOnlySpan<char>)"interface.property.slot");
+                        var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                            tableEntry, "interface.property.target");
+                        var setterType = ToLlvmFunctionType(setter, model);
+                        var setterTarget = builder.BuildBitCast(rawTarget, setterType, "interface.property.call");
+                        EmitCallOrInvoke(builder, setterType, setterTarget,
+                            [objectValue, CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                                setter.Parameters[0].Type, model)], string.Empty);
+                        return false;
+                    }
                     if (targetType.IsClass)
                     {
                         var cls = model.Classes[targetType.StructName!];
+                        var property = cls.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+                        if (property is not null)
+                        {
+                            var setter = _propertyAccessors[(cls.Name, property.Name, PropertyAccessorKind.Set)];
+                            var setterType = ToLlvmFunctionType(setter, model);
+                            var receiver = values.TryGetValue(targetIdentifier.Name, out var directReceiver)
+                                ? directReceiver
+                                : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
+                            var targetFunction = llvmFunctions[setter];
+                            if (property.Declaration.IsVirtual || property.Declaration.IsOverride)
+                            {
+                                var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
+                                    .First(pair => pair.candidate == setter).index;
+                                var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
+                                    (uint)slot + 1, "property.vtable.slot");
+                                var raw = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                                    slotAddress, "property.vtable.target");
+                                targetFunction = builder.BuildBitCast(raw, setterType, "property.vtable.call");
+                            }
+                            EmitCallOrInvoke(builder, setterType, targetFunction,
+                                [receiver, CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                                    property.Type, model)], string.Empty);
+                            return false;
+                        }
                         var fieldIndex = cls.Fields
                             .Select((field, index) => (field, index))
                             .First(pair => pair.field.Name == member.MemberName).index;
@@ -709,6 +951,29 @@ public sealed class LlvmModuleGenerator
                 }
                 else if (assignment.Target is MemberAccessExpression { Target: ThisExpression } thisMember)
                 {
+                    var owner = model.Classes.Values.First(cls =>
+                        cls.DeclaredProperties.Any(property => property.Name == thisMember.MemberName));
+                    var thisProperty = owner.DeclaredProperties.FirstOrDefault(property => property.Name == thisMember.MemberName);
+                    if (thisProperty is not null)
+                    {
+                        var setter = _propertyAccessors[(owner.Name, thisProperty.Name, PropertyAccessorKind.Set)];
+                        var setterType = ToLlvmFunctionType(setter, model);
+                        var setterTarget = llvmFunctions[setter];
+                        if (thisProperty.Declaration.IsVirtual || thisProperty.Declaration.IsOverride)
+                        {
+                            var slot = GetVirtualMethods(owner, model).Select((candidate, index) => (candidate, index))
+                                .First(pair => pair.candidate == setter).index;
+                            var slotAddress = builder.BuildStructGEP2(_classTypes[owner.Name], values["this"],
+                                (uint)slot + 1, "property.vtable.slot");
+                            var raw = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                                slotAddress, "property.vtable.target");
+                            setterTarget = builder.BuildBitCast(raw, setterType, "property.vtable.call");
+                        }
+                        EmitCallOrInvoke(builder, setterType, setterTarget,
+                            [values["this"], CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                                thisProperty.Type, model)], string.Empty);
+                        return false;
+                    }
                     var address = storage["this." + thisMember.MemberName];
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                         model.ExpressionTypes[assignment.Target], model), address);
@@ -1499,15 +1764,59 @@ public sealed class LlvmModuleGenerator
         }
         if (member.Target is ThisExpression)
         {
+            var owner = model.Classes.Values.FirstOrDefault(cls =>
+                cls.DeclaredProperties.Any(property => property.Name == member.MemberName));
+            if (owner is not null)
+            {
+                var property = owner.DeclaredProperties.First(property => property.Name == member.MemberName);
+                if (_propertyAccessors.TryGetValue((owner.Name, property.Name, PropertyAccessorKind.Get), out var getter))
+                    return EmitCallOrInvoke(builder, ToLlvmFunctionType(getter, model), llvmFunctions[getter],
+                        [values["this"]], "property.get");
+            }
             var address = storage["this." + member.MemberName];
             return builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[member], model), address,
                 $"field.{member.MemberName}");
         }
         var target = EmitExpression(context, builder, member.Target, values, storage, model, llvmFunctions);
         var targetType = model.ExpressionTypes[member.Target];
+        if (targetType.IsInterface)
+        {
+            var iface = model.Interfaces[targetType.StructName!];
+            var getter = _propertyAccessors[(iface.Name, member.MemberName, PropertyAccessorKind.Get)];
+            var slot = _interfaceSlots[iface.Name].ToList().IndexOf(getter);
+            var table = builder.BuildExtractValue(target, 1, "interface.table");
+            var objectValue = builder.BuildExtractValue(target, 0, "interface.data");
+            var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), table,
+                [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)slot, false)],
+                (ReadOnlySpan<char>)"interface.property.slot");
+            var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                tableEntry, "interface.property.target");
+            var targetFunction = builder.BuildBitCast(rawTarget, ToLlvmFunctionType(getter, model),
+                "interface.property.call");
+            return EmitCallOrInvoke(builder, ToLlvmFunctionType(getter, model), targetFunction,
+                [objectValue], "interface.property");
+        }
         if (targetType.IsClass)
         {
             var cls = model.Classes[targetType.StructName!];
+            var property = cls.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+            if (property is not null)
+            {
+                var getter = _propertyAccessors[(cls.Name, property.Name, PropertyAccessorKind.Get)];
+                var targetFunction = llvmFunctions[getter];
+                var receiver = target;
+                if (property.Declaration.IsVirtual || property.Declaration.IsOverride)
+                {
+                    var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
+                        .First(pair => pair.candidate == getter).index;
+                    var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
+                        (uint)slot + 1, "property.vtable.slot");
+                    var raw = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), slotAddress,
+                        "property.vtable.target");
+                    targetFunction = builder.BuildBitCast(raw, getterType(getter, model), "property.vtable.call");
+                }
+                return EmitCallOrInvoke(builder, getterType(getter, model), targetFunction, [receiver], "property.get");
+            }
             var fieldIndex = cls.Fields.Select((field, index) => (field, index))
                 .First(pair => pair.field.Name == member.MemberName).index + 1;
             if (cls.IsValue)
@@ -1523,6 +1832,9 @@ public sealed class LlvmModuleGenerator
             .First(pair => pair.field.Name == member.MemberName).index;
         return builder.BuildExtractValue(target, (uint)index, $"struct.{member.MemberName}");
     }
+
+    private static LLVMTypeRef getterType(FunctionSymbol getter, SemanticModel model) =>
+        ToLlvmFunctionType(getter, model);
 
     private static LLVMValueRef EmitCast(
         LLVMContextRef context,
@@ -1654,7 +1966,10 @@ public sealed class LlvmModuleGenerator
                 builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.data"),
                 0,
                 "interface.data");
-            return builder.BuildInsertValue(result, GetTypeName(builder, source.StructName!), 1, "interface.type");
+            var table = _interfaceTables[(source.StructName!, target.StructName!)];
+            return builder.BuildInsertValue(result,
+                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.table"),
+                1, "interface.table");
         }
 
         var objectValue = source.IsInterface
@@ -1694,7 +2009,8 @@ public sealed class LlvmModuleGenerator
             builder.PositionAtEnd(failureBlock);
             var sourceName = source.IsClass
                 ? GetTypeName(builder, source.StructName!)
-                : builder.BuildExtractValue(operand, 1, "cast.source.type");
+                : builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                    objectValue, "cast.source.type");
             builder.BuildCall2(_invalidCast.FunctionType, _invalidCast,
                 [sourceName, GetTypeName(builder, target.StructName!)]);
             builder.BuildUnreachable();
@@ -1760,7 +2076,10 @@ public sealed class LlvmModuleGenerator
             result = builder.BuildInsertValue(result,
                 builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "pattern.data"),
                 0, "pattern.data");
-            return builder.BuildInsertValue(result, GetTypeName(builder, source.StructName!), 1, "pattern.type");
+            var table = _interfaceTables[(source.StructName!, target.StructName!)];
+            return builder.BuildInsertValue(result,
+                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "pattern.table"),
+                1, "pattern.table");
         }
         var objectValue = source.IsInterface
             ? builder.BuildExtractValue(operand, 0, "pattern.object")
@@ -2183,6 +2502,37 @@ public sealed class LlvmModuleGenerator
                 receiverValue = builder.BuildLoad2(
                     _classTypes[receiverClassName], receiverValue, "this.value");
             }
+            var receiverType = model.ExpressionTypes.First(pair =>
+                pair.Key is IdentifierExpression id && id.Name == receiver).Value;
+            if (receiverType.IsInterface)
+            {
+                var table = builder.BuildExtractValue(receiverValue, 1, "interface.table");
+                receiverValue = builder.BuildExtractValue(receiverValue, 0, "interface.data");
+                var iface = model.Interfaces[receiverType.StructName!];
+                var contract = function;
+                var slot = _interfaceSlots[iface.Name].ToList().IndexOf(contract);
+                if (slot < 0)
+                    slot = _interfaceSlots[iface.Name].ToList().FindIndex(candidate =>
+                        candidate.Name == function.Name && candidate.Parameters.Select(p => p.Type)
+                            .SequenceEqual(function.Parameters.Select(p => p.Type)));
+                var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                    table, [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)slot, false)],
+                    (ReadOnlySpan<char>)"interface.slot");
+                var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                    tableEntry, "interface.target");
+                var interfaceTarget = builder.BuildBitCast(rawTarget, llvmFunctions[function].FunctionType,
+                    "interface.call");
+                arguments.Add(receiverValue);
+                for (var index = 0; index < expression.Arguments.Count; index++)
+                {
+                    var argument = expression.Arguments[index];
+                    var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
+                    arguments.Add(CoerceValue(builder, value, model.ExpressionTypes[argument],
+                        function.Parameters[index].Type, model));
+                }
+                return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, interfaceTarget,
+                    arguments.ToArray(), function.ReturnType.IsVoid ? string.Empty : "interface.call");
+            }
             arguments.Add(receiverValue);
         }
         for (var index = 0; index < expression.Arguments.Count; index++)
@@ -2254,12 +2604,19 @@ public sealed class LlvmModuleGenerator
                 : ToLlvmType(parameter.Type, model))
             .ToList();
         if (IsClassMethod(symbol, model))
-            parameterTypes.Insert(0, ToLlvmType(SemanticType.Class(symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..]), model));
+        {
+            var owner = symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..];
+            parameterTypes.Insert(0, model.Interfaces.ContainsKey(owner)
+                ? LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)
+                : ToLlvmType(SemanticType.Class(owner), model));
+        }
         return LLVMTypeRef.CreateFunction(ToLlvmType(symbol.ReturnType, model), parameterTypes.ToArray(), false);
     }
 
     private static bool IsClassMethod(FunctionSymbol symbol, SemanticModel model) =>
-        model.Classes.Values.Any(cls => cls.Methods.Contains(symbol));
+        _accessorSymbols.Contains(symbol)
+        || model.Classes.Values.Any(cls => cls.Methods.Contains(symbol))
+        || model.Interfaces.Values.Any(iface => iface.Methods.Contains(symbol));
 
     private static bool UsesPointerStringAbi(FunctionSymbol symbol) =>
         symbol.IsExternal &&
@@ -2343,7 +2700,10 @@ public sealed class LlvmModuleGenerator
                 builder.BuildBitCast(value, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.data"),
                 0,
                 "interface.data");
-            return builder.BuildInsertValue(result, GetTypeName(builder, source.StructName!), 1, "interface.type");
+            var table = _interfaceTables[(source.StructName!, target.StructName!)];
+            return builder.BuildInsertValue(result,
+                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.table"),
+                1, "interface.table");
         }
         if (source.IsPointer && target.IsNumeric)
             return builder.BuildPtrToInt(value, ToLlvmType(target, model), "ptr.to.int");

@@ -80,6 +80,51 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void EnforcesReadOnlyAndConstructorOnlyPropertyWrites()
+    {
+        Analyze(
+            "class Item { public i32 Value { get; init; } Item(i32 value) { this.Value = value; } } " +
+            "i32 main() { Item item = new Item(1); return item.Value; }");
+
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Item { public i32 Value { get; init; } Item(i32 value) { this.Value = value; } } " +
+            "i32 main() { Item item = new Item(1); item.Value = 2; return 0; }"));
+        Assert.Contains("only be assigned in a constructor", exception.Message);
+
+        exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Item { public i32 Value { get; } } " +
+            "i32 main() { Item item = new Item(); item.Value = 2; return 0; }"));
+        Assert.Contains("read-only", exception.Message);
+    }
+
+    [Fact]
+    public void EnforcesAccessorSpecificVisibility()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Item { public i32 Value { get; private set; } Item(i32 value) { this.Value = value; } } " +
+            "i32 main() { Item item = new Item(1); item.Value = 2; return 0; }"));
+        Assert.Contains("not accessible", exception.Message);
+
+        Analyze(
+            "class Base { public i32 Value { get; protected set; } } " +
+            "class Child : Base { Child() { this.Value = 1; } } " +
+            "i32 main() { Child child = new Child(); return child.Value; }");
+    }
+
+    [Fact]
+    public void RequiresOverrideForVirtualBaseProperty()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Base { virtual i32 Value { get; } } " +
+            "class Child : Base { i32 Value { get; } } i32 main() { return 0; }"));
+        Assert.Contains("must be marked 'override'", exception.Message);
+
+        Analyze(
+            "class Base { virtual i32 Value { get; } } " +
+            "class Child : Base { override i32 Value { get; } } i32 main() { return 0; }");
+    }
+
+    [Fact]
     public void PreservesValueClassMetadataAndAnalyzesDirectConstruction()
     {
         var model = Analyze("@value class Point { } i32 main() { Point point = Point(); return 0; }");

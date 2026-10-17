@@ -12,6 +12,24 @@ public sealed class ParserTests
     private readonly Tokenizer _tokenizer = new(Log.Logger);
 
     [Fact]
+    public void ParsesClassAndInterfaceProperties()
+    {
+        var unit = Parse(
+            "interface Named { public string Name { get; } } " +
+            "class Person : Named { public string Name { get; private set; } " +
+            "public i32 Id { get; init; } } " +
+            "i32 main() { return 0; }");
+
+        var contract = Assert.Single(unit.Interfaces).DeclaredProperties;
+        Assert.Equal("Name", Assert.Single(contract).Name);
+        var properties = Assert.Single(unit.Classes).DeclaredProperties;
+        Assert.Equal(2, properties.Count);
+        Assert.Contains(properties, property => property.HasInitializer);
+        Assert.Equal(Visibility.Private, Assert.Single(properties[0].Accessors,
+            accessor => accessor.Kind == PropertyAccessorKind.Set).Visibility);
+    }
+
+    [Fact]
     public void ParsesMainFunctionAndReturnExpression()
     {
         var unit = Parse("i32 main() { return 1 + 2 * 3; }");

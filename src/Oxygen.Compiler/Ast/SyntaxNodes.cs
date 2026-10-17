@@ -12,7 +12,9 @@ public abstract record SyntaxNode(SourceLocation Location) : ISyntaxNode;
 public enum Visibility
 {
     Private,
-    Public
+    Public,
+    Protected,
+    Internal
 }
 
 public sealed record CompilationUnit(
@@ -85,6 +87,29 @@ public sealed record ClassFieldDeclaration(
     Visibility Visibility,
     SourceLocation Location) : SyntaxNode(Location);
 
+public enum PropertyAccessorKind { Get, Set, Init }
+
+public sealed record PropertyAccessorDeclaration(
+    PropertyAccessorKind Kind,
+    Visibility Visibility,
+    BlockStatement? Body,
+    bool IsAuto,
+    SourceLocation Location) : SyntaxNode(Location);
+
+public sealed record PropertyDeclaration(
+    TypeSyntax Type,
+    string Name,
+    Visibility Visibility,
+    IReadOnlyList<PropertyAccessorDeclaration> Accessors,
+    SourceLocation Location,
+    bool IsVirtual = false,
+    bool IsOverride = false) : SyntaxNode(Location)
+{
+    public bool HasGetter => Accessors.Any(a => a.Kind == PropertyAccessorKind.Get);
+    public bool HasSetter => Accessors.Any(a => a.Kind == PropertyAccessorKind.Set);
+    public bool HasInitializer => Accessors.Any(a => a.Kind == PropertyAccessorKind.Init);
+}
+
 public sealed record ConstructorDeclaration(
     string ClassName,
     IReadOnlyList<ParameterDeclaration> Parameters,
@@ -103,6 +128,7 @@ public sealed record ClassDeclaration(
     string? BaseType,
     IReadOnlyList<string> Interfaces,
     IReadOnlyList<ClassFieldDeclaration> Fields,
+    IReadOnlyList<PropertyDeclaration>? Properties,
     IReadOnlyList<FunctionDeclaration> Methods,
     IReadOnlyList<ConstructorDeclaration> Constructors,
     DestructorDeclaration? Destructor,
@@ -111,6 +137,7 @@ public sealed record ClassDeclaration(
     IReadOnlyList<AnnotationSyntax>? Annotations = null,
     IReadOnlyList<TypeParameterSyntax>? TypeParameters = null) : SyntaxNode(Location)
 {
+    public IReadOnlyList<PropertyDeclaration> DeclaredProperties => Properties ?? [];
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
     public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
     public bool IsValue => DeclaredAnnotations.Any(annotation => annotation.Name == "value");
@@ -119,6 +146,7 @@ public sealed record ClassDeclaration(
 public sealed record InterfaceDeclaration(
     string Name,
     IReadOnlyList<FunctionDeclaration> Methods,
+    IReadOnlyList<PropertyDeclaration>? Properties,
     Visibility Visibility,
     SourceLocation Location,
     IReadOnlyList<AnnotationSyntax>? Annotations = null,
@@ -126,6 +154,7 @@ public sealed record InterfaceDeclaration(
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
     public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
+    public IReadOnlyList<PropertyDeclaration> DeclaredProperties => Properties ?? [];
 }
 
 public sealed record AnnotationSyntax(

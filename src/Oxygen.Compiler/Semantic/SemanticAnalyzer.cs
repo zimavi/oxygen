@@ -21,6 +21,8 @@ public sealed partial class SemanticAnalyzer
     private readonly Dictionary<string, UnionSymbol> _unionsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClassSymbol> _classesByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, InterfaceSymbol> _interfacesByName = new(StringComparer.Ordinal);
+    private ClassSymbol? _currentOwnerClass;
+    private bool _currentIsConstructor;
     private int _loopDepth;
     private int _breakableDepth;
     private Dictionary<FunctionDeclaration, FunctionSymbol>? _functionSymbols;
@@ -200,7 +202,9 @@ public sealed partial class SemanticAnalyzer
                 EnsureTypeNameAvailable(declaration.Name, declaration.Location);
                 _interfacesByName.Add(declaration.Name,
                     new InterfaceSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
-                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
+                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(),
+                        declaration.DeclaredProperties.Select(property => new PropertySymbol(
+                            property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray()));
             }
             foreach (var declaration in unit.Classes)
             {
@@ -211,7 +215,9 @@ public sealed partial class SemanticAnalyzer
                     new ClassSymbol(declaration.Name, moduleName, declaration.BaseType,
                         declaration.Interfaces, [], [], [], declaration.Destructor, declaration, declaration.Visibility,
                         declaration.IsValue,
-                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
+                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(),
+                        declaration.DeclaredProperties.Select(property => new PropertySymbol(
+                            property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray()));
             }
         }
         foreach (var unit in compilationUnits)
@@ -224,15 +230,28 @@ public sealed partial class SemanticAnalyzer
                 if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1
                     && group.Select(method => method.ReturnType).Distinct().Count() == 1))
                     throw Error($"Interface '{declaration.Name}' contains duplicate methods", declaration.Location);
+                foreach (var property in declaration.DeclaredProperties)
+                    ValidatePropertyDeclaration(property);
                 _interfacesByName[declaration.Name] = _interfacesByName[declaration.Name] with { Methods = methods };
             }
             foreach (var declaration in unit.Classes)
             {
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.Fields.Select(field =>
-                        new ClassFieldSymbol(field.Name, ResolveType(field.Type), field, field.Visibility)).ToArray());
+                            new ClassFieldSymbol(field.Name, ResolveType(field.Type), field, field.Visibility))
+                        .Concat(declaration.DeclaredProperties
+                            .Where(property => property.Accessors.Any(accessor => accessor.Kind is PropertyAccessorKind.Get
+                                or PropertyAccessorKind.Set or PropertyAccessorKind.Init))
+                            .Select(property => new ClassFieldSymbol(property.Name,
+                                ResolveType(property.Type),
+                                new ClassFieldDeclaration(property.Type, property.Name, property.Visibility,
+                                    property.Location),
+                                property.Visibility)))
+                        .ToArray());
                 if (fields.GroupBy(field => field.Name, StringComparer.Ordinal).Any(group => group.Count() > 1))
                     throw Error($"Class '{declaration.Name}' contains duplicate fields", declaration.Location);
+                foreach (var property in declaration.DeclaredProperties)
+                    ValidatePropertyDeclaration(property);
                 var methods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.Methods.Select(method =>
                         CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray());
@@ -457,7 +476,8 @@ public sealed partial class SemanticAnalyzer
                             $"{moduleName}.{declaration.Name}",
                             unit.Imports,
                             expressionTypes,
-                            resolvedCalls);
+                            resolvedCalls,
+                            isConstructor: true);
                     }
                     catch (SemanticException exception) when (diagnostics is not null)
                     {
@@ -576,6 +596,32 @@ public sealed partial class SemanticAnalyzer
     private static string MethodSignature(FunctionSymbol method) =>
         $"{method.Name}({string.Join(",", method.Parameters.Select(parameter => parameter.Type))})";
 
+    private void ValidatePropertyDeclaration(PropertyDeclaration property)
+    {
+        if (!property.HasGetter && !property.HasSetter && !property.HasInitializer)
+            throw Error($"Property '{property.Name}' must declare a getter, setter, or initializer",
+                property.Location, property.Name.Length);
+        if (property.HasSetter && property.HasInitializer)
+            throw Error($"Property '{property.Name}' cannot declare both 'set' and 'init'",
+                property.Location, property.Name.Length);
+        foreach (var accessor in property.Accessors)
+        {
+            if (VisibilityRank(accessor.Visibility) > VisibilityRank(property.Visibility))
+                throw Error($"Accessor for property '{property.Name}' cannot be more visible than the property",
+                    accessor.Location, property.Name.Length);
+        }
+    }
+
+    private static int VisibilityRank(Visibility visibility) =>
+        visibility switch
+        {
+            Visibility.Private => 0,
+            Visibility.Protected => 1,
+            Visibility.Internal => 1,
+            Visibility.Public => 2,
+            _ => 0
+        };
+
     private void ValidateClassHierarchy()
     {
         foreach (var classSymbol in _classesByName.Values)
@@ -591,6 +637,10 @@ public sealed partial class SemanticAnalyzer
                 if (classSymbol.Methods.Any(method => method.Declaration.IsVirtual || method.Declaration.IsOverride))
                     throw Error($"Value class '{classSymbol.Name}' cannot declare virtual or override methods",
                         classSymbol.Declaration.Location);
+                if (classSymbol.DeclaredProperties.Any(property =>
+                        property.Declaration.IsVirtual || property.Declaration.IsOverride))
+                    throw Error($"Value class '{classSymbol.Name}' cannot declare virtual or override properties",
+                        classSymbol.Declaration.Location);
             }
             var interfaceNames = classSymbol.InterfaceNames.ToList();
             if (classSymbol.BaseTypeName is not null
@@ -604,6 +654,8 @@ public sealed partial class SemanticAnalyzer
                     throw Error($"Interface '{interfaceName}' is not declared", classSymbol.Declaration.Location);
             var inherited = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
                 ? [] : GetClassMethods(classSymbol.BaseTypeName, []);
+            var inheritedProperties = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
+                ? [] : GetClassProperties(classSymbol.BaseTypeName, []);
             foreach (var method in classSymbol.Methods)
             {
                 var overridden = inherited.FirstOrDefault(candidate => MethodSignature(candidate) == MethodSignature(method));
@@ -622,6 +674,26 @@ public sealed partial class SemanticAnalyzer
                         method.Declaration.Location, method.Name.Length);
                 }
             }
+            foreach (var property in classSymbol.DeclaredProperties)
+            {
+                var overridden = inheritedProperties.FirstOrDefault(candidate =>
+                    candidate.Name == property.Name && candidate.Type == property.Type);
+                if (property.Declaration.IsOverride)
+                {
+                    if (overridden is null)
+                        throw Error($"Property '{property.Name}' is marked 'override' but does not override a base property",
+                            property.Declaration.Location, property.Name.Length);
+                    if (!overridden.Declaration.IsVirtual && !overridden.Declaration.IsOverride)
+                        throw Error($"Property '{property.Name}' cannot override a non-virtual property",
+                            property.Declaration.Location, property.Name.Length);
+                }
+                else if (overridden is not null
+                         && (overridden.Declaration.IsVirtual || overridden.Declaration.IsOverride))
+                {
+                    throw Error($"Property '{property.Name}' overrides a virtual property and must be marked 'override'",
+                        property.Declaration.Location, property.Name.Length);
+                }
+            }
             foreach (var contract in interfaceNames.SelectMany(name => GetInterfaceMethods(name, [])))
             {
                 if (!classSymbol.Methods.Concat(inherited).Any(method =>
@@ -629,6 +701,27 @@ public sealed partial class SemanticAnalyzer
                             .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type))
                         && method.ReturnType == contract.ReturnType))
                     throw Error($"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
+                        classSymbol.Declaration.Location);
+            }
+            foreach (var contract in interfaceNames.SelectMany(name => _interfacesByName[name].DeclaredProperties))
+            {
+                var implementation = classSymbol.Fields.FirstOrDefault(field => field.Name == contract.Name);
+                if (implementation is null || implementation.Type != contract.Type)
+                    throw Error($"Class '{classSymbol.Name}' does not implement interface property '{contract.Name}'",
+                        classSymbol.Declaration.Location);
+                if (contract.Declaration.HasGetter
+                    && !classSymbol.DeclaredProperties.Concat(
+                            classSymbol.BaseTypeName is not null && _classesByName.TryGetValue(classSymbol.BaseTypeName, out var baseClass)
+                                ? baseClass.DeclaredProperties
+                                : [])
+                        .Any(property => property.Name == contract.Name && property.Declaration.HasGetter))
+                    throw Error($"Class '{classSymbol.Name}' does not provide a getter for interface property '{contract.Name}'",
+                        classSymbol.Declaration.Location);
+                if ((contract.Declaration.HasSetter || contract.Declaration.HasInitializer)
+                    && !classSymbol.DeclaredProperties.Any(property =>
+                        property.Name == contract.Name
+                        && (property.Declaration.HasSetter || property.Declaration.HasInitializer)))
+                    throw Error($"Class '{classSymbol.Name}' does not provide a setter for interface property '{contract.Name}'",
                         classSymbol.Declaration.Location);
             }
         }
@@ -651,6 +744,22 @@ public sealed partial class SemanticAnalyzer
         return result;
     }
 
+    private IReadOnlyList<PropertySymbol> GetClassProperties(string name, HashSet<string> active)
+    {
+        if (!active.Add(name))
+            throw Error($"Class inheritance cycle involving '{name}'", _classesByName[name].Declaration.Location);
+        var cls = _classesByName[name];
+        var properties = cls.BaseTypeName is null ? [] : GetClassProperties(cls.BaseTypeName, active).ToList();
+        active.Remove(name);
+        foreach (var property in cls.DeclaredProperties)
+        {
+            var index = properties.FindIndex(candidate => candidate.Name == property.Name);
+            if (index >= 0) properties[index] = property;
+            else properties.Add(property);
+        }
+        return properties;
+    }
+
     private IReadOnlyList<ClassFieldSymbol> GetClassFields(string name, HashSet<string> active)
     {
         if (!active.Add(name))
@@ -660,10 +769,25 @@ public sealed partial class SemanticAnalyzer
             ? GetClassFields(cls.BaseTypeName, active)
             : [];
         active.Remove(name);
-        var fields = inherited.Concat(cls.Fields).ToArray();
+        var fields = inherited.ToList();
+        foreach (var field in cls.Fields)
+        {
+            var inheritedIndex = fields.FindIndex(candidate => candidate.Name == field.Name);
+            if (inheritedIndex < 0)
+            {
+                fields.Add(field);
+                continue;
+            }
+            var overridingProperty = cls.DeclaredProperties.FirstOrDefault(property =>
+                property.Name == field.Name && property.Declaration.IsOverride);
+            if (overridingProperty is null)
+                fields.Add(field);
+            else
+                fields[inheritedIndex] = field;
+        }
         if (fields.GroupBy(field => field.Name, StringComparer.Ordinal).Any(group => group.Count() > 1))
             throw Error($"Class '{name}' contains a field that hides an inherited field", cls.Declaration.Location);
-        return fields;
+        return fields.ToArray();
     }
 
     private IReadOnlyList<FunctionSymbol> GetInterfaceMethods(string name, HashSet<string> active)
@@ -707,7 +831,8 @@ public sealed partial class SemanticAnalyzer
             moduleName,
             declaration.Visibility,
             CInterop: ParseCInterop(declaration),
-            GenericParameters: declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray());
+            GenericParameters: declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(),
+            IsExternal: declaration.IsExternalDeclaration);
     }
 
     private static CInteropFunctionMetadata? ParseCInterop(FunctionDeclaration declaration)
@@ -987,7 +1112,8 @@ public sealed partial class SemanticAnalyzer
         string moduleName,
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
-        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        bool isConstructor = false)
     {
         _declaredVariables.Clear();
         _definitelyNullVariables.Clear();
@@ -999,6 +1125,8 @@ public sealed partial class SemanticAnalyzer
             foreach (var field in ownerClass.Fields)
                 scope.Declare(field.Name, new VariableSymbol(field.Type, false, field.Declaration, false));
         }
+        _currentOwnerClass = _classesByName.GetValueOrDefault(className);
+        _currentIsConstructor = isConstructor;
         var parameterScope = new Scope(scope, MarkVariableUsed);
         foreach (var parameter in function.Parameters)
         {
@@ -1510,6 +1638,7 @@ public sealed partial class SemanticAnalyzer
                 && scope.Lookup(memberIdentifier.Name, memberIdentifier.Location).IsConst)
                 throw Error($"Cannot assign to a field of const variable '{memberIdentifier.Name}'", target.Location,
                     memberIdentifier.Name.Length);
+            ValidatePropertyWrite(member, scope);
         }
         else if (target is IndexExpression index
                  && index.Target is IdentifierExpression indexIdentifier
@@ -1520,6 +1649,32 @@ public sealed partial class SemanticAnalyzer
         {
             throw Error("Assignment target is not addressable", target.Location);
         }
+    }
+
+    private void ValidatePropertyWrite(MemberAccessExpression member, Scope scope)
+    {
+        var targetClass = member.Target switch
+        {
+            ThisExpression when _currentOwnerClass is not null => _currentOwnerClass,
+            IdentifierExpression identifier when scope.Lookup(identifier.Name, identifier.Location).Type.IsClass
+                => _classesByName[scope.Lookup(identifier.Name, identifier.Location).Type.StructName!],
+            _ => null
+        };
+        if (targetClass is null)
+            return;
+        var property = FindProperty(targetClass, member.MemberName);
+        if (property is null)
+            return;
+        var accessor = property.Declaration.Accessors.FirstOrDefault(candidate =>
+            candidate.Kind == PropertyAccessorKind.Set)
+            ?? property.Declaration.Accessors.FirstOrDefault(candidate =>
+                candidate.Kind == PropertyAccessorKind.Init);
+        if (accessor is null)
+            throw Error($"Property '{property.Name}' is read-only", member.Location, property.Name.Length);
+        if (accessor.Kind == PropertyAccessorKind.Init && !_currentIsConstructor)
+            throw Error($"Property '{property.Name}' can only be assigned in a constructor", member.Location,
+                property.Name.Length);
+        EnsureAccessorVisible(property, accessor, member.Location);
     }
 
     private void TrackPointerAssignment(
@@ -1781,6 +1936,16 @@ public sealed partial class SemanticAnalyzer
         if (targetType.IsClass)
         {
             var cls = _classesByName[targetType.StructName!];
+            var property = FindProperty(cls, member.MemberName);
+            if (property is not null)
+            {
+                var getter = property.Declaration.Accessors.FirstOrDefault(
+                    accessor => accessor.Kind == PropertyAccessorKind.Get);
+                if (getter is null)
+                    throw Error($"Property '{property.Name}' is write-only", member.Location, property.Name.Length);
+                EnsureAccessorVisible(property, getter, member.Location);
+                return property.Type;
+            }
             var field = cls.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (field is not null)
                 return field.Type;
@@ -1788,11 +1953,54 @@ public sealed partial class SemanticAnalyzer
                 return SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.Void));
             throw Error($"Class '{cls.Name}' has no member named '{member.MemberName}'", member.Location);
         }
+        if (targetType.IsInterface)
+        {
+            var contract = _interfacesByName[targetType.StructName!].DeclaredProperties
+                .FirstOrDefault(candidate => candidate.Name == member.MemberName);
+            if (contract is null)
+                throw Error($"Interface '{targetType.StructName}' has no member named '{member.MemberName}'",
+                    member.Location);
+            var getter = contract.Declaration.Accessors.FirstOrDefault(
+                accessor => accessor.Kind == PropertyAccessorKind.Get)
+                ?? throw Error($"Property '{contract.Name}' is write-only", member.Location, contract.Name.Length);
+            EnsureAccessorVisible(contract, getter, member.Location);
+            return contract.Type;
+        }
         if (!targetType.IsStruct)
             throw Error($"Member access requires a struct or class value, got {targetType}", member.Location);
         var structure = _structsByName[targetType.StructName!];
         return structure.Fields.FirstOrDefault(field => field.Name == member.MemberName)?.Type
             ?? throw Error($"Struct '{targetType.StructName}' has no field named '{member.MemberName}'", member.Location, member.MemberName.Length);
+    }
+
+    private PropertySymbol? FindProperty(ClassSymbol cls, string name)
+    {
+        var property = cls.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == name);
+        if (property is not null)
+            return property;
+        return cls.BaseTypeName is not null && _classesByName.TryGetValue(cls.BaseTypeName, out var baseClass)
+            ? FindProperty(baseClass, name)
+            : null;
+    }
+
+    private void EnsureAccessorVisible(PropertySymbol property, PropertyAccessorDeclaration accessor,
+        SourceLocation location)
+    {
+        var owner = _classesByName.Values.FirstOrDefault(candidate =>
+            candidate.DeclaredProperties.Contains(property));
+        if (owner is null)
+            return;
+        var visible = accessor.Visibility switch
+        {
+            Visibility.Public => true,
+            Visibility.Internal => _currentOwnerClass is null
+                || string.Equals(_currentOwnerClass.ModuleName, owner.ModuleName, StringComparison.Ordinal),
+            Visibility.Protected => _currentOwnerClass is not null
+                && (_currentOwnerClass.Name == owner.Name || IsClassDerivedFrom(_currentOwnerClass.Name, owner.Name)),
+            _ => _currentOwnerClass is not null && _currentOwnerClass.Name == owner.Name
+        };
+        if (!visible)
+            throw Error($"Accessor for property '{property.Name}' is not accessible", location, property.Name.Length);
     }
 
     private SemanticType AnalyzeNewExpression(
@@ -2073,6 +2281,25 @@ public sealed partial class SemanticAnalyzer
                         if (exactExpected.Length == 1)
                             methodMatches = exactExpected;
                     }
+                    if (methodMatches.Length == 1)
+                    {
+                        resolvedCalls[call] = methodMatches[0];
+                        _usedFunctions.Add(methodMatches[0]);
+                        return methodMatches[0].ReturnType;
+                    }
+                    if (methodMatches.Length > 1)
+                        throw Error($"Method call '{methodName}' is ambiguous; provide an expected return type", call.Location);
+                    if (methodCandidates.Length > 0)
+                        throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
+                }
+                else if (receiverType.IsInterface && _interfacesByName.TryGetValue(receiverType.StructName!, out var receiverInterface))
+                {
+                    var methodCandidates = receiverInterface.Methods.Where(method => method.Name == methodName).ToArray();
+                    var methodArgumentTypes = call.Arguments.Select(argument =>
+                        AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
+                    var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
+                        .Where(method => method.Parameters.Select((parameter, index) =>
+                            CanAssign(parameter.Type, call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
                     if (methodMatches.Length == 1)
                     {
                         resolvedCalls[call] = methodMatches[0];

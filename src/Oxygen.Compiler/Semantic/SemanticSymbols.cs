@@ -21,6 +21,11 @@ public sealed record StructSymbol(
 }
 
 public sealed record ClassFieldSymbol(string Name, SemanticType Type, ClassFieldDeclaration Declaration, Visibility Visibility);
+public sealed record PropertySymbol(
+    string Name,
+    SemanticType Type,
+    PropertyDeclaration Declaration,
+    Visibility Visibility);
 public sealed record ConstructorSymbol(
     string ClassName,
     IReadOnlyList<ParameterSymbol> Parameters,
@@ -39,10 +44,12 @@ public sealed record ClassSymbol(
     ClassDeclaration Declaration,
     Visibility Visibility,
     bool IsValue = false,
-    IReadOnlyList<string>? TypeParameters = null)
+    IReadOnlyList<string>? TypeParameters = null,
+    IReadOnlyList<PropertySymbol>? Properties = null)
 {
     public string QualifiedName => $"{ModuleName}.{Name}";
     public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
+    public IReadOnlyList<PropertySymbol> DeclaredProperties => Properties ?? [];
 }
 public sealed record InterfaceSymbol(
     string Name,
@@ -50,9 +57,11 @@ public sealed record InterfaceSymbol(
     IReadOnlyList<FunctionSymbol> Methods,
     InterfaceDeclaration Declaration,
     Visibility Visibility,
-    IReadOnlyList<string>? TypeParameters = null)
+    IReadOnlyList<string>? TypeParameters = null,
+    IReadOnlyList<PropertySymbol>? Properties = null)
 {
     public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
+    public IReadOnlyList<PropertySymbol> DeclaredProperties => Properties ?? [];
 }
 
 public sealed record EnumMemberSymbol(string Name, int Value, EnumMemberDeclaration Declaration);
