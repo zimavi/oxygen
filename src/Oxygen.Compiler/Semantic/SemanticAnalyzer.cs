@@ -206,9 +206,11 @@ public sealed partial class SemanticAnalyzer
             {
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
                 EnsureTypeNameAvailable(declaration.Name, declaration.Location);
+                ValidateClassAnnotations(declaration);
                 _classesByName.Add(declaration.Name,
                     new ClassSymbol(declaration.Name, moduleName, declaration.BaseType,
                         declaration.Interfaces, [], [], [], declaration.Destructor, declaration, declaration.Visibility,
+                        declaration.IsValue,
                         declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
             }
         }
@@ -578,6 +580,18 @@ public sealed partial class SemanticAnalyzer
     {
         foreach (var classSymbol in _classesByName.Values)
         {
+            if (classSymbol.IsValue)
+            {
+                if (classSymbol.BaseTypeName is not null)
+                    throw Error($"Value class '{classSymbol.Name}' cannot inherit from another class",
+                        classSymbol.Declaration.Location);
+                if (classSymbol.InterfaceNames.Count != 0)
+                    throw Error($"Value class '{classSymbol.Name}' cannot implement interfaces",
+                        classSymbol.Declaration.Location);
+                if (classSymbol.Methods.Any(method => method.Declaration.IsVirtual || method.Declaration.IsOverride))
+                    throw Error($"Value class '{classSymbol.Name}' cannot declare virtual or override methods",
+                        classSymbol.Declaration.Location);
+            }
             var interfaceNames = classSymbol.InterfaceNames.ToList();
             if (classSymbol.BaseTypeName is not null
                 && !_classesByName.ContainsKey(classSymbol.BaseTypeName)
@@ -747,6 +761,21 @@ public sealed partial class SemanticAnalyzer
         return externalName is null && callingConvention == "c"
             ? null
             : new CInteropFunctionMetadata(externalName, callingConvention);
+    }
+
+    private static void ValidateClassAnnotations(ClassDeclaration declaration)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var annotation in declaration.DeclaredAnnotations)
+        {
+            if (!seen.Add(annotation.Name))
+                throw Error($"Annotation '@{annotation.Name}' may only appear once", annotation.Location, annotation.Name.Length + 1);
+            if (annotation.Name == "value" && annotation.Arguments.Count == 0)
+                continue;
+            throw Error(annotation.Name == "value"
+                ? "Annotation '@value' does not accept arguments"
+                : $"Unknown class annotation '@{annotation.Name}'", annotation.Location);
+        }
     }
 
     private static bool TryUnquote(string value, out string unquoted)
@@ -1502,7 +1531,7 @@ public sealed partial class SemanticAnalyzer
         if (assignment.Target is IdentifierExpression assignedIdentifier)
         {
             var variable = scope.Lookup(assignedIdentifier.Name, assignedIdentifier.Location);
-            if (valueType.IsClass && assignment.Value is IdentifierExpression sourceIdentifier)
+            if (IsOwnedClass(valueType) && assignment.Value is IdentifierExpression sourceIdentifier)
             {
                 var source = scope.Lookup(sourceIdentifier.Name, sourceIdentifier.Location);
                 if (source.Declaration is VariableDeclarationStatement sourceDeclaration
@@ -1547,7 +1576,7 @@ public sealed partial class SemanticAnalyzer
 
         var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
             expectedType: function.ReturnType);
-        if (valueType.IsClass && returnStatement.Value is IdentifierExpression identifier
+        if (IsOwnedClass(valueType) && returnStatement.Value is IdentifierExpression identifier
             && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
             _escapingClassLocals.Add(declaration);
         if (!CanAssign(function.ReturnType, returnStatement.Value, valueType))
@@ -1595,6 +1624,8 @@ public sealed partial class SemanticAnalyzer
             ConditionalExpression conditional => AnalyzeConditional(
                 conditional, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid),
+            ClassConstructionExpression creation => AnalyzeClassConstructionExpression(
+                creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             NewExpression creation => AnalyzeNewExpression(
                 creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             _ => throw new InvalidOperationException($"Unsupported expression type {expression.GetType().Name}.")
@@ -1773,6 +1804,26 @@ public sealed partial class SemanticAnalyzer
         if (expression.Type.NamedType is null || !_classesByName.TryGetValue(expression.Type.NamedType, out var cls)
             || expression.Type.IsPointer || expression.Type.IsArray || expression.Type.IsString)
             throw Error("Only declared classes can be constructed with 'new'", expression.Location);
+        var arguments = expression.Arguments.Select(argument =>
+            AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
+        var matches = cls.Constructors.Where(constructor => constructor.Parameters.Count == arguments.Length)
+            .Where(constructor => constructor.Parameters.Select((parameter, index) =>
+                CanAssign(parameter.Type, expression.Arguments[index], arguments[index])).All(match => match)).ToArray();
+        if (matches.Length == 0)
+            throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
+        if (matches.Length > 1)
+            throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
+        return SemanticType.Class(cls.Name);
+    }
+
+    private SemanticType AnalyzeClassConstructionExpression(
+        ClassConstructionExpression expression, Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName,
+        IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types,
+        IDictionary<CallExpression, FunctionSymbol> calls)
+    {
+        if (!_classesByName.TryGetValue(expression.TypeName, out var cls))
+            throw Error($"Class '{expression.TypeName}' is not declared", expression.Location);
         var arguments = expression.Arguments.Select(argument =>
             AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
         var matches = cls.Constructors.Where(constructor => constructor.Parameters.Count == arguments.Length)
@@ -2047,7 +2098,7 @@ public sealed partial class SemanticAnalyzer
         foreach (var argument in call.Arguments)
         {
             if (argument is IdentifierExpression identifier
-                && scope.Lookup(identifier.Name, identifier.Location).Type.IsClass
+                && IsOwnedClass(scope.Lookup(identifier.Name, identifier.Location).Type)
                 && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
                 _escapingClassLocals.Add(declaration);
         }
@@ -2177,6 +2228,10 @@ public sealed partial class SemanticAnalyzer
             return true;
         return TryGetConstantNumber(value, out var constant) && IsRepresentable(constant, target);
     }
+
+    private bool IsOwnedClass(SemanticType type) =>
+        type.IsClass
+        && (!_classesByName.TryGetValue(type.StructName!, out var cls) || !cls.IsValue);
 
     private bool IsReferenceCast(SemanticType source, SemanticType target, out bool implicitConversion)
     {
@@ -2552,6 +2607,8 @@ public sealed partial class SemanticAnalyzer
                 WhenFalse = Expr(e.WhenFalse)
             },
             CallExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray(), TypeArguments = e.TypeArguments?.Select(Type).ToArray() },
+            ClassConstructionExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray() },
+            NewExpression e => e with { Type = Type(e.Type), Arguments = e.Arguments.Select(Expr).ToArray() },
             CastExpression e => e with { TargetType = Type(e.TargetType), Operand = Expr(e.Operand) },
             SizeOfExpression e => e with { TargetType = e.TargetType is null ? null : Type(e.TargetType), Operand = e.Operand is null ? null : Expr(e.Operand) },
             LengthExpression e => e with { Target = Expr(e.Target) },

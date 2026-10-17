@@ -67,6 +67,19 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesValueClassesAndDistinguishesDirectConstruction()
+    {
+        var unit = Parse("@value class Point { } i32 main() { var point = Point(); var other = new Point(); return 0; }");
+
+        Assert.True(unit.Classes[0].IsValue);
+        var statements = unit.Functions[0].Body.Statements;
+        Assert.IsType<ClassConstructionExpression>(
+            Assert.IsType<VariableDeclarationStatement>(statements[0]).Initializer);
+        Assert.IsType<NewExpression>(
+            Assert.IsType<VariableDeclarationStatement>(statements[1]).Initializer);
+    }
+
+    [Fact]
     public void ParsesRightAssociativeConditionalExpressions()
     {
         var unit = Parse("i32 main() { return true ? 1 : false ? 2 : 3; }");

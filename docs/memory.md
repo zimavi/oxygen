@@ -21,3 +21,13 @@ destructors.
 `u64` byte count. `void` and unspecialized generic types are not sized.
 Ownership is manual; a pointer must be freed at most once and must not be used
 after deallocation.
+
+Class storage is selected by the construction expression. `Type(arguments)`
+constructs an instance in stack/local storage, while `new Type(arguments)`
+constructs a heap instance. Ordinary classes remain reference values regardless
+of where the instance was created.
+
+Use `@value class Type` when class values must be passed to functions and
+returned from functions by value. Value-class copies are shallow field-wise
+copies. Value classes are currently restricted to classes without inheritance,
+interfaces, or virtual/override methods.

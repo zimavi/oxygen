@@ -913,6 +913,9 @@ public sealed partial class Parser
                     }
 
                     Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+                    if ((typeArguments is null || typeArguments.Count == 0)
+                        && name.IndexOf('.') < 0 && name.Length > 0 && char.IsUpper(name[0]))
+                        return new ClassConstructionExpression(name, arguments, token.Location);
                     return new CallExpression(name, arguments, token.Location, typeArguments);
                 }
 

@@ -38,6 +38,7 @@ public sealed record ClassSymbol(
     DestructorDeclaration? Destructor,
     ClassDeclaration Declaration,
     Visibility Visibility,
+    bool IsValue = false,
     IReadOnlyList<string>? TypeParameters = null)
 {
     public string QualifiedName => $"{ModuleName}.{Name}";

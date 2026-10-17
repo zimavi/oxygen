@@ -83,6 +83,47 @@ allocation, field access, constructors, destructors, and direct class-method
 calls. Interface values have a two-word object/table representation reserved
 for dynamic dispatch.
 
+## Value classes and storage
+
+Class construction without `new` uses the current function's stack/local
+storage:
+
+```oxygen
+class Point {
+    i32 x;
+    i32 y;
+}
+
+i32 main() {
+    Point point = Point();
+    return point.x;
+}
+```
+
+`new Point(...)` continues to allocate a heap object. A stack-created ordinary
+class is still a reference value and is destroyed at the end of its owning
+scope.
+
+Annotating a class with `@value` gives it value-passing semantics:
+
+```oxygen
+@value class Point {
+    i32 x;
+    i32 y;
+}
+
+i32 sum(Point point) {
+    return point.x + point.y;
+}
+```
+
+Value-class parameters and return values use aggregate, field-wise copies
+instead of the class-reference ABI. This remains true when the source value was
+created with `new`; the heap object is read into the value passed to the
+function. Copies are shallow for the initial implementation. Value classes may
+declare fields, methods, constructors, and destructors, but cannot inherit,
+implement interfaces, or declare virtual/override methods.
+
 ## Reference conversions
 
 Class references may be assigned to a base-class or implemented-interface

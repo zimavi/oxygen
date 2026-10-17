@@ -80,6 +80,37 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void PreservesValueClassMetadataAndAnalyzesDirectConstruction()
+    {
+        var model = Analyze("@value class Point { } i32 main() { Point point = Point(); return 0; }");
+
+        Assert.True(model.Classes["Point"].IsValue);
+        Assert.Contains(model.ExpressionTypes, pair =>
+            pair.Key is ClassConstructionExpression && pair.Value == SemanticType.Class("Point"));
+    }
+
+    [Fact]
+    public void RejectsInvalidValueClassAnnotations()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("@value(1) class Point { } i32 main() { return 0; }"));
+
+        Assert.Contains("does not accept arguments", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsValueClassInheritanceAndVirtualMethods()
+    {
+        var inheritance = Assert.Throws<SemanticException>(() =>
+            Analyze("@value class Point : Base { } class Base { } i32 main() { return 0; }"));
+        Assert.Contains("cannot inherit", inheritance.Message);
+
+        var virtualMethod = Assert.Throws<SemanticException>(() =>
+            Analyze("@value class Point { virtual i32 value() { return 1; } } i32 main() { return 0; }"));
+        Assert.Contains("virtual", virtualMethod.Message);
+    }
+
+    [Fact]
     public void ValidatesForInFixedArrayProtocol()
     {
         var model = Analyze("i32 main() { i32[2] values = { 1, 2 }; i32 total = 0; for (var value in values) { total = total + value; } return total; }");

@@ -113,6 +113,7 @@ public sealed record ClassDeclaration(
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
     public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
+    public bool IsValue => DeclaredAnnotations.Any(annotation => annotation.Name == "value");
 }
 
 public sealed record InterfaceDeclaration(
@@ -372,6 +373,11 @@ public sealed record UnionConstructionExpression(
 
 public sealed record NewExpression(
     TypeSyntax Type,
+    IReadOnlyList<Expression> Arguments,
+    SourceLocation Location) : Expression(Location);
+
+public sealed record ClassConstructionExpression(
+    string TypeName,
     IReadOnlyList<Expression> Arguments,
     SourceLocation Location) : Expression(Location);
 

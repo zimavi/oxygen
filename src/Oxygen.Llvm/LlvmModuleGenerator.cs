@@ -64,8 +64,10 @@ public sealed class LlvmModuleGenerator
                 .DefaultIfEmpty().Max();
             foreach (var cls in model.Classes.Values)
             {
-                var fields = new[] { LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0) }
-                    .Concat(Enumerable.Repeat(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), _virtualSlotCount))
+                var fields = (cls.IsValue
+                        ? Enumerable.Empty<LLVMTypeRef>()
+                        : new[] { LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0) }
+                            .Concat(Enumerable.Repeat(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), _virtualSlotCount)))
                     .Concat(cls.Fields.Select(field => ToLlvmType(field.Type, model))).ToArray();
                 _classTypes[cls.Name] = LLVMTypeRef.CreateStruct(fields, false);
             }
@@ -113,7 +115,7 @@ public sealed class LlvmModuleGenerator
                 foreach (var ctor in cls.Constructors)
                 {
                     var type = LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
-                        new[] { ToLlvmType(SemanticType.Class(cls.Name), model) }
+                        new[] { LLVMTypeRef.CreatePointer(_classTypes[cls.Name], 0) }
                             .Concat(ctor.Parameters.Select(p => ToLlvmType(p.Type, model))).ToArray(), false);
                     _constructors[ConstructorKey(cls, ctor)] = module.AddFunction(
                         OxygenNameMangler.MangleConstructor(cls.ModuleName, cls, ctor), type);
@@ -122,7 +124,7 @@ public sealed class LlvmModuleGenerator
                     _destructors[cls.Name] = module.AddFunction(
                         OxygenNameMangler.MangleDestructor(cls.ModuleName, cls),
                         LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
-                            [ToLlvmType(SemanticType.Class(cls.Name), model)], false));
+                            [LLVMTypeRef.CreatePointer(_classTypes[cls.Name], 0)], false));
             }
             var boundsFailureType = LLVMTypeRef.CreateFunction(
                 LLVMTypeRef.Void, [LLVMTypeRef.Int64, LLVMTypeRef.Int64], false);
@@ -212,7 +214,13 @@ public sealed class LlvmModuleGenerator
     }
 
     private static int FieldOffset(ClassSymbol cls, SemanticModel model, int fieldIndex) =>
-        1 + _virtualSlotCount + fieldIndex;
+        cls.IsValue ? fieldIndex : 1 + _virtualSlotCount + fieldIndex;
+
+    private static bool IsValueClass(SemanticType type, SemanticModel model) =>
+        type.IsClass && model.Classes.TryGetValue(type.StructName!, out var cls) && cls.IsValue;
+
+    private static LLVMTypeRef ClassPointerType(string name) =>
+        LLVMTypeRef.CreatePointer(_classTypes[name], 0);
 
     private static LLVMValueRef GetOrDeclareRuntimeFunction(
         LLVMModuleRef module,
@@ -273,6 +281,12 @@ public sealed class LlvmModuleGenerator
 
     private static LLVMValueRef CreateZeroValue(SemanticType type, SemanticModel model)
     {
+        if (IsValueClass(type, model))
+        {
+            var fields = model.Classes[type.StructName!].Fields
+                .Select(field => CreateZeroValue(field.Type, model)).ToArray();
+            return LLVMValueRef.CreateConstStruct(fields, false);
+        }
         if (type.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
             return LLVMValueRef.CreateConstReal(ToLlvmType(type, model), 0);
         if (type.IsArray || type.IsStruct || type.IsUnion || type.Kind == SemanticTypeKind.String)
@@ -419,8 +433,13 @@ public sealed class LlvmModuleGenerator
         var parameterOffset = IsClassMethod(symbol, model) ? 1 : 0;
         if (parameterOffset != 0)
         {
-            values["this"] = function.GetParam(0);
             var className = symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..];
+            var classSymbol = model.Classes[className];
+            values["this"] = classSymbol.IsValue
+                ? builder.BuildAlloca(_classTypes[className], "this.addr")
+                : function.GetParam(0);
+            if (classSymbol.IsValue)
+                builder.BuildStore(function.GetParam(0), values["this"]);
             InitializeClassFieldStorage(builder, values, storage, model.Classes[className], model);
         }
         for (var index = 0; index < symbol.Parameters.Count; index++)
@@ -546,10 +565,25 @@ public sealed class LlvmModuleGenerator
         {
             if (!owned.Type.IsClass || !_destructors.TryGetValue(owned.Type.StructName!, out var destructor))
                 continue;
-            var value = values.TryGetValue(owned.Name, out var direct)
-                ? direct
-                : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
-            builder.BuildCall2(destructor.FunctionType, destructor, [value]);
+            if (!IsValueClass(owned.Type, model))
+            {
+                var reference = values.TryGetValue(owned.Name, out var directReference)
+                    ? directReference
+                    : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
+                builder.BuildCall2(destructor.FunctionType, destructor, [reference]);
+                continue;
+            }
+            LLVMValueRef address;
+            if (storage.TryGetValue(owned.Name, out var existingAddress))
+                address = existingAddress;
+            else if (values.TryGetValue(owned.Name, out var direct))
+            {
+                address = builder.BuildAlloca(ToLlvmType(owned.Type, model), owned.Name + ".cleanup");
+                builder.BuildStore(direct, address);
+            }
+            else
+                continue;
+            builder.BuildCall2(destructor.FunctionType, destructor, [address]);
         }
         scope.Clear();
     }
@@ -625,6 +659,7 @@ public sealed class LlvmModuleGenerator
                     && assignment.Value is IdentifierExpression sourceIdentifier
                     && model.ExpressionTypes[assignment.Target].IsClass
                     && model.ExpressionTypes[assignment.Value].IsClass
+                    && !IsValueClass(model.ExpressionTypes[assignment.Target], model)
                     && sourceIdentifier.Name != assignmentIdentifier.Name)
                     TransferOwnership(sourceIdentifier.Name, assignmentIdentifier.Name);
                 if (assignment.Target is IdentifierExpression identifier)
@@ -636,16 +671,28 @@ public sealed class LlvmModuleGenerator
                     var targetType = model.ExpressionTypes[member.Target];
                     if (targetType.IsClass)
                     {
-                        var objectValue = values.TryGetValue(targetIdentifier.Name, out var direct)
-                            ? direct
-                            : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
-                        var fieldIndex = model.Classes[targetType.StructName!].Fields
+                        var cls = model.Classes[targetType.StructName!];
+                        var fieldIndex = cls.Fields
                             .Select((field, index) => (field, index))
-                            .First(pair => pair.field.Name == member.MemberName).index + 1;
-                        var address = builder.BuildStructGEP2(_classTypes[targetType.StructName!], objectValue,
-                            (uint)fieldIndex, $"field.{member.MemberName}");
-                        builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                            model.ExpressionTypes[assignment.Target], model), address);
+                            .First(pair => pair.field.Name == member.MemberName).index;
+                        var coerced = CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                            model.ExpressionTypes[assignment.Target], model);
+                        if (cls.IsValue)
+                        {
+                            var current = builder.BuildLoad2(ToLlvmType(targetType, model),
+                                storage[targetIdentifier.Name], targetIdentifier.Name);
+                            var updated = builder.BuildInsertValue(current, coerced, (uint)fieldIndex, "value.update");
+                            builder.BuildStore(updated, storage[targetIdentifier.Name]);
+                        }
+                        else
+                        {
+                            var objectValue = values.TryGetValue(targetIdentifier.Name, out var direct)
+                                ? direct
+                                : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
+                            var address = builder.BuildStructGEP2(_classTypes[targetType.StructName!], objectValue,
+                                (uint)FieldOffset(cls, model, fieldIndex), $"field.{member.MemberName}");
+                            builder.BuildStore(coerced, address);
+                        }
                     }
                     else
                     {
@@ -1204,6 +1251,8 @@ public sealed class LlvmModuleGenerator
             StructLiteralExpression literal => EmitStructLiteral(context, builder, literal, values, storage, model, llvmFunctions),
             ArrayLiteralExpression literal => EmitArrayLiteral(context, builder, literal, values, storage, model, llvmFunctions),
             UnionConstructionExpression construction => EmitUnionConstruction(context, builder, construction, values, storage, model, llvmFunctions),
+            ClassConstructionExpression construction => EmitClassConstructionExpression(
+                context, builder, construction, values, storage, model, llvmFunctions),
             NewExpression creation => EmitNewExpression(context, builder, creation, values, storage, model, llvmFunctions),
             IndexExpression index => builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[index], model),
                 EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions), "array.element"),
@@ -1272,38 +1321,66 @@ public sealed class LlvmModuleGenerator
     {
         var className = expression.Type.NamedType
             ?? throw new InvalidOperationException("Class construction requires a named type.");
+        return EmitClassConstruction(context, builder, className, expression.Arguments, true,
+            values, storage, model, llvmFunctions);
+    }
+
+    private static LLVMValueRef EmitClassConstructionExpression(
+        LLVMContextRef context, LLVMBuilderRef builder, ClassConstructionExpression expression,
+        IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
+        EmitClassConstruction(context, builder, expression.TypeName, expression.Arguments, false,
+            values, storage, model, llvmFunctions);
+
+    private static LLVMValueRef EmitClassConstruction(
+        LLVMContextRef context, LLVMBuilderRef builder, string className,
+        IReadOnlyList<Expression> arguments, bool heapAllocated,
+        IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
         var cls = model.Classes[className];
         var classType = ToLlvmType(SemanticType.Class(className), model);
-        var raw = builder.BuildCall2(_oxygenAlloc.FunctionType, _oxygenAlloc,
-            new[] { LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, SizeOf(SemanticType.Class(className), model), false) },
-            "object");
-        var instance = builder.BuildBitCast(raw, classType, "object.cast");
-        var vtable = builder.BuildStructGEP2(_classTypes[className], instance, 0, "object.vtable");
-        builder.BuildStore(GetTypeName(builder, className), vtable);
-        var virtualMethods = GetVirtualMethods(cls, model);
-        for (var slot = 0; slot < _virtualSlotCount; slot++)
+        LLVMValueRef instance;
+        if (heapAllocated)
         {
-            var slotAddress = builder.BuildStructGEP2(_classTypes[className], instance, (uint)slot + 1,
-                "object.vtable.slot");
-            builder.BuildStore(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)),
-                slotAddress);
+            var raw = builder.BuildCall2(_oxygenAlloc.FunctionType, _oxygenAlloc,
+                new[] { LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, SizeOf(SemanticType.Class(className), model), false) },
+                "object");
+            instance = builder.BuildBitCast(raw, ClassPointerType(className), "object.cast");
         }
-        for (var slot = 0; slot < virtualMethods.Count; slot++)
+        else
         {
-            var slotAddress = builder.BuildStructGEP2(_classTypes[className], instance, (uint)slot + 1,
-                "object.vtable.slot");
-            var target = llvmFunctions[virtualMethods[slot]];
-            builder.BuildStore(builder.BuildBitCast(target,
-                LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "vtable.method"), slotAddress);
+            instance = builder.BuildAlloca(_classTypes[className], "object.addr");
         }
-        var ctor = cls.Constructors.First(candidate => candidate.Parameters.Count == expression.Arguments.Count);
+        if (!cls.IsValue)
+        {
+            var vtable = builder.BuildStructGEP2(_classTypes[className], instance, 0, "object.vtable");
+            builder.BuildStore(GetTypeName(builder, className), vtable);
+            var virtualMethods = GetVirtualMethods(cls, model);
+            for (var slot = 0; slot < _virtualSlotCount; slot++)
+            {
+                var slotAddress = builder.BuildStructGEP2(_classTypes[className], instance, (uint)slot + 1,
+                    "object.vtable.slot");
+                builder.BuildStore(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)),
+                    slotAddress);
+            }
+            for (var slot = 0; slot < virtualMethods.Count; slot++)
+            {
+                var slotAddress = builder.BuildStructGEP2(_classTypes[className], instance, (uint)slot + 1,
+                    "object.vtable.slot");
+                var target = llvmFunctions[virtualMethods[slot]];
+                builder.BuildStore(builder.BuildBitCast(target,
+                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "vtable.method"), slotAddress);
+            }
+        }
+        var ctor = cls.Constructors.First(candidate => candidate.Parameters.Count == arguments.Count);
         var args = new List<LLVMValueRef> { instance };
-        for (var i = 0; i < expression.Arguments.Count; i++)
-            args.Add(CoerceValue(builder, EmitExpression(context, builder, expression.Arguments[i], values, storage, model, llvmFunctions),
-                model.ExpressionTypes[expression.Arguments[i]], ctor.Parameters[i].Type, model));
+        for (var i = 0; i < arguments.Count; i++)
+            args.Add(CoerceValue(builder, EmitExpression(context, builder, arguments[i], values, storage, model, llvmFunctions),
+                model.ExpressionTypes[arguments[i]], ctor.Parameters[i].Type, model));
         builder.BuildCall2(_constructors[ConstructorKey(cls, ctor)].FunctionType,
             _constructors[ConstructorKey(cls, ctor)], args.ToArray(), (ReadOnlySpan<char>)string.Empty);
-        return instance;
+        return cls.IsValue ? builder.BuildLoad2(classType, instance, "value") : instance;
     }
 
     private static LLVMValueRef EmitUnionConstruction(
@@ -1433,6 +1510,8 @@ public sealed class LlvmModuleGenerator
             var cls = model.Classes[targetType.StructName!];
             var fieldIndex = cls.Fields.Select((field, index) => (field, index))
                 .First(pair => pair.field.Name == member.MemberName).index + 1;
+            if (cls.IsValue)
+                return builder.BuildExtractValue(target, (uint)(fieldIndex - 1), $"field.{member.MemberName}");
             fieldIndex = FieldOffset(cls, model, fieldIndex - 1);
             var address = builder.BuildStructGEP2(_classTypes[cls.Name], target, (uint)fieldIndex,
                 $"field.{member.MemberName}");
@@ -1457,7 +1536,7 @@ public sealed class LlvmModuleGenerator
         var operand = EmitExpression(context, builder, cast.Operand, values, storage, model, llvmFunctions);
         var targetType = model.ExpressionTypes[cast];
         var operandType = model.ExpressionTypes[cast.Operand];
-        if (IsReferenceType(targetType) && IsReferenceType(operandType))
+        if (IsReferenceType(targetType, model) && IsReferenceType(operandType, model))
             return EmitReferenceCast(builder, operand, operandType, targetType, model);
         if (targetType.IsPointer && operandType.IsPointer)
         {
@@ -1523,7 +1602,8 @@ public sealed class LlvmModuleGenerator
         return operand;
     }
 
-    private static bool IsReferenceType(SemanticType type) => type.IsClass || type.IsInterface;
+    private static bool IsReferenceType(SemanticType type, SemanticModel model) =>
+        (type.IsClass && !IsValueClass(type, model)) || type.IsInterface;
 
     private static void InitializeRuntimeTypeInfo(
         LLVMBuilderRef builder,
@@ -1721,7 +1801,9 @@ public sealed class LlvmModuleGenerator
         type.Kind switch
         {
             SemanticTypeKind.Pointer => 8,
-            SemanticTypeKind.Class => (ulong)(8 + model.Classes[type.StructName!].Fields.Sum(field => (long)SizeOf(field.Type, model))),
+            SemanticTypeKind.Class => model.Classes[type.StructName!].IsValue
+                ? (ulong)model.Classes[type.StructName!].Fields.Sum(field => (long)SizeOf(field.Type, model))
+                : (ulong)(8 + model.Classes[type.StructName!].Fields.Sum(field => (long)SizeOf(field.Type, model))),
             SemanticTypeKind.Interface => 16,
             SemanticTypeKind.String => 16,
             SemanticTypeKind.Array => checked((ulong)type.ArrayLength * SizeOf(type.ElementType!, model)),
@@ -2094,6 +2176,13 @@ public sealed class LlvmModuleGenerator
             if (!values.TryGetValue(receiver, out var receiverValue))
                 receiverValue = builder.BuildLoad2(ToLlvmType(model.ExpressionTypes.First(pair => pair.Key is IdentifierExpression id && id.Name == receiver).Value, model),
                     storage[receiver], receiver);
+            else if (receiver == "this"
+                && model.Classes[function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..]].IsValue)
+            {
+                var receiverClassName = function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..];
+                receiverValue = builder.BuildLoad2(
+                    _classTypes[receiverClassName], receiverValue, "this.value");
+            }
             arguments.Add(receiverValue);
         }
         for (var index = 0; index < expression.Arguments.Count; index++)
@@ -2188,7 +2277,9 @@ public sealed class LlvmModuleGenerator
         PrimitiveType.Void => LLVMTypeRef.Void,
         _ when type.Kind == SemanticTypeKind.Pointer && type.IsOpaquePointer => LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
         _ when type.Kind == SemanticTypeKind.Pointer => LLVMTypeRef.CreatePointer(ToLlvmType(type.Pointee!, model), 0),
-        _ when type.Kind == SemanticTypeKind.Class => LLVMTypeRef.CreatePointer(_classTypes[type.StructName!], 0),
+        _ when type.Kind == SemanticTypeKind.Class && !IsValueClass(type, model) =>
+            ClassPointerType(type.StructName!),
+        _ when type.Kind == SemanticTypeKind.Class => _classTypes[type.StructName!],
         _ when type.Kind == SemanticTypeKind.Interface => LLVMTypeRef.CreateStruct(
             [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false),
         _ when type.Kind == SemanticTypeKind.Struct => LLVMTypeRef.CreateStruct(
