@@ -482,6 +482,28 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AnalyzesConditionalExpressionsWithCompatibleBranches()
+    {
+        var model = Analyze("i32 main() { return true ? 1 : 2; }");
+
+        Assert.Contains(model.ExpressionTypes, pair =>
+            pair.Key is ConditionalExpression
+            && pair.Value == SemanticType.FromPrimitive(PrimitiveType.I32));
+    }
+
+    [Fact]
+    public void RejectsInvalidConditionalExpressionTypes()
+    {
+        var conditionError = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { return 1 ? 2 : 3; }"));
+        Assert.Contains("conditions must be bool", conditionError.Message);
+
+        var branchError = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { return true ? 1 : false; }"));
+        Assert.Contains("compatible types", branchError.Message);
+    }
+
+    [Fact]
     public void ResolvesPublicFunctionsThroughImportedNestedModules()
     {
         var main = Parse("import math; i32 main() { return math.add(10, 32) + float.pow(20.4, 2.4); }");

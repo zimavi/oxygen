@@ -777,6 +777,8 @@ public sealed class LlvmModuleGenerator
             CastExpression cast => EmitCast(context, builder, cast, values, storage, model, llvmFunctions),
             SizeOfExpression sizeOf => EmitSizeOf(sizeOf, model),
             BinaryExpression binary => EmitBinary(context, builder, binary, values, storage, model, llvmFunctions),
+            ConditionalExpression conditional => EmitConditional(
+                context, builder, conditional, values, storage, model, llvmFunctions),
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
             CallExpression call => EmitCall(context, builder, call, values, storage, model, llvmFunctions),
             _ => throw new InvalidOperationException($"Unsupported expression '{expression.GetType().Name}'.")
@@ -1220,6 +1222,11 @@ public sealed class LlvmModuleGenerator
                 CollectStorageRequirements(binary.Left, requirements);
                 CollectStorageRequirements(binary.Right, requirements);
                 break;
+            case ConditionalExpression conditional:
+                CollectStorageRequirements(conditional.Condition, requirements);
+                CollectStorageRequirements(conditional.WhenTrue, requirements);
+                CollectStorageRequirements(conditional.WhenFalse, requirements);
+                break;
             case CallExpression call:
                 foreach (var argument in call.Arguments)
                     CollectStorageRequirements(argument, requirements);
@@ -1253,6 +1260,42 @@ public sealed class LlvmModuleGenerator
             LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)System.Text.Encoding.UTF8.GetByteCount(value), false),
             1,
             "string.length");
+    }
+
+    private static LLVMValueRef EmitConditional(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        ConditionalExpression expression,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var condition = EmitExpression(context, builder, expression.Condition, values, storage, model, llvmFunctions);
+        var resultType = model.ExpressionTypes[expression];
+        var resultStorage = builder.BuildAlloca(ToLlvmType(resultType, model), "conditional.result");
+        var trueBlock = _currentFunction.AppendBasicBlock("conditional.true");
+        var falseBlock = _currentFunction.AppendBasicBlock("conditional.false");
+        var mergeBlock = _currentFunction.AppendBasicBlock("conditional.end");
+
+        builder.BuildCondBr(condition, trueBlock, falseBlock);
+
+        builder.PositionAtEnd(trueBlock);
+        var whenTrue = EmitExpression(context, builder, expression.WhenTrue, values, storage, model, llvmFunctions);
+        builder.BuildStore(
+            CoerceValue(builder, whenTrue, model.ExpressionTypes[expression.WhenTrue], resultType, model),
+            resultStorage);
+        builder.BuildBr(mergeBlock);
+
+        builder.PositionAtEnd(falseBlock);
+        var whenFalse = EmitExpression(context, builder, expression.WhenFalse, values, storage, model, llvmFunctions);
+        builder.BuildStore(
+            CoerceValue(builder, whenFalse, model.ExpressionTypes[expression.WhenFalse], resultType, model),
+            resultStorage);
+        builder.BuildBr(mergeBlock);
+
+        builder.PositionAtEnd(mergeBlock);
+        return builder.BuildLoad2(ToLlvmType(resultType, model), resultStorage, "conditional.result");
     }
 
     private static LLVMValueRef EmitBinary(LLVMContextRef context, LLVMBuilderRef builder, BinaryExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)

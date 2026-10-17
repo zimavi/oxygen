@@ -57,6 +57,7 @@ public enum TokenKind
     CloseBrace,
     Comma,
     Colon,
+    QuestionMark,
     Dot,
     Tilde,
     Semicolon,

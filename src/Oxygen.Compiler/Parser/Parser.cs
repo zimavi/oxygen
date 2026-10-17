@@ -675,7 +675,19 @@ public sealed class Parser
         return new ReturnStatement(value, token.Location);
     }
 
-    private Expression ParseExpression() => ParseBinaryExpression(0);
+    private Expression ParseExpression() => ParseConditionalExpression();
+
+    private Expression ParseConditionalExpression()
+    {
+        var condition = ParseBinaryExpression(0);
+        if (!Match(TokenKind.QuestionMark))
+            return condition;
+
+        var whenTrue = ParseExpression();
+        Consume(TokenKind.Colon, "Expected ':' after the true branch of a conditional expression.");
+        var whenFalse = ParseConditionalExpression();
+        return new ConditionalExpression(condition, whenTrue, whenFalse, condition.Location);
+    }
 
     private Expression ParseBinaryExpression(int minimumPrecedence)
     {

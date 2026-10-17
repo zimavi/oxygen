@@ -279,6 +279,12 @@ public sealed record BinaryExpression(
     Expression Right,
     SourceLocation Location) : Expression(Location);
 
+public sealed record ConditionalExpression(
+    Expression Condition,
+    Expression WhenTrue,
+    Expression WhenFalse,
+    SourceLocation Location) : Expression(Location);
+
 public sealed record CallExpression(
     string Name,
     IReadOnlyList<Expression> Arguments,

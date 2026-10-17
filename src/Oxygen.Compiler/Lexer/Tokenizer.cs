@@ -301,6 +301,7 @@ public sealed class Tokenizer
                 '}' => TokenKind.CloseBrace,
                 ',' => TokenKind.Comma,
                 ':' => TokenKind.Colon,
+                '?' => TokenKind.QuestionMark,
                 '.' => TokenKind.Dot,
                 '~' => TokenKind.Tilde,
                 ';' => TokenKind.Semicolon,

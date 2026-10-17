@@ -26,6 +26,20 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesRightAssociativeConditionalExpressions()
+    {
+        var unit = Parse("i32 main() { return true ? 1 : false ? 2 : 3; }");
+
+        var conditional = Assert.IsType<ConditionalExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(unit.Functions[0].Body.Statements)).Value);
+        Assert.IsType<BooleanLiteralExpression>(conditional.Condition);
+        Assert.Equal("1", Assert.IsType<IntegerLiteralExpression>(conditional.WhenTrue).Lexeme);
+        var nested = Assert.IsType<ConditionalExpression>(conditional.WhenFalse);
+        Assert.Equal("2", Assert.IsType<IntegerLiteralExpression>(nested.WhenTrue).Lexeme);
+        Assert.Equal("3", Assert.IsType<IntegerLiteralExpression>(nested.WhenFalse).Lexeme);
+    }
+
+    [Fact]
     public void ParsesEnumsAndExplicitCasts()
     {
         var unit = Parse("enum Color : i32 { Red, Green = 4, Blue } i32 main() { return (i32) Color.Blue; }");

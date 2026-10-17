@@ -1297,6 +1297,8 @@ public sealed class SemanticAnalyzer
             UnionConstructionExpression construction => AnalyzeUnionConstruction(construction, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            ConditionalExpression conditional => AnalyzeConditional(
+                conditional, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, allowVoid),
             NewExpression creation => AnalyzeNewExpression(
                 creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
@@ -1599,6 +1601,35 @@ public sealed class SemanticAnalyzer
         }
 
         return left;
+    }
+
+    private SemanticType AnalyzeConditional(
+        ConditionalExpression expression,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        var condition = AnalyzeExpression(
+            expression.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        RequireBoolean(condition, expression.Condition.Location);
+
+        var whenTrue = AnalyzeExpression(
+            expression.WhenTrue, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        var whenFalse = AnalyzeExpression(
+            expression.WhenFalse, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        if (whenTrue == whenFalse)
+            return whenTrue;
+        if (CanAssign(whenTrue, expression.WhenFalse, whenFalse))
+            return whenTrue;
+        if (CanAssign(whenFalse, expression.WhenTrue, whenTrue))
+            return whenFalse;
+
+        throw Error(
+            $"Conditional branches must have compatible types, got {whenTrue} and {whenFalse}",
+            expression.Location);
     }
 
     private SemanticType AnalyzeCall(
@@ -2069,6 +2100,12 @@ public sealed class SemanticAnalyzer
         {
             UnaryExpression e => e with { Operand = Expr(e.Operand) },
             BinaryExpression e => e with { Left = Expr(e.Left), Right = Expr(e.Right) },
+            ConditionalExpression e => e with
+            {
+                Condition = Expr(e.Condition),
+                WhenTrue = Expr(e.WhenTrue),
+                WhenFalse = Expr(e.WhenFalse)
+            },
             CallExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray(), TypeArguments = e.TypeArguments?.Select(Type).ToArray() },
             CastExpression e => e with { TargetType = Type(e.TargetType), Operand = Expr(e.Operand) },
             SizeOfExpression e => e with { TargetType = e.TargetType is null ? null : Type(e.TargetType), Operand = e.Operand is null ? null : Expr(e.Operand) },

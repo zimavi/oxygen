@@ -489,6 +489,19 @@ public sealed class LlvmTests
         Assert.Contains("br i1", ir);
     }
 
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsConditionalExpressionControlFlow()
+    {
+        var model = Analyze("i32 main() { return true ? 1 : 2; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("conditional.true", ir);
+        Assert.Contains("conditional.false", ir);
+        Assert.Contains("conditional.end", ir);
+    }
+
     private static SemanticModel Analyze(string source)
     {
         var tokenizer = new Tokenizer(Log.Logger);

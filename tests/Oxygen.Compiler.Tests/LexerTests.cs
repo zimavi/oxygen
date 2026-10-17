@@ -97,6 +97,15 @@ public sealed class LexerTests
     }
 
     [Fact]
+    public void TokenizesConditionalExpressionPunctuation()
+    {
+        Assert.Equal(
+            [TokenKind.True, TokenKind.QuestionMark, TokenKind.IntegerLiteral, TokenKind.Colon,
+                TokenKind.IntegerLiteral, TokenKind.EndOfFile],
+            _lexer.Tokenize("true ? 1 : 0").Select(token => token.Kind));
+    }
+
+    [Fact]
     public void TokenizesNumericSuffixesAndSizeTypes()
     {
         var tokens = _lexer.Tokenize("1u64 1f32 usize isize");
