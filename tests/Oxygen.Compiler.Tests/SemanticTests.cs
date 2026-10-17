@@ -453,12 +453,44 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void RejectsOverloadsWithIdenticalParameterTypes()
+    public void UsesExpectedTypeForReturnOnlyOverloads()
+    {
+        var model = Analyze(
+            "i32 value(i32 input) { return input; } f64 value(i32 input) { return 1.0; } i32 main() { i32 result = value(1); return result; }");
+
+        Assert.Equal("value", model.ResolvedCalls.Values.Single().Name);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), model.ResolvedCalls.Values.Single().ReturnType);
+    }
+
+    [Fact]
+    public void KeepsReturnOnlyOverloadsAmbiguousForVar()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze(
-            "i32 value(i32 input) { return input; } f64 value(i32 input) { return input; } i32 main() { return 0; }"));
+            "i32 value(i32 input) { return input; } f64 value(i32 input) { return 1.0; } i32 main() { var result = value(1); return 0; }"));
 
-        Assert.Contains("with the same parameter types is already declared", exception.Message);
+        Assert.Contains("ambiguous", exception.Message);
+    }
+
+    [Fact]
+    public void UsesReturnContextForCallsAndCasts()
+    {
+        var model = Analyze(
+            "i32 value(i32 input) { return input; } f64 value(i32 input) { return 1.0; } " +
+            "i32 main() { return cast<i32>(value(1)); }");
+
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32),
+            model.ResolvedCalls.Values.Single().ReturnType);
+    }
+
+    [Fact]
+    public void InfersGenericReturnTypeFromExpectedType()
+    {
+        var model = Analyze(
+            "T make<T>() { return 0; } i32 main() { i32 result = make(); return result; }");
+
+        Assert.Contains(model.ResolvedCalls.Values, function =>
+            function.Name == "make"
+            && function.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I32));
     }
 
     [Fact]

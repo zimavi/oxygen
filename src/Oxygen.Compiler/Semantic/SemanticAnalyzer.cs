@@ -45,7 +45,8 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         var target = ResolveType(cast.TargetType);
-        var operand = AnalyzeExpression(cast.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        var operand = AnalyzeExpression(cast.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            expectedType: target);
         if (target.IsEnum)
         {
             var enumSymbol = _enumsByName[target.EnumName!];
@@ -218,7 +219,8 @@ public sealed partial class SemanticAnalyzer
                 var methods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.Methods.Select(method =>
                         CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray());
-                if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1))
+                if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1
+                    && group.Select(method => method.ReturnType).Distinct().Count() == 1))
                     throw Error($"Interface '{declaration.Name}' contains duplicate methods", declaration.Location);
                 _interfacesByName[declaration.Name] = _interfacesByName[declaration.Name] with { Methods = methods };
             }
@@ -232,7 +234,8 @@ public sealed partial class SemanticAnalyzer
                 var methods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.Methods.Select(method =>
                         CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray());
-                if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1))
+                if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1
+                    && group.Select(method => method.ReturnType).Distinct().Count() == 1))
                     throw Error($"Class '{declaration.Name}' contains duplicate methods", declaration.Location);
                 var constructors = WithGenericTypes(declaration.DeclaredTypeParameters, () => declaration.Constructors.Select(constructor =>
                 {
@@ -362,7 +365,8 @@ public sealed partial class SemanticAnalyzer
                     functionsByName.Add(key, overloads);
                 }
 
-                if (overloads.Any(existing => HasSameParameterTypes(existing, symbol)))
+                if (overloads.Any(existing => HasSameParameterTypes(existing, symbol)
+                    && existing.ReturnType == symbol.ReturnType))
                 {
                     ReportOrThrow(
                         diagnostics,
@@ -1385,7 +1389,8 @@ public sealed partial class SemanticAnalyzer
 
         var initializerType = declaration.Initializer is null
             ? (SemanticType?)null
-            : AnalyzeExpression(declaration.Initializer, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            : AnalyzeExpression(declaration.Initializer, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+                expectedType: declaration.Type.IsInferred ? null : ResolveType(declaration.Type));
         var type = declaration.Type.IsInferred
             ? initializerType!
             : ResolveType(declaration.Type);
@@ -1429,7 +1434,8 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         var targetType = AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-        var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            expectedType: targetType);
         if (assignment.Operator != TokenKind.Equals)
         {
             if (targetType.IsPointer)
@@ -1539,7 +1545,8 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Void function '{function.Name}' cannot return a value", returnStatement.Value.Location);
         }
 
-        var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            expectedType: function.ReturnType);
         if (valueType.IsClass && returnStatement.Value is IdentifierExpression identifier
             && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
             _escapingClassLocals.Add(declaration);
@@ -1561,6 +1568,7 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        SemanticType? expectedType = null,
         bool allowVoid = false)
     {
         var type = expression switch
@@ -1585,8 +1593,8 @@ public sealed partial class SemanticAnalyzer
             UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             ConditionalExpression conditional => AnalyzeConditional(
-                conditional, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
-            CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, allowVoid),
+                conditional, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
+            CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid),
             NewExpression creation => AnalyzeNewExpression(
                 creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             _ => throw new InvalidOperationException($"Unsupported expression type {expression.GetType().Name}.")
@@ -1930,16 +1938,19 @@ public sealed partial class SemanticAnalyzer
         string moduleName,
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
-        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        SemanticType? expectedType)
     {
         var condition = AnalyzeExpression(
             expression.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         RequireBoolean(condition, expression.Condition.Location);
 
         var whenTrue = AnalyzeExpression(
-            expression.WhenTrue, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            expression.WhenTrue, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            expectedType);
         var whenFalse = AnalyzeExpression(
-            expression.WhenFalse, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            expression.WhenFalse, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            expectedType);
         if (whenTrue == whenFalse)
             return whenTrue;
         if (CanAssign(whenTrue, expression.WhenFalse, whenFalse))
@@ -1960,6 +1971,7 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        SemanticType? expectedType,
         bool allowVoid)
     {
         var unionParts = call.Name.Split('.');
@@ -2004,12 +2016,20 @@ public sealed partial class SemanticAnalyzer
                     var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
                         .Where(method => method.Parameters.Select((parameter, index) =>
                             CanAssign(parameter.Type, call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
+                    if (expectedType is not null)
+                    {
+                        var exactExpected = methodMatches.Where(method => method.ReturnType == expectedType).ToArray();
+                        if (exactExpected.Length == 1)
+                            methodMatches = exactExpected;
+                    }
                     if (methodMatches.Length == 1)
                     {
                         resolvedCalls[call] = methodMatches[0];
                         _usedFunctions.Add(methodMatches[0]);
                         return methodMatches[0].ReturnType;
                     }
+                    if (methodMatches.Length > 1)
+                        throw Error($"Method call '{methodName}' is ambiguous; provide an expected return type", call.Location);
                     if (methodCandidates.Length > 0)
                         throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
                 }
@@ -2056,13 +2076,20 @@ public sealed partial class SemanticAnalyzer
         {
             var inferred = overloads
                 .Where(candidate => candidate.IsGeneric && candidate.Parameters.Count == argumentTypes.Count)
-                .Select(candidate => (candidate, substitutions: InferGenericSubstitutions(candidate, argumentTypes)))
+                .Select(candidate => (candidate, substitutions: InferGenericSubstitutions(candidate, argumentTypes, expectedType)))
                 .Where(item => item.substitutions is not null)
                 .ToList();
-            if (inferred.Count == 1)
+            var inferredMatches = expectedType is not null
+                ? inferred.Where(item =>
+                {
+                    var returnType = SubstituteGenericType(item.candidate.ReturnType, item.substitutions!);
+                    return returnType == expectedType;
+                }).ToList()
+                : inferred;
+            if (inferredMatches.Count == 1)
             {
-                var specialized = SpecializeFunction(inferred[0].candidate, inferred[0].substitutions!, functions);
-                AnalyzeFunction(specialized, functions, inferred[0].candidate.ModuleName, imports, expressionTypes, resolvedCalls);
+                var specialized = SpecializeFunction(inferredMatches[0].candidate, inferredMatches[0].substitutions!, functions);
+                AnalyzeFunction(specialized, functions, inferredMatches[0].candidate.ModuleName, imports, expressionTypes, resolvedCalls);
                 overloads = overloads.Append(specialized).ToList();
             }
         }
@@ -2090,8 +2117,16 @@ public sealed partial class SemanticAnalyzer
                 .Select((parameter, index) => CanAssign(parameter.Type, call.Arguments[index], argumentTypes[index]))
                 .All(match => match))
             .ToList();
+        if (expectedType is not null)
+        {
+            var exactExpected = matches.Where(candidate => candidate.ReturnType == expectedType).ToList();
+            if (exactExpected.Count == 1)
+                matches = exactExpected;
+        }
         if (matches.Select(match => match.ModuleName).Distinct(StringComparer.Ordinal).Count() > 1)
             throw Error($"Function '{call.Name}' is ambiguous; use a module prefix", call.Location, call.Name.Length);
+        if (matches.Count > 1)
+            throw Error($"Function '{call.Name}' is ambiguous; provide an expected return type", call.Location, call.Name.Length);
         if (matches.Count == 0)
         {
             if (candidates.Count == 1)
@@ -2370,13 +2405,20 @@ public sealed partial class SemanticAnalyzer
 
     private static IReadOnlyDictionary<string, SemanticType>? InferGenericSubstitutions(
         FunctionSymbol generic,
-        IReadOnlyList<SemanticType> argumentTypes)
+        IReadOnlyList<SemanticType> argumentTypes,
+        SemanticType? expectedReturnType)
     {
         var substitutions = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
         for (var index = 0; index < generic.Parameters.Count; index++)
         {
             var syntax = generic.Declaration.Parameters[index].Type;
             var actual = argumentTypes[index];
+            if (!ContainsGenericType(syntax, generic.DeclaredGenericParameters))
+            {
+                if (generic.Parameters[index].Type != actual)
+                    return null;
+                continue;
+            }
             while (syntax.IsPointer)
             {
                 if (!actual.IsPointer || actual.Pointee is null || syntax.Pointee is null)
@@ -2386,15 +2428,61 @@ public sealed partial class SemanticAnalyzer
                 actual = actual.Pointee;
             }
 
-            if (syntax.NamedType is null || !generic.DeclaredGenericParameters.Contains(syntax.NamedType))
+            if (!TryInferGenericType(syntax, actual, generic.DeclaredGenericParameters, substitutions))
                 return null;
-            if (substitutions.TryGetValue(syntax.NamedType, out var existing) && existing != actual)
-                return null;
-            substitutions[syntax.NamedType] = actual;
         }
 
+        if (expectedReturnType is not null)
+        {
+            if (!ContainsGenericType(generic.Declaration.ReturnType, generic.DeclaredGenericParameters))
+            {
+                if (generic.ReturnType != expectedReturnType)
+                    return null;
+            }
+            else if (!TryInferGenericType(generic.Declaration.ReturnType, expectedReturnType,
+                         generic.DeclaredGenericParameters, substitutions))
+                return null;
+        }
         return substitutions.Count == generic.DeclaredGenericParameters.Count ? substitutions : null;
     }
+
+    private static bool ContainsGenericType(TypeSyntax syntax, IReadOnlyList<string> genericParameters) =>
+        syntax.NamedType is not null && genericParameters.Contains(syntax.NamedType)
+        || syntax.Pointee is not null && ContainsGenericType(syntax.Pointee, genericParameters)
+        || syntax.ElementType is not null && ContainsGenericType(syntax.ElementType, genericParameters)
+        || syntax.TypeArguments is not null && syntax.TypeArguments.Any(argument =>
+            ContainsGenericType(argument, genericParameters));
+
+    private static bool TryInferGenericType(
+        TypeSyntax syntax,
+        SemanticType actual,
+        IReadOnlyList<string> genericParameters,
+        IDictionary<string, SemanticType> substitutions)
+    {
+        while (syntax.IsPointer)
+        {
+            if (!actual.IsPointer || actual.Pointee is null || syntax.Pointee is null)
+                return false;
+            syntax = syntax.Pointee;
+            actual = actual.Pointee;
+        }
+
+        if (syntax.NamedType is null || !genericParameters.Contains(syntax.NamedType))
+            return false;
+        if (substitutions.TryGetValue(syntax.NamedType, out var existing))
+            return existing == actual;
+        substitutions[syntax.NamedType] = actual;
+        return true;
+    }
+
+    private static SemanticType SubstituteGenericType(
+        SemanticType type,
+        IReadOnlyDictionary<string, SemanticType> substitutions) =>
+        type.IsGenericParameter && substitutions.TryGetValue(type.GenericParameterName!, out var replacement)
+            ? replacement
+            : type.IsPointer && type.Pointee is not null
+                ? SemanticType.PointerTo(SubstituteGenericType(type.Pointee, substitutions))
+                : type;
 
     private FunctionSymbol SpecializeFunction(
         FunctionSymbol generic,
@@ -2563,7 +2651,8 @@ public sealed partial class SemanticAnalyzer
         }
 
         return candidates
-            .GroupBy(symbol => symbol.QualifiedName + ":" + string.Join(",", symbol.Parameters.Select(p => p.Type)))
+            .GroupBy(symbol => symbol.QualifiedName + ":" + string.Join(",", symbol.Parameters.Select(p => p.Type))
+                + ":" + symbol.ReturnType)
             .Select(group => group.First())
             .ToList();
     }
