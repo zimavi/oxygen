@@ -30,6 +30,18 @@ pointer, pointer-pointer arithmetic, multiplication, division, bitwise
 operations, shifts, and pointer comparisons other than `==` and `!=` are not
 supported.
 
+Typed pointers can also be indexed with `pointer[index]`. This applies the
+scaled index offset and dereferences the resulting address:
+
+```oxygen
+i32 value = pointer[2];
+pointer[2] = value + 1;
+```
+
+Pointer indexing has no bounds metadata or runtime bounds check. The pointed-to
+type must be typed rather than `void`; validity and lifetime remain the
+programmer's responsibility.
+
 Integers support prefix and postfix `++` and `--`, compound arithmetic and
 bitwise assignment, and the binary bitwise (`&`, `|`, `^`) and shift (`<<`,
 `>>`) operators. Increment and decrement require mutable addressable values.

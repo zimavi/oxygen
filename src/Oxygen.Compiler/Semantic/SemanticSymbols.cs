@@ -100,6 +100,14 @@ public sealed record FunctionSymbol(
     public bool IsSpecialized => SpecializationArguments is not null;
 }
 
+public sealed record IteratorProtocol(
+    Expression Collection,
+    CallExpression IterCall,
+    FunctionSymbol Iter,
+    FunctionSymbol Next,
+    SemanticType ElementType,
+    SemanticType OptionType);
+
 public sealed class SemanticModel
 {
     internal SemanticModel(
@@ -113,7 +121,8 @@ public sealed class SemanticModel
         IReadOnlyDictionary<string, UnionSymbol>? unions = null,
         IReadOnlyDictionary<string, ClassSymbol>? classes = null,
         IReadOnlyDictionary<string, InterfaceSymbol>? interfaces = null,
-        IReadOnlySet<VariableDeclarationStatement>? escapingClassLocals = null)
+        IReadOnlySet<VariableDeclarationStatement>? escapingClassLocals = null,
+        IReadOnlyDictionary<ForInStatement, IteratorProtocol>? iteratorProtocols = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -126,6 +135,7 @@ public sealed class SemanticModel
         Classes = classes ?? new Dictionary<string, ClassSymbol>();
         Interfaces = interfaces ?? new Dictionary<string, InterfaceSymbol>();
         EscapingClassLocals = escapingClassLocals ?? new HashSet<VariableDeclarationStatement>();
+        IteratorProtocols = iteratorProtocols ?? new Dictionary<ForInStatement, IteratorProtocol>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -144,4 +154,5 @@ public sealed class SemanticModel
     public IReadOnlyDictionary<string, ClassSymbol> Classes { get; }
     public IReadOnlyDictionary<string, InterfaceSymbol> Interfaces { get; }
     public IReadOnlySet<VariableDeclarationStatement> EscapingClassLocals { get; }
+    public IReadOnlyDictionary<ForInStatement, IteratorProtocol> IteratorProtocols { get; }
 }

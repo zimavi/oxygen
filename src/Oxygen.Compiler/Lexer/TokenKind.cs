@@ -13,6 +13,7 @@ public enum TokenKind
     Else,
     While,
     For,
+    In,
     Break,
     Continue,
     This,

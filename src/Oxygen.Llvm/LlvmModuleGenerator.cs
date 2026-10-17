@@ -885,6 +885,102 @@ public sealed class LlvmModuleGenerator
                 builder.PositionAtEnd(endBlock);
                 return false;
             }
+            case ForInStatement forInStatement:
+            {
+                if (model.IteratorProtocols.TryGetValue(forInStatement, out var protocol))
+                {
+                    var iteratorName = "__forin_iterator";
+                    var protocolCollectionValue = EmitExpression(context, builder, protocol.Collection, values, storage, model, llvmFunctions);
+                    var iteratorValue = builder.BuildCall2(llvmFunctions[protocol.Iter].FunctionType,
+                        llvmFunctions[protocol.Iter], (ReadOnlySpan<LLVMValueRef>)new[] { protocolCollectionValue },
+                        (ReadOnlySpan<char>)"for.in.iter");
+                    values[iteratorName] = iteratorValue;
+                    var protocolValueStorage = builder.BuildAlloca(ToLlvmType(protocol.ElementType, model),
+                        forInStatement.VariableName + ".addr");
+                    storage[forInStatement.VariableName] = protocolValueStorage;
+                    var protocolConditionBlock = function.AppendBasicBlock("for.in.protocol.cond");
+                    var protocolBodyBlock = function.AppendBasicBlock("for.in.protocol.body");
+                    var protocolEndBlock = function.AppendBasicBlock("for.in.protocol.end");
+                    builder.BuildBr(protocolConditionBlock);
+                    builder.PositionAtEnd(protocolConditionBlock);
+                    var nextResult = builder.BuildCall2(
+                        llvmFunctions[protocol.Next].FunctionType,
+                        llvmFunctions[protocol.Next],
+                        (ReadOnlySpan<LLVMValueRef>)new[] { iteratorValue }, (ReadOnlySpan<char>)"for.in.next");
+                    var tag = builder.BuildExtractValue(nextResult, 0, "for.in.option.tag");
+                    var hasValue = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, tag,
+                        LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false), "for.in.has_value");
+                    builder.BuildCondBr(hasValue, protocolBodyBlock, protocolEndBlock);
+                    builder.PositionAtEnd(protocolBodyBlock);
+                    builder.BuildStore(builder.BuildExtractValue(nextResult, 1, "for.in.option.value"),
+                        protocolValueStorage);
+                    var protocolScopeDepth = _ownedScopes.Count;
+                    _ownedScopes.Push([]);
+                    loops.Push((protocolEndBlock, protocolConditionBlock, protocolScopeDepth, true));
+                    var protocolBodyTerminated = EmitStatement(context, builder, function, forInStatement.Body,
+                        values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                    loops.Pop();
+                    if (!protocolBodyTerminated) builder.BuildBr(protocolConditionBlock);
+                    builder.PositionAtEnd(protocolEndBlock);
+                    if (_ownedScopes.Count > protocolScopeDepth)
+                    {
+                        CleanupOwnedScope(builder, values, storage, model);
+                        _ownedScopes.Pop();
+                    }
+                    storage.Remove(forInStatement.VariableName);
+                    values.Remove(iteratorName);
+                    return false;
+                }
+                var collectionType = model.ExpressionTypes[forInStatement.Collection];
+                var elementType = collectionType.ElementType!;
+                var collectionStorage = builder.BuildAlloca(ToLlvmType(collectionType, model), "for.in.collection");
+                var collectionValue = EmitExpression(context, builder, forInStatement.Collection, values, storage, model, llvmFunctions);
+                builder.BuildStore(collectionValue, collectionStorage);
+                var counter = builder.BuildAlloca(LLVMTypeRef.Int64, "for.in.index");
+                builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false), counter);
+                var valueStorage = builder.BuildAlloca(ToLlvmType(elementType, model), forInStatement.VariableName + ".addr");
+                var hadPreviousStorage = storage.TryGetValue(forInStatement.VariableName, out var previousStorage);
+                storage[forInStatement.VariableName] = valueStorage;
+                var conditionBlock = function.AppendBasicBlock("for.in.cond");
+                var bodyBlock = function.AppendBasicBlock("for.in.body");
+                var incrementBlock = function.AppendBasicBlock("for.in.increment");
+                var endBlock = function.AppendBasicBlock("for.in.end");
+                builder.BuildBr(conditionBlock);
+                builder.PositionAtEnd(conditionBlock);
+                var currentIndex = builder.BuildLoad2(LLVMTypeRef.Int64, counter, "for.in.index");
+                var length = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)collectionType.ArrayLength, false);
+                var hasNext = builder.BuildICmp(LLVMIntPredicate.LLVMIntULT, currentIndex, length, "for.in.has_next");
+                builder.BuildCondBr(hasNext, bodyBlock, endBlock);
+                builder.PositionAtEnd(bodyBlock);
+                var elementAddress = builder.BuildGEP2(ToLlvmType(collectionType, model), collectionStorage,
+                    [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false), currentIndex],
+                    (ReadOnlySpan<char>)"for.in.element");
+                var element = builder.BuildLoad2(ToLlvmType(elementType, model), elementAddress, "for.in.value");
+                builder.BuildStore(element, valueStorage);
+                var forInScopeDepth = _ownedScopes.Count;
+                _ownedScopes.Push([]);
+                loops.Push((endBlock, incrementBlock, forInScopeDepth, true));
+                var bodyTerminated = EmitStatement(context, builder, function, forInStatement.Body, values, storage,
+                    storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                loops.Pop();
+                if (!bodyTerminated) builder.BuildBr(incrementBlock);
+                builder.PositionAtEnd(incrementBlock);
+                currentIndex = builder.BuildLoad2(LLVMTypeRef.Int64, counter, "for.in.index");
+                builder.BuildStore(builder.BuildAdd(currentIndex,
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 1, false), "for.in.next"), counter);
+                builder.BuildBr(conditionBlock);
+                builder.PositionAtEnd(endBlock);
+                if (_ownedScopes.Count > forInScopeDepth)
+                {
+                    CleanupOwnedScope(builder, values, storage, model);
+                    _ownedScopes.Pop();
+                }
+                if (hadPreviousStorage)
+                    storage[forInStatement.VariableName] = previousStorage!;
+                else
+                    storage.Remove(forInStatement.VariableName);
+                return false;
+            }
             case ForStatement forStatement:
             {
                 if (forStatement.Initializer is not null
@@ -1070,12 +1166,16 @@ public sealed class LlvmModuleGenerator
     {
         var union = model.Unions[construction.UnionName];
         var index = union.Cases.Select((item, i) => (item, i)).First(pair => pair.item.Name == construction.CaseName).i;
-        var result = LLVMValueRef.CreateConstNull(ToLlvmType(SemanticType.Union(construction.UnionName), model));
+        var unionType = model.ExpressionTypes[construction];
+        var result = LLVMValueRef.CreateConstNull(ToLlvmType(unionType, model));
         result = builder.BuildInsertValue(result,
             LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)index, false), 0, "union.tag");
         if (construction.Arguments.Count == 1)
             result = builder.BuildInsertValue(result,
-                EmitExpression(context, builder, construction.Arguments[0], values, storage, model, llvmFunctions), 1, "union.payload");
+                CoerceValue(builder,
+                    EmitExpression(context, builder, construction.Arguments[0], values, storage, model, llvmFunctions),
+                    model.ExpressionTypes[construction.Arguments[0]], UnionPayloadType(unionType, model), model),
+                1, "union.payload");
         return result;
     }
 
@@ -1093,7 +1193,18 @@ public sealed class LlvmModuleGenerator
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var arrayType = model.ExpressionTypes[index.Target];
+        var targetType = model.ExpressionTypes[index.Target];
+        if (targetType.IsPointer)
+        {
+            var pointerValue = EmitExpression(context, builder, index.Target, values, storage, model, llvmFunctions);
+            var pointerIndex = EmitExpression(context, builder, index.Index, values, storage, model, llvmFunctions);
+            if (model.ExpressionTypes[index.Index].Primitive != PrimitiveType.I64)
+                pointerIndex = builder.BuildSExt(pointerIndex, LLVMTypeRef.Int64, "pointer.index");
+            return builder.BuildGEP2(ToLlvmType(targetType.Pointee!, model), pointerValue,
+                [pointerIndex], (ReadOnlySpan<char>)"pointer.address");
+        }
+
+        var arrayType = targetType;
         LLVMValueRef pointer;
         if (index.Target is IdentifierExpression identifier && storage.TryGetValue(identifier.Name, out var identifierStorage))
             pointer = identifierStorage;
@@ -1469,7 +1580,7 @@ public sealed class LlvmModuleGenerator
             SemanticTypeKind.Array => checked((ulong)type.ArrayLength * SizeOf(type.ElementType!, model)),
             SemanticTypeKind.Struct => (ulong)model.Structs[type.StructName!].Fields
                 .Sum(field => checked((long)SizeOf(field.Type, model))),
-            SemanticTypeKind.Union => 8,
+            SemanticTypeKind.Union => checked(4UL + SizeOf(UnionPayloadType(type, model), model)),
             SemanticTypeKind.Enum => SizeOf(SemanticType.FromPrimitive(model.Enums[type.EnumName!].UnderlyingType), model),
             SemanticTypeKind.Primitive => type.Primitive switch
             {
@@ -1540,6 +1651,10 @@ public sealed class LlvmModuleGenerator
                 if (loop.Initializer is not null) CollectStorageRequirements(loop.Initializer, requirements);
                 if (loop.Condition is not null) CollectStorageRequirements(loop.Condition, requirements);
                 if (loop.Increment is not null) CollectStorageRequirements(loop.Increment, requirements);
+                CollectStorageRequirements(loop.Body, requirements);
+                break;
+            case ForInStatement loop:
+                CollectStorageRequirements(loop.Collection, requirements);
                 CollectStorageRequirements(loop.Body, requirements);
                 break;
             case SwitchStatement switchStatement:
@@ -1811,11 +1926,15 @@ public sealed class LlvmModuleGenerator
         if (parts.Length == 2 && model.Unions.TryGetValue(parts[0], out var union))
         {
             var index = union.Cases.Select((item, i) => (item, i)).First(pair => pair.item.Name == parts[1]).i;
-            var result = LLVMValueRef.CreateConstNull(ToLlvmType(SemanticType.Union(parts[0]), model));
+            var unionType = model.ExpressionTypes[expression];
+            var result = LLVMValueRef.CreateConstNull(ToLlvmType(unionType, model));
             result = builder.BuildInsertValue(result, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)index, false), 0, "union.tag");
             if (expression.Arguments.Count == 1)
                 result = builder.BuildInsertValue(result,
-                    EmitExpression(context, builder, expression.Arguments[0], values, storage, model, llvmFunctions), 1, "union.payload");
+                    CoerceValue(builder,
+                        EmitExpression(context, builder, expression.Arguments[0], values, storage, model, llvmFunctions),
+                        model.ExpressionTypes[expression.Arguments[0]], UnionPayloadType(unionType, model), model),
+                    1, "union.payload");
             return result;
         }
         var function = model.ResolvedCalls[expression];
@@ -1914,9 +2033,36 @@ public sealed class LlvmModuleGenerator
         _ when type.Kind == SemanticTypeKind.Array => LLVMTypeRef.CreateArray(ToLlvmType(type.ElementType!, model), (uint)type.ArrayLength),
         _ when type.Kind == SemanticTypeKind.Enum => ToLlvmType(
             SemanticType.FromPrimitive(model.Enums[type.EnumName!].UnderlyingType), model),
-        _ when type.Kind == SemanticTypeKind.Union => LLVMTypeRef.CreateStruct([LLVMTypeRef.Int32, LLVMTypeRef.Int32], false),
+        _ when type.Kind == SemanticTypeKind.Union => LLVMTypeRef.CreateStruct(
+            [LLVMTypeRef.Int32, ToLlvmType(UnionPayloadType(type, model), model)], false),
         _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
     };
+
+    private static SemanticType UnionPayloadType(SemanticType type, SemanticModel model)
+    {
+        var union = model.Unions[type.EnumName!];
+        var payload = union.Cases.FirstOrDefault(item => item.PayloadType is not null)?.PayloadType;
+        if (payload is null)
+            return SemanticType.FromPrimitive(PrimitiveType.I8);
+        return SubstituteGeneric(payload, union.DeclaredTypeParameters, type.TypeArguments);
+    }
+
+    private static SemanticType SubstituteGeneric(
+        SemanticType type, IReadOnlyList<string> parameters, IReadOnlyList<SemanticType>? arguments)
+    {
+        if (type.IsGenericParameter && arguments is not null)
+        {
+            var index = parameters.ToList().IndexOf(type.GenericParameterName!);
+            if (index >= 0 && index < arguments.Count)
+                return arguments[index];
+        }
+        if (type.IsPointer)
+            return SemanticType.PointerTo(SubstituteGeneric(type.Pointee!, parameters, arguments));
+        if (type.TypeArguments is { Count: > 0 })
+            return type with { TypeArguments = type.TypeArguments.Select(item =>
+                SubstituteGeneric(item, parameters, arguments)).ToArray() };
+        return type;
+    }
 
     private static string NumericValue(string lexeme)
     {

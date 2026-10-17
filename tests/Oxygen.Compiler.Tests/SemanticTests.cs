@@ -34,6 +34,53 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ValidatesForInFixedArrayProtocol()
+    {
+        var model = Analyze("i32 main() { i32[2] values = { 1, 2 }; i32 total = 0; for (var value in values) { total = total + value; } return total; }");
+
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.FromPrimitive(PrimitiveType.I32));
+    }
+
+    [Fact]
+    public void RejectsForInNonArrayCollection()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 value = 1; for (var item in value) { return item; } return 0; }"));
+
+        Assert.Contains("For-in requires a fixed array or iterator-protocol collection", exception.Message);
+    }
+
+    [Fact]
+    public void ResolvesForInIteratorProtocol()
+    {
+        var model = Analyze(
+            "union Option<T> { Some(T); None; } " +
+            "class Iter { i32 index; Option<i32> next() { return Option.None(); } } " +
+            "class Values { Iter iter() { return new Iter(); } } " +
+            "i32 main() { Values values = new Values(); for (var value in values) { return value; } return 0; }");
+
+        Assert.Single(model.IteratorProtocols);
+        var protocol = model.IteratorProtocols.Values.Single();
+        Assert.Equal("iter", protocol.Iter.Name);
+        Assert.Equal("next", protocol.Next.Name);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), protocol.ElementType);
+    }
+
+    [Fact]
+    public void ResolvesIteratorProtocolForNonIdentifierCollectionExpression()
+    {
+        var model = Analyze(
+            "union Option<T> { Some(T); None; } " +
+            "class Iter { Option<i64> next() { return Option.None(); } } " +
+            "class Values { Iter iter() { return new Iter(); } } " +
+            "Values getValues() { return new Values(); } " +
+            "i32 main() { for (var value in getValues()) { return 0; } return 0; }");
+
+        var protocol = Assert.Single(model.IteratorProtocols.Values);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I64), protocol.ElementType);
+    }
+
+    [Fact]
     public void TracksClassLocalsThatEscapeTheirLexicalScope()
     {
         var model = Analyze(
@@ -286,6 +333,26 @@ public sealed class SemanticTests
             && function.Parameters[0].Type == SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.I32)));
         Assert.Contains(model.ExpressionTypes.Values, type =>
             type == SemanticType.FromPrimitive(PrimitiveType.U64));
+    }
+
+    [Fact]
+    public void AnalyzesPointerIndexingAsPointeeAccess()
+    {
+        var model = Analyze(
+            "i32 main() { i32 first = 1; i32* pointer = &first; pointer[0] = 2; return pointer[0]; }");
+
+        Assert.Equal(
+            SemanticType.FromPrimitive(PrimitiveType.I32),
+            model.ExpressionTypes.Values.Last());
+    }
+
+    [Fact]
+    public void RejectsIndexingOpaquePointers()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { void* pointer = 0; return pointer[0]; }"));
+
+        Assert.Contains("Cannot dereference an opaque void pointer", exception.Message);
     }
 
     [Fact]

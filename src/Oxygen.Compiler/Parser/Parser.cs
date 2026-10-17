@@ -637,9 +637,19 @@ public sealed class Parser
         return new WhileStatement(condition, ParseStatement(), location);
     }
 
-    private ForStatement ParseFor(SourceLocation location)
+    private Statement ParseFor(SourceLocation location)
     {
         Consume(TokenKind.OpenParenthesis, "Expected '(' after 'for'.");
+        if (Check(TokenKind.Var) && Peek(1).Kind == TokenKind.Identifier && Peek(2).Kind == TokenKind.In)
+        {
+            var variableType = ParseType(allowInferred: true);
+            var variable = Consume(TokenKind.Identifier, "Expected an iteration variable name.").Lexeme;
+            Consume(TokenKind.In, "Expected 'in' after the iteration variable.");
+            var collection = ParseExpression();
+            Consume(TokenKind.CloseParenthesis, "Expected ')' after the for-in collection.");
+            return new ForInStatement(variable, variableType, collection, ParseStatement(), location);
+        }
+
         Statement? initializer = null;
         if (!Check(TokenKind.Semicolon))
             initializer = ParseForClause(isInitializer: true);

@@ -26,6 +26,17 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesForInArraySyntax()
+    {
+        var unit = Parse("i32 main() { i32[2] values = { 1, 2 }; for (var value in values) { return value; } return 0; }");
+
+        var loop = Assert.IsType<ForInStatement>(unit.Functions[0].Body.Statements[1]);
+        Assert.Equal("value", loop.VariableName);
+        Assert.True(loop.VariableType.IsInferred);
+        Assert.IsType<IdentifierExpression>(loop.Collection);
+    }
+
+    [Fact]
     public void ParsesVirtualAndOverrideMethodModifiers()
     {
         var unit = Parse("class Base { public virtual i32 value() { return 1; } } " +
@@ -254,13 +265,15 @@ public sealed class ParserTests
     [Fact]
     public void ParsesPointerTypesAndDereferenceAssignments()
     {
-        var unit = Parse("i32 main() { i32 value = 41; i32* pointer = &value; *pointer = 42; return *pointer; }");
+        var unit = Parse("i32 main() { i32 value = 41; i32* pointer = &value; *pointer = 42; pointer[0] = 43; return pointer[0]; }");
 
         var declaration = Assert.IsType<VariableDeclarationStatement>(unit.Functions[0].Body.Statements[1]);
         Assert.True(declaration.Type.IsPointer);
         Assert.Equal(PrimitiveType.I32, declaration.Type.Pointee!.Primitive);
         var assignment = Assert.IsType<AssignmentStatement>(unit.Functions[0].Body.Statements[2]);
         Assert.IsType<UnaryExpression>(assignment.Target);
+        Assert.IsType<IndexExpression>(
+            Assert.IsType<AssignmentStatement>(unit.Functions[0].Body.Statements[3]).Target);
     }
 
     [Fact]

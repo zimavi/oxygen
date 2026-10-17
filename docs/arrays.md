@@ -28,3 +28,9 @@ that produces the array's fixed length and does not allocate.
 Arrays are not heap allocated, resized, or implicitly converted to pointers.
 Passing or returning an array uses the array value type directly. Arrays must
 be fully initialized before use.
+## Iteration
+
+Fixed-size arrays can be traversed with `for (var value in collection)`.
+The loop variable is an element value and the collection is evaluated once.
+See [iterators](iterators.md) for the current protocol boundary and
+`std.collection.Option<T>`.

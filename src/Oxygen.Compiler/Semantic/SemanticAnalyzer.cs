@@ -14,6 +14,7 @@ public sealed class SemanticAnalyzer
     private readonly HashSet<FunctionSymbol> _usedFunctions = [];
     private readonly List<VariableSymbol> _declaredVariables = [];
     private readonly HashSet<VariableDeclarationStatement> _escapingClassLocals = [];
+    private readonly Dictionary<ForInStatement, IteratorProtocol> _iteratorProtocols = [];
     private string? _sourceName;
     private readonly Dictionary<string, StructSymbol> _structsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
@@ -116,6 +117,7 @@ public sealed class SemanticAnalyzer
         _usedFunctions.Clear();
         _declaredVariables.Clear();
         _escapingClassLocals.Clear();
+        _iteratorProtocols.Clear();
         _structsByName.Clear();
         _enumsByName.Clear();
         _unionsByName.Clear();
@@ -512,7 +514,7 @@ public sealed class SemanticAnalyzer
                 group => (IReadOnlyList<FunctionSymbol>)group.SelectMany(pair => pair.Value).ToList(),
                 StringComparer.Ordinal);
         return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName, _enumsByName, _unionsByName,
-            _classesByName, _interfacesByName, _escapingClassLocals);
+            _classesByName, _interfacesByName, _escapingClassLocals, _iteratorProtocols);
     }
 
     private static FunctionSymbol CreateConstructorFunctionSymbol(string moduleName, ConstructorSymbol constructor)
@@ -1077,6 +1079,72 @@ public sealed class SemanticAnalyzer
                 _breakableDepth--;
                 _loopDepth--;
                 return false;
+            case ForInStatement forInStatement:
+            {
+                if (!forInStatement.VariableType.IsInferred)
+                    throw Error("For-in iteration variables must use 'var'", forInStatement.VariableType.Location);
+                var collectionType = AnalyzeExpression(forInStatement.Collection, scope, functions, moduleName,
+                    imports, expressionTypes, resolvedCalls);
+                SemanticType iterationElement;
+                if (collectionType.IsArray && collectionType.ElementType is not null)
+                {
+                    // Fixed arrays use the intrinsic lowering path for now.
+                    // User-defined collections below must satisfy iter/next.
+                    iterationElement = collectionType.ElementType;
+                }
+                else if (!collectionType.IsClass
+                         || !_classesByName.TryGetValue(collectionType.StructName!, out var collectionClass))
+                    throw Error($"For-in requires a fixed array or iterator-protocol collection, got {collectionType}",
+                        forInStatement.Collection.Location);
+                else
+                {
+                    var iterCandidates = GetClassMethods(collectionClass.Name, [])
+                        .Where(method => method.Name == "iter" && method.Parameters.Count == 0).ToArray();
+                    if (iterCandidates.Length != 1)
+                        throw Error($"Collection class '{collectionClass.Name}' must declare exactly one iter() method",
+                            forInStatement.Collection.Location);
+                    var iter = iterCandidates[0];
+                    var iterCall = new CallExpression($"{collectionClass.Name}.iter", [],
+                        forInStatement.Collection.Location);
+                    var iteratorType = iter.ReturnType;
+                    if (!iteratorType.IsClass || !_classesByName.TryGetValue(iteratorType.StructName!, out var iteratorClass))
+                        throw Error("Iterator 'iter()' must return an iterator class", iterCall.Location);
+                    // The receiver for next() is represented by the iterator value
+                    // in the lowering; resolve the declared method directly here.
+                    var nextCandidates = GetClassMethods(iteratorClass.Name, [])
+                        .Where(method => method.Name == "next" && method.Parameters.Count == 0).ToArray();
+                    if (nextCandidates.Length != 1)
+                        throw Error($"Iterator class '{iteratorClass.Name}' must declare exactly one next() method",
+                            forInStatement.Collection.Location);
+                    var next = nextCandidates[0];
+                    var option = next.ReturnType;
+                    if (!option.IsUnion || !string.Equals(option.EnumName, "Option", StringComparison.Ordinal)
+                        || option.TypeArguments is not { Count: 1 })
+                        throw Error("Iterator next() must return Option<T> with the iteration element type",
+                            forInStatement.Collection.Location);
+                    iterationElement = option.TypeArguments[0];
+                    _iteratorProtocols[forInStatement] = new IteratorProtocol(
+                        forInStatement.Collection, iterCall, iter, next, iterationElement, option);
+                    _usedFunctions.Add(iter);
+                    _usedFunctions.Add(next);
+                }
+                var forInScope = new Scope(scope, MarkVariableUsed);
+                if (forInScope.ContainsInCurrentScope(forInStatement.VariableName))
+                    throw Error($"Variable '{forInStatement.VariableName}' is already declared in this scope",
+                        forInStatement.Location, forInStatement.VariableName.Length);
+                var variable = new VariableSymbol(iterationElement, false,
+                    new VariableDeclarationStatement(forInStatement.VariableType, forInStatement.VariableName, false,
+                        null, forInStatement.Location), false);
+                forInScope.Declare(forInStatement.VariableName, variable);
+                _declaredVariables.Add(variable);
+                _loopDepth++;
+                _breakableDepth++;
+                AnalyzeStatement(forInStatement.Body, forInScope, function, functions, moduleName, imports,
+                    expressionTypes, resolvedCalls);
+                _breakableDepth--;
+                _loopDepth--;
+                return false;
+            }
             case SwitchStatement switchStatement:
             {
                 var valueType = AnalyzeExpression(switchStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
@@ -1545,12 +1613,16 @@ public sealed class SemanticAnalyzer
     {
         var target = AnalyzeExpression(index.Target, scope, functions, moduleName, imports, types, calls);
         var indexType = AnalyzeExpression(index.Index, scope, functions, moduleName, imports, types, calls);
-        if (!indexType.IsNumeric) throw Error("Array index must be numeric", index.Index.Location);
-        if (!target.IsArray) throw Error("Indexing requires an array", index.Target.Location);
+        if (!indexType.IsNumeric) throw Error("Index must be numeric", index.Index.Location);
+        if (!target.IsArray && !target.IsPointer)
+            throw Error("Indexing requires an array or pointer", index.Target.Location);
+        if (target.IsOpaquePointer)
+            throw Error("Cannot dereference an opaque void pointer; cast it to a typed pointer first",
+                index.Target.Location);
         if (index.Index is IntegerLiteralExpression constant && long.TryParse(constant.Lexeme, out var value)
-            && (value < 0 || value >= target.ArrayLength))
+            && target.IsArray && (value < 0 || value >= target.ArrayLength))
             throw Error($"Array index {value} is out of bounds for length {target.ArrayLength}", index.Index.Location);
-        return target.ElementType!;
+        return target.IsArray ? target.ElementType! : target.Pointee!;
     }
 
     private SemanticType AnalyzeStructLiteral(
@@ -1985,6 +2057,10 @@ public sealed class SemanticAnalyzer
     {
         if (target == actual)
             return true;
+        if (target.IsUnion && actual.IsUnion
+            && target.EnumName == actual.EnumName
+            && (actual.TypeArguments is null || actual.TypeArguments.Count == 0))
+            return true;
         if (target.IsPointer && actual.IsNumeric && TryGetConstantInteger(value, out var nullValue) && nullValue == 0)
             return true;
         if (IsReferenceCast(actual, target, out var implicitConversion) && implicitConversion)
@@ -2337,6 +2413,7 @@ public sealed class SemanticAnalyzer
             IfStatement s => s with { Condition = Expr(s.Condition), Then = Stmt(s.Then), Else = s.Else is null ? null : Stmt(s.Else) },
             WhileStatement s => s with { Condition = Expr(s.Condition), Body = Stmt(s.Body) },
             ForStatement s => s with { Initializer = s.Initializer is null ? null : Stmt(s.Initializer), Condition = s.Condition is null ? null : Expr(s.Condition), Increment = s.Increment is null ? null : Stmt(s.Increment), Body = Stmt(s.Body) },
+            ForInStatement s => s with { VariableType = Type(s.VariableType), Collection = Expr(s.Collection), Body = Stmt(s.Body) },
             SwitchStatement s => s with { Value = Expr(s.Value), Cases = s.Cases.Select(c => c with { Body = Stmt(c.Body) }).ToArray() },
             _ => statement
         };

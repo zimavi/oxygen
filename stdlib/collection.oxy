@@ -1,0 +1,8 @@
+module std.collection;
+
+// The canonical optional value used by collection APIs.  Option is a tagged
+// union; callers should inspect it with a switch before using a Some payload.
+public union Option<T> {
+    Some(T);
+    None;
+}

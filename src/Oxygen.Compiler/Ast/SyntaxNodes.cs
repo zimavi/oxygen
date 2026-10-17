@@ -241,6 +241,13 @@ public sealed record ForStatement(
     Statement Body,
     SourceLocation Location) : Statement(Location);
 
+public sealed record ForInStatement(
+    string VariableName,
+    TypeSyntax VariableType,
+    Expression Collection,
+    Statement Body,
+    SourceLocation Location) : Statement(Location);
+
 public sealed record BreakStatement(SourceLocation Location) : Statement(Location);
 
 public sealed record ContinueStatement(SourceLocation Location) : Statement(Location);

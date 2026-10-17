@@ -15,6 +15,7 @@ public sealed class Tokenizer
             ["else"] = TokenKind.Else,
             ["while"] = TokenKind.While,
             ["for"] = TokenKind.For,
+            ["in"] = TokenKind.In,
             ["break"] = TokenKind.Break,
             ["continue"] = TokenKind.Continue,
             ["this"] = TokenKind.This,
