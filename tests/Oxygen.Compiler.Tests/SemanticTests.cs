@@ -666,7 +666,7 @@ public sealed class SemanticTests
     [Fact]
     public void ResolvesPublicFunctionsThroughImportedNestedModules()
     {
-        var main = Parse("import math; i32 main() { return math.add(10, 32) + float.pow(20.4, 2.4); }");
+        var main = Parse("import math; i32 main() { return add(10, 32) + math.add(10, 32) + float.pow(20.4, 2.4); }");
         var library = Parse("public module math; public i32 add(i32 left, i32 right) { return left + right; }");
         var nested = Parse("public module math.float; public i32 pow(f64 value, f64 exponent) { return 1; }");
 
@@ -787,16 +787,49 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void RejectsUnqualifiedImportedFunctions()
+    public void AllowsUnqualifiedFunctionsFromAnImportedModule()
     {
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse("import math; i32 main() { return add(10, 32); }"),
+            Parse("public module math; public i32 add(i32 left, i32 right) { return left + right; }")
+        ]);
+
+        Assert.Equal("math.add", model.ResolvedCalls.Values.Single().QualifiedName);
+    }
+
+    [Fact]
+    public void ResolvesAliasedImportsAndRejectsUnqualifiedCollisions()
+    {
+        var aliased = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse("import foo.value as left; import bar.value as right; i32 main() { return left.get() + right.value(); }"),
+            Parse("public module foo.value; public i32 get() { return 1; }"),
+            Parse("public module bar.value; public i32 value() { return 2; }")
+        ]);
+
+        Assert.Contains(aliased.ResolvedCalls.Values, symbol => symbol.QualifiedName == "foo.value.get");
+        Assert.Contains(aliased.ResolvedCalls.Values, symbol => symbol.QualifiedName == "bar.value.value");
+
         var exception = Assert.Throws<SemanticException>(() =>
             new SemanticAnalyzer(Log.Logger).Analyze(
             [
-                Parse("import math; i32 main() { return add(10, 32); }"),
-                Parse("public module math; public i32 add(i32 left, i32 right) { return left + right; }")
+                Parse("import foo; import bar; i32 main() { return value(); }"),
+                Parse("public module foo; public i32 value() { return 1; }"),
+                Parse("public module bar; public i32 value() { return 2; }")
             ]));
 
-        Assert.Contains("Function 'add' is not declared", exception.Message);
+        Assert.Contains("ambiguous", exception.Message);
+    }
+
+    [Fact]
+    public void SupportsAsCastsWithoutChangingTypePatterns()
+    {
+        var model = Analyze(
+            "class Base { } class Child : Base { } i32 main() { Base value = new Child(); Child child = value as Child; return child is Child ? 1 : 0; }");
+
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Class("Child"));
+        Assert.Contains(model.ExpressionTypes.Keys, expression => expression is IsExpression);
     }
 
     [Fact]

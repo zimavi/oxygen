@@ -24,6 +24,14 @@ public sealed class LexerTests
     }
 
     [Fact]
+    public void TokenizesAsKeyword()
+    {
+        Assert.Equal(
+            [TokenKind.As, TokenKind.Identifier, TokenKind.EndOfFile],
+            _lexer.Tokenize("as Child").Select(token => token.Kind));
+    }
+
+    [Fact]
     public void TokenizesExceptionKeywords()
     {
         Assert.Equal(

@@ -61,6 +61,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
 
         foreach (var pair in sources.Zip(units))
         {
+            var aliases = new HashSet<string>(StringComparer.Ordinal);
             foreach (var import in pair.Second.Imports)
             {
                 if (!units.Any(unit => string.Equals(unit.ModuleName, import.Name, StringComparison.Ordinal)))
@@ -70,6 +71,15 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                         $"Imported module '{import.Name}' could not be found",
                         import.Location,
                         import.Name.Length,
+                        pair.First.Name);
+                }
+                else if (import.Alias is not null && !aliases.Add(import.Alias))
+                {
+                    diagnostics.Add(
+                        DiagnosticPhase.Semantic,
+                        $"Import alias '{import.Alias}' is declared more than once",
+                        import.Location,
+                        import.Alias.Length,
                         pair.First.Name);
                 }
             }

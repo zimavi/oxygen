@@ -134,7 +134,8 @@ public sealed record AnnotationSyntax(
 
 public sealed record ImportDeclaration(
     string Name,
-    SourceLocation Location) : SyntaxNode(Location);
+    SourceLocation Location,
+    string? Alias = null) : SyntaxNode(Location);
 
 public sealed record FunctionDeclaration(
     TypeSyntax ReturnType,

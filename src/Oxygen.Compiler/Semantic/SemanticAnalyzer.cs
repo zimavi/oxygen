@@ -288,6 +288,13 @@ public sealed partial class SemanticAnalyzer
         {
             var unit = compilationUnits[unitIndex];
             var moduleName = unit.ModuleName ?? "program";
+            var importAliases = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var import in unit.Imports)
+            {
+                if (import.Alias is not null && !importAliases.Add(import.Alias))
+                    throw Error($"Import alias '{import.Alias}' is declared more than once", import.Location,
+                        import.Alias.Length);
+            }
             var sourceName = diagnostics is null || sourceNames is null || unitIndex >= sourceNames.Count
                 ? null
                 : sourceNames[unitIndex];
@@ -2083,6 +2090,8 @@ public sealed partial class SemanticAnalyzer
                 .Select((parameter, index) => CanAssign(parameter.Type, call.Arguments[index], argumentTypes[index]))
                 .All(match => match))
             .ToList();
+        if (matches.Select(match => match.ModuleName).Distinct(StringComparer.Ordinal).Count() > 1)
+            throw Error($"Function '{call.Name}' is ambiguous; use a module prefix", call.Location, call.Name.Length);
         if (matches.Count == 0)
         {
             if (candidates.Count == 1)
@@ -2515,17 +2524,33 @@ public sealed partial class SemanticAnalyzer
 
         foreach (var import in imports)
         {
-            var leaf = import.Name[(import.Name.LastIndexOf('.') + 1)..];
-            if (name.StartsWith(leaf + ".", StringComparison.Ordinal))
+            if (!name.Contains('.', StringComparison.Ordinal))
             {
-                // import math; float.pow(...) -> math.float.pow(...)
-                // import math.float; float.pow(...) -> math.float.pow(...)
-                keys.Add($"{import.Name}.{name[(leaf.Length + 1)..]}");
+                // Functions in the imported module itself do not need a prefix.
+                keys.Add($"{import.Name}.{name}");
+            }
+
+            if (import.Alias is not null && name.StartsWith(import.Alias + ".", StringComparison.Ordinal))
+            {
+                // An alias can explicitly qualify the imported module and its
+                // descendants without changing the canonical module name.
+                keys.Add($"{import.Name}.{name[(import.Alias.Length + 1)..]}");
             }
             else if (name.Contains('.', StringComparison.Ordinal))
             {
-                // import math; float.pow(...) -> math.float.pow(...)
-                keys.Add($"{import.Name}.{name}");
+                var leaf = import.Name[(import.Name.LastIndexOf('.') + 1)..];
+                if (name.StartsWith(leaf + ".", StringComparison.Ordinal))
+                {
+                    // The legacy module-leaf prefix remains valid:
+                    // import stdlib.io; io.print(...) -> stdlib.io.print(...).
+                    keys.Add($"{import.Name}.{name[(leaf.Length + 1)..]}");
+                }
+                else
+                {
+                    // Only the portion below the imported module is required:
+                    // import math; float.pow(...) -> math.float.pow(...).
+                    keys.Add($"{import.Name}.{name}");
+                }
             }
         }
 

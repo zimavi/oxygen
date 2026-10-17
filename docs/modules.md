@@ -27,18 +27,47 @@ public f32 pow(f32 value, f32 exponent) {
 }
 ```
 
-Imported functions must always be qualified with the imported module's last
-segment. An import also makes descendants available through the imported
-module's child segment:
+Functions declared directly by an imported module may be used without a
+prefix. Descendant modules require only the portion of the module path below
+the imported module. An import also makes descendants available through the
+imported module's child segment:
 
 ```oxygen
 import math;
 
 i32 main() {
-    var sum = math.add(10, 32);  // math.add
+    var sum = add(10, 32);       // math.add
     return float.pow(20.4, 2.4); // math.float.pow
 }
 ```
+
+The fully qualified form remains valid, and the module-leaf form is accepted
+for compatibility (`math.add` and `float.pow` above). Importing a nested
+module directly exposes its functions in the same way:
+
+```oxygen
+import math.float;
+
+i32 main() {
+    return pow(20.4, 2.4); // math.float.pow
+}
+```
+
+An import may define an explicit source-level alias. This is useful when two
+imports expose the same unqualified function name:
+
+```oxygen
+import graphics.color as colors;
+import document.color as document_colors;
+
+i32 main() {
+    return colors.parse("red") + document_colors.parse("red");
+}
+```
+
+If multiple imported modules provide a matching unqualified function,
+qualification or an alias is required; the compiler reports an ambiguity
+instead of selecting one arbitrarily.
 
 If `math` is not imported, use fully qualified names:
 
@@ -47,8 +76,8 @@ math.add(10, 32);
 math.float.pow(20.4, 2.4);
 ```
 
-Importing `math.float` directly permits `float.pow(...)`. It does not permit
-unqualified `pow(...)`.
+Importing `math.float` directly permits `float.pow(...)` and unqualified
+`pow(...)`.
 Fully qualified names do not require an import when the corresponding module
 is available to the compilation.
 

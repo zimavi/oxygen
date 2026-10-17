@@ -208,6 +208,19 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesImportAliasesAndAsCasts()
+    {
+        var unit = Parse("import foo.bar as baz; i32 main() { return value as i32; }");
+
+        var import = Assert.Single(unit.Imports);
+        Assert.Equal("foo.bar", import.Name);
+        Assert.Equal("baz", import.Alias);
+        var cast = Assert.IsType<CastExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(Assert.Single(unit.Functions).Body.Statements)).Value);
+        Assert.Equal(PrimitiveType.I32, cast.TargetType.Primitive);
+    }
+
+    [Fact]
     public void ParsesFunctionAnnotations()
     {
         var unit = Parse("@extern(\"puts\") @calling_convention(c) i32 main() { return 0; }");

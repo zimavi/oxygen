@@ -423,8 +423,11 @@ public sealed partial class Parser
         {
             var token = Previous;
             var name = ParseQualifiedName("Expected an imported module name.");
+            string? alias = null;
+            if (Match(TokenKind.As))
+                alias = Consume(TokenKind.Identifier, "Expected an import alias after 'as'.").Lexeme;
             Consume(TokenKind.Semicolon, "Expected ';' after import declaration.");
-            imports.Add(new ImportDeclaration(name, token.Location));
+            imports.Add(new ImportDeclaration(name, token.Location, alias));
         }
 
         return imports;
@@ -792,6 +795,12 @@ public sealed partial class Parser
                 var targetType = ParseType(allowInferred: false);
                 var bindingName = Match(TokenKind.Identifier) ? Previous.Lexeme : null;
                 left = new IsExpression(left, targetType, bindingName, left.Location);
+                continue;
+            }
+            if (Match(TokenKind.As))
+            {
+                var targetType = ParseType(allowInferred: false);
+                left = new CastExpression(targetType, left, left.Location);
                 continue;
             }
             var isLeftShift = Current.Kind == TokenKind.LessThan && Peek(1).Kind == TokenKind.LessThan;
