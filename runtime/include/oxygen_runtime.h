@@ -13,6 +13,8 @@ typedef struct oxygen_string
 void __oxygen_runtime_initialize(void);
 void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length);
 void __oxygen_runtime_enum_cast_failure(uint64_t value);
+uint8_t __oxygen_runtime_is_instance(const void *object, const char *expected_type);
+void __oxygen_runtime_invalid_cast(const char *source_type, const char *target_type);
 
 void *oxygen_alloc(uint64_t size);
 void oxygen_free(void *pointer);

@@ -50,8 +50,11 @@ public sealed class LlvmModuleGenerator
 {
     private static LLVMValueRef _arrayBoundsFailure;
     private static LLVMValueRef _enumCastFailure;
+    private static LLVMValueRef _isInstance;
+    private static LLVMValueRef _invalidCast;
     private static LLVMValueRef _currentFunction;
     private static readonly Dictionary<string, LLVMTypeRef> _classTypes = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, LLVMValueRef> _classTypeNames = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, LLVMValueRef> _constructors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, LLVMValueRef> _destructors = new(StringComparer.Ordinal);
     private static LLVMValueRef _oxygenAlloc;
@@ -77,6 +80,7 @@ public sealed class LlvmModuleGenerator
         try
         {
             _classTypes.Clear();
+            _classTypeNames.Clear();
             _constructors.Clear();
             _destructors.Clear();
             foreach (var cls in model.Classes.Values)
@@ -120,6 +124,20 @@ public sealed class LlvmModuleGenerator
             _enumCastFailure = module.AddFunction(
                 "__oxygen_runtime_enum_cast_failure",
                 LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [LLVMTypeRef.Int64], false));
+            _isInstance = GetOrDeclareRuntimeFunction(
+                module,
+                "__oxygen_runtime_is_instance",
+                LLVMTypeRef.CreateFunction(LLVMTypeRef.Int8,
+                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)],
+                    false),
+                llvmFunctions);
+            _invalidCast = GetOrDeclareRuntimeFunction(
+                module,
+                "__oxygen_runtime_invalid_cast",
+                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
+                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)],
+                    false),
+                llvmFunctions);
 
             foreach (var symbol in symbols)
             {
@@ -657,7 +675,7 @@ public sealed class LlvmModuleGenerator
             "object");
         var instance = builder.BuildBitCast(raw, classType, "object.cast");
         var vtable = builder.BuildStructGEP2(_classTypes[className], instance, 0, "object.vtable");
-        builder.BuildStore(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)), vtable);
+        builder.BuildStore(GetTypeName(builder, className), vtable);
         var ctor = cls.Constructors.First(candidate => candidate.Parameters.Count == expression.Arguments.Count);
         var args = new List<LLVMValueRef> { instance };
         for (var i = 0; i < expression.Arguments.Count; i++)
@@ -803,6 +821,8 @@ public sealed class LlvmModuleGenerator
         var operand = EmitExpression(context, builder, cast.Operand, values, storage, model, llvmFunctions);
         var targetType = model.ExpressionTypes[cast];
         var operandType = model.ExpressionTypes[cast.Operand];
+        if (IsReferenceType(targetType) && IsReferenceType(operandType))
+            return EmitReferenceCast(builder, operand, operandType, targetType, model);
         if (targetType.IsPointer && operandType.IsPointer)
         {
             return builder.BuildBitCast(
@@ -865,6 +885,106 @@ public sealed class LlvmModuleGenerator
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
         return operand;
+    }
+
+    private static bool IsReferenceType(SemanticType type) => type.IsClass || type.IsInterface;
+
+    private static LLVMValueRef GetTypeName(LLVMBuilderRef builder, string typeName)
+    {
+        if (_classTypeNames.TryGetValue(typeName, out var value))
+            return value;
+
+        value = builder.BuildGlobalStringPtr(typeName, $"oxygen.type.{typeName}");
+        _classTypeNames[typeName] = value;
+        return value;
+    }
+
+    private static LLVMValueRef EmitReferenceCast(
+        LLVMBuilderRef builder,
+        LLVMValueRef operand,
+        SemanticType source,
+        SemanticType target,
+        SemanticModel model)
+    {
+        if (source.IsClass && target.IsInterface)
+        {
+            var result = LLVMValueRef.CreateConstNull(ToLlvmType(target, model));
+            result = builder.BuildInsertValue(
+                result,
+                builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.data"),
+                0,
+                "interface.data");
+            return builder.BuildInsertValue(result, GetTypeName(builder, source.StructName!), 1, "interface.type");
+        }
+
+        var objectValue = source.IsInterface
+            ? builder.BuildExtractValue(operand, 0, "cast.data")
+            : operand;
+        if (source.IsInterface)
+            objectValue = builder.BuildBitCast(
+                objectValue,
+                LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                "cast.object");
+
+        if (target.IsClass && (!source.IsClass || IsClassDerivedFrom(target.StructName!, source.StructName!, model)))
+        {
+            var possibleTypes = model.Classes.Keys
+                .Where(candidate => IsClassDerivedFrom(candidate, target.StructName!, model))
+                .Where(candidate => !source.IsInterface
+                    || ClassImplementsInterface(candidate, source.StructName!, model))
+                .ToArray();
+            var valid = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false);
+            foreach (var possibleType in possibleTypes)
+            {
+                var candidate = builder.BuildCall2(
+                    _isInstance.FunctionType,
+                    _isInstance,
+                    [objectValue, GetTypeName(builder, possibleType)],
+                    (ReadOnlySpan<char>)"cast.valid");
+                valid = builder.BuildOr(valid, candidate, "cast.valid");
+            }
+            var invalid = builder.BuildICmp(
+                LLVMIntPredicate.LLVMIntEQ,
+                valid,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false),
+                "cast.invalid");
+            var failureBlock = _currentFunction.AppendBasicBlock("cast.failure");
+            var continueBlock = _currentFunction.AppendBasicBlock("cast.continue");
+            builder.BuildCondBr(invalid, failureBlock, continueBlock);
+            builder.PositionAtEnd(failureBlock);
+            var sourceName = source.IsClass
+                ? GetTypeName(builder, source.StructName!)
+                : builder.BuildGlobalStringPtr(source.StructName!, "oxygen.cast.source");
+            builder.BuildCall2(_invalidCast.FunctionType, _invalidCast,
+                [sourceName, GetTypeName(builder, target.StructName!)]);
+            builder.BuildUnreachable();
+            builder.PositionAtEnd(continueBlock);
+        }
+
+        return target.IsClass
+            ? builder.BuildBitCast(objectValue, ToLlvmType(target, model), "class.cast")
+            : objectValue;
+    }
+
+    private static bool IsClassDerivedFrom(string sourceName, string targetName, SemanticModel model)
+    {
+        if (string.Equals(sourceName, targetName, StringComparison.Ordinal))
+            return true;
+        return model.Classes.TryGetValue(sourceName, out var source)
+            && source.BaseTypeName is not null
+            && model.Classes.ContainsKey(source.BaseTypeName)
+            && IsClassDerivedFrom(source.BaseTypeName, targetName, model);
+    }
+
+    private static bool ClassImplementsInterface(string className, string interfaceName, SemanticModel model)
+    {
+        if (!model.Classes.TryGetValue(className, out var cls))
+            return false;
+        if (cls.InterfaceNames.Contains(interfaceName, StringComparer.Ordinal))
+            return true;
+        return cls.BaseTypeName is not null
+            && model.Classes.ContainsKey(cls.BaseTypeName)
+            && ClassImplementsInterface(cls.BaseTypeName, interfaceName, model);
     }
 
     private static LLVMValueRef EmitSizeOf(SizeOfExpression expression, SemanticModel model)
@@ -1228,6 +1348,18 @@ public sealed class LlvmModuleGenerator
     {
         if (source == target)
             return value;
+        if (source.IsClass && target.IsClass)
+            return builder.BuildBitCast(value, ToLlvmType(target, model), "class.upcast");
+        if (source.IsClass && target.IsInterface)
+        {
+            var result = LLVMValueRef.CreateConstNull(ToLlvmType(target, model));
+            result = builder.BuildInsertValue(
+                result,
+                builder.BuildBitCast(value, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.data"),
+                0,
+                "interface.data");
+            return builder.BuildInsertValue(result, GetTypeName(builder, source.StructName!), 1, "interface.type");
+        }
         if (source.IsPointer && target.IsNumeric)
             return builder.BuildPtrToInt(value, ToLlvmType(target, model), "ptr.to.int");
         if (target.IsPointer && source.IsNumeric)
@@ -1262,8 +1394,17 @@ public sealed class LlvmModuleGenerator
         if (syntax.IsString)
             return SemanticType.String;
         if (syntax.NamedType is not null)
-            return model.Unions.ContainsKey(syntax.NamedType)
-                    ? SemanticType.Union(syntax.NamedType) : SemanticType.Enum(syntax.NamedType);
+        {
+            if (model.Classes.ContainsKey(syntax.NamedType))
+                return SemanticType.Class(syntax.NamedType);
+            if (model.Interfaces.ContainsKey(syntax.NamedType))
+                return SemanticType.Interface(syntax.NamedType);
+            if (model.Structs.ContainsKey(syntax.NamedType))
+                return SemanticType.Struct(syntax.NamedType);
+            if (model.Unions.ContainsKey(syntax.NamedType))
+                return SemanticType.Union(syntax.NamedType);
+            return SemanticType.Enum(syntax.NamedType);
+        }
         if (syntax.Primitive is null)
             throw new InvalidOperationException("Inferred variable type is missing.");
         var type = SemanticType.FromPrimitive(syntax.Primitive.Value);

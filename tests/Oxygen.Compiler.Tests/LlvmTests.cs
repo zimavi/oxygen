@@ -304,6 +304,32 @@ public sealed class LlvmTests
     }
 
     [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsClassAndInterfaceReferenceCasts()
+    {
+        var model = Analyze(
+            """
+            interface Printable { i32 value(); }
+            class Base { }
+            class Item : Base, Printable { i32 value() { return 1; } }
+            i32 main() {
+                Base baseValue = new Item();
+                Printable printable = new Item();
+                Item fromBase = cast<Item>(baseValue);
+                Item fromInterface = cast<Item>(printable);
+                return 0;
+            }
+            """);
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("__oxygen_runtime_is_instance", ir);
+        Assert.Contains("__oxygen_runtime_invalid_cast", ir);
+        Assert.Contains("interface.type", ir);
+        Assert.Contains("cast.failure", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
     public void EmitsExplicitThisFieldAccessWhenParameterShadowsField()
     {
         var model = Analyze(

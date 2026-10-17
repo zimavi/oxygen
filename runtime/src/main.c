@@ -23,6 +23,24 @@ void __oxygen_runtime_enum_cast_failure(uint64_t value)
     abort();
 }
 
+uint8_t __oxygen_runtime_is_instance(const void *object, const char *expected_type)
+{
+    if (object == NULL || expected_type == NULL)
+        return 0;
+
+    const char *actual_type = *(const char *const *)object;
+    return actual_type != NULL && strcmp(actual_type, expected_type) == 0;
+}
+
+void __oxygen_runtime_invalid_cast(const char *source_type, const char *target_type)
+{
+    fprintf(stderr, "Oxygen cannot cast %s to %s\n",
+        source_type == NULL ? "unknown" : source_type,
+        target_type == NULL ? "unknown" : target_type);
+    fflush(stderr);
+    abort();
+}
+
 void *oxygen_alloc(uint64_t size)
 {
     return malloc((size_t)size);

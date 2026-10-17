@@ -75,6 +75,39 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AllowsImplicitUpcastsAndExplicitDowncasts()
+    {
+        var model = Analyze(
+            """
+            interface Printable { i32 value(); }
+            class Base { }
+            class Item : Base, Printable { i32 value() { return 1; } }
+            i32 main() {
+                Base baseValue = new Item();
+                Printable printable = new Item();
+                Item fromBase = cast<Item>(baseValue);
+                Item fromInterface = cast<Item>(printable);
+                return fromBase.value() + fromInterface.value();
+            }
+            """);
+
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Interface("Printable"));
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Class("Item"));
+    }
+
+    [Fact]
+    public void RejectsImplicitDowncastsAndUnrelatedReferenceCasts()
+    {
+        var implicitDowncast = Assert.Throws<SemanticException>(() =>
+            Analyze("class Base { } class Item : Base { } i32 main() { Base value = new Item(); Item invalid = value; return 0; }"));
+        Assert.Contains("Cannot initialize", implicitDowncast.Message);
+
+        var unrelatedCast = Assert.Throws<SemanticException>(() =>
+            Analyze("class Left { } class Right { } i32 main() { Left value = new Left(); Right invalid = cast<Right>(value); return 0; }"));
+        Assert.Contains("Unsupported cast", unrelatedCast.Message);
+    }
+
+    [Fact]
     public void RejectsInvalidClassConstruction()
     {
         var exception = Assert.Throws<SemanticException>(() =>

@@ -66,6 +66,34 @@ allocation, field access, constructors, destructors, and direct class-method
 calls. Interface values have a two-word object/table representation reserved
 for dynamic dispatch.
 
+## Reference conversions
+
+Class references may be assigned to a base-class or implemented-interface
+reference without an explicit cast. The same implicit conversion is used for
+function arguments and return values:
+
+```oxygen
+class Animal { }
+interface Printable { }
+class Cat : Animal, Printable { }
+
+Animal animal = new Cat();
+Printable printable = new Cat();
+```
+
+The reverse conversion is a checked explicit cast:
+
+```oxygen
+Cat cat = cast<Cat>(animal);
+Cat sameCat = cast<Cat>(printable);
+```
+
+An implicit downcast and a cast between unrelated reference types are compile
+errors. When the compiler cannot prove an explicit downcast safe, the generated
+code checks the runtime object type. A failed check reports an invalid-cast
+diagnostic and terminates the process; it does not produce a value of the
+requested type.
+
 Destructor syntax and symbols are recognized, but automatic destruction at
 scope exit and virtual destructor dispatch are not enabled yet. They require
 ownership and lifetime information in the semantic model plus cleanup-aware

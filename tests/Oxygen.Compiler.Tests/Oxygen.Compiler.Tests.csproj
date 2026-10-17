@@ -21,4 +21,13 @@
     <ProjectReference Include="..\..\src\Oxygen.Llvm\Oxygen.Llvm.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="libLLVMSharp.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="LLVM-C.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

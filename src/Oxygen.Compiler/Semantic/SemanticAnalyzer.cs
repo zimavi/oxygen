@@ -75,6 +75,9 @@ public sealed class SemanticAnalyzer
             (target.IsOpaquePointer || operand.IsOpaquePointer))
             return target;
 
+        if (IsReferenceCast(operand, target, out _))
+            return target;
+
         throw Error($"Unsupported cast from {operand} to {target}", cast.Location);
     }
 
@@ -1630,17 +1633,82 @@ public sealed class SemanticAnalyzer
         return function.ReturnType;
     }
 
-    private static bool CanAssign(SemanticType target, Expression value, SemanticType actual)
+    private bool CanAssign(SemanticType target, Expression value, SemanticType actual)
     {
         if (target == actual)
             return true;
         if (target.IsPointer && actual.IsNumeric && TryGetConstantInteger(value, out var nullValue) && nullValue == 0)
+            return true;
+        if (IsReferenceCast(actual, target, out var implicitConversion) && implicitConversion)
             return true;
         if (!target.IsNumeric || !actual.IsNumeric)
             return false;
         if (IsImplicitlySafeNumericConversion(actual, target))
             return true;
         return TryGetConstantNumber(value, out var constant) && IsRepresentable(constant, target);
+    }
+
+    private bool IsReferenceCast(SemanticType source, SemanticType target, out bool implicitConversion)
+    {
+        implicitConversion = false;
+        if ((!source.IsClass && !source.IsInterface) || (!target.IsClass && !target.IsInterface))
+            return false;
+
+        if (source.IsClass && target.IsClass)
+        {
+            if (IsClassDerivedFrom(source.StructName!, target.StructName!))
+            {
+                implicitConversion = true;
+                return true;
+            }
+
+            return IsClassDerivedFrom(target.StructName!, source.StructName!);
+        }
+
+        if (source.IsClass && target.IsInterface)
+        {
+            if (!ClassImplementsInterface(source.StructName!, target.StructName!))
+                return false;
+
+            implicitConversion = true;
+            return true;
+        }
+
+        if (source.IsInterface && target.IsClass)
+            return ClassImplementsInterface(target.StructName!, source.StructName!);
+
+        return false;
+    }
+
+    private bool IsClassDerivedFrom(string sourceName, string targetName)
+    {
+        if (string.Equals(sourceName, targetName, StringComparison.Ordinal))
+            return true;
+        if (!_classesByName.TryGetValue(sourceName, out var source))
+            return false;
+        return source.BaseTypeName is not null
+            && _classesByName.ContainsKey(source.BaseTypeName)
+            && IsClassDerivedFrom(source.BaseTypeName, targetName);
+    }
+
+    private bool ClassImplementsInterface(string className, string interfaceName)
+    {
+        if (!_classesByName.TryGetValue(className, out var cls))
+            return false;
+
+        if (cls.InterfaceNames.Contains(interfaceName, StringComparer.Ordinal))
+            return true;
+        if (cls.BaseTypeName is not null)
+        {
+            if (_interfacesByName.ContainsKey(cls.BaseTypeName)
+                && string.Equals(cls.BaseTypeName, interfaceName, StringComparison.Ordinal))
+                return true;
+            if (_classesByName.ContainsKey(cls.BaseTypeName)
+                && ClassImplementsInterface(cls.BaseTypeName, interfaceName))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsPointerInteger(SemanticType type) =>
