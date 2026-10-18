@@ -1,4 +1,6 @@
+using System;
 using System.Linq;
+using System.IO;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
@@ -28,6 +30,52 @@ public sealed class SemanticTests
             "i32 main() { try { throw new Failure(); } catch (Failure error) { return 1; } catch { return 2; } }");
 
         Assert.Contains(model.Classes.Keys, name => name == "Failure");
+    }
+
+    [Fact]
+    public void ExceptionConstructorAcceptsMessageAndInitializesTraceInternally()
+    {
+        var model = Analyze(
+            "@extern(\"__oxygen_runtime_exception_trace_count\") public extern u64 runtime_trace_count(Exception exception_object); " +
+            "class StackTrace { u64 count; StackTrace(Exception exception_object) { count = program.runtime_trace_count(exception_object); } } " +
+            "class Exception { string message; StackTrace stack_trace; Exception(string message) { this.message = message; this.stack_trace = new StackTrace(this); } } " +
+            "class Failure : Exception { Failure(string message) { } } " +
+            "i32 main() { Exception error = new Exception(\"failure\"); Failure derived = new Failure(\"derived\"); return 0; }");
+
+        Assert.Contains(model.Functions.Values, symbol =>
+            symbol.IsExternal && symbol.NativeName == "__oxygen_runtime_exception_trace_count");
+        Assert.Contains(model.Classes["StackTrace"].Constructors,
+            constructor => constructor.Parameters.Single().Type.IsClass
+                && constructor.Parameters.Single().Type.StructName == "Exception");
+        Assert.Contains(model.Classes["Exception"].Constructors,
+            constructor => constructor.Parameters.Count == 1
+                && constructor.Parameters[0].Type.Kind == SemanticTypeKind.String);
+        Assert.Contains(model.Classes["Failure"].Constructors,
+            constructor => constructor.Parameters.Count == 1
+                && constructor.Parameters[0].Type.Kind == SemanticTypeKind.String);
+    }
+
+    [Fact]
+    public void StandardExceptionSourceRemainsSemanticallySupported()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null &&
+            !File.Exists(Path.Combine(directory.FullName, "stdlib", "exception.oxy")))
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        var path = Path.Combine(directory!.FullName, "stdlib", "exception.oxy");
+        var source = File.ReadAllText(path);
+        var standardUnit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
+        var mainUnit = Parse("i32 main() { return 0; }");
+
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([standardUnit, mainUnit]);
+
+        Assert.Contains("Exception", model.Classes.Keys);
+        Assert.Contains(model.Functions.Values, symbol =>
+            symbol.NativeName == "__oxygen_runtime_exception_trace_count");
+        Assert.Contains(model.Classes["Exception"].Constructors,
+            constructor => constructor.Parameters.Count == 1
+                && constructor.Parameters[0].Type.Kind == SemanticTypeKind.String);
     }
 
     [Fact]

@@ -166,7 +166,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         ArgumentException.ThrowIfNullOrWhiteSpace(objectPath);
         ArgumentNullException.ThrowIfNull(options);
 
-        var arguments = CreateCodeGenerationArguments(options);
+        var arguments = CreateCodeGenerationArguments(options, includeLtoJobs: false);
         arguments.AddRange(["-x", "ir", "-c", irPath, "-o", objectPath]);
         return arguments;
     }
@@ -180,7 +180,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
         ArgumentNullException.ThrowIfNull(options);
 
-        var arguments = CreateCodeGenerationArguments(options);
+        var arguments = CreateCodeGenerationArguments(options, includeLtoJobs: true);
         arguments.Add(objectPath);
         arguments.AddRange(options.Dependencies
             .Where(dependency => dependency.Kind == NativeDependencyKind.Static)
@@ -196,7 +196,9 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         return arguments;
     }
 
-    private static List<string> CreateCodeGenerationArguments(NativeBuildOptions options)
+    private static List<string> CreateCodeGenerationArguments(
+        NativeBuildOptions options,
+        bool includeLtoJobs)
     {
         if (string.IsNullOrWhiteSpace(options.OptimizationLevel) ||
             options.OptimizationLevel.Any(char.IsWhiteSpace) ||
@@ -214,7 +216,8 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         if (options.Jobs > 1)
         {
             arguments.Add("-flto=thin");
-            arguments.Add($"-flto-jobs={options.Jobs}");
+            if (includeLtoJobs)
+                arguments.Add($"-flto-jobs={options.Jobs}");
         }
         return arguments;
     }

@@ -2,7 +2,8 @@
 param(
     [string]$Clang = "clang",
     [string]$Archiver = "",
-    [string]$OutputDirectory = ""
+    [string]$OutputDirectory = "",
+    [switch]$Clean
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,14 @@ $includeDirectory = Join-Path $runtimeRoot "include"
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $runtimeRoot "build"
+}
+
+if ($Clean) {
+    if (Test-Path -LiteralPath $OutputDirectory) {
+        Remove-Item -LiteralPath $OutputDirectory -Recurse -Force
+    }
+    Write-Output "Cleaned $OutputDirectory"
+    exit 0
 }
 
 if ([string]::IsNullOrWhiteSpace($Archiver)) {
@@ -30,22 +39,36 @@ if ([string]::IsNullOrWhiteSpace($Archiver)) {
     throw "No compatible static-library archiver was found. Install llvm-lib, llvm-ar, or ar, or pass -Archiver explicitly."
 }
 
-New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-$library = Join-Path $OutputDirectory "liboxygenrt.a"
-$objects = @()
-
-foreach ($source in Get-ChildItem -Path $sourceDirectory -Filter "*.c" -File | Sort-Object Name) {
-    $object = Join-Path $OutputDirectory "$($source.BaseName).o"
-    & $Clang -std=c17 -O2 -g -I $includeDirectory -c $source.FullName -o $object
-    if ($LASTEXITCODE -ne 0) {
-        throw "Clang failed to compile '$($source.Name)' for the Oxygen runtime."
+foreach ($target in @(
+    @{
+        Name = "posix"
+        LibraryName = "liboxygenrt.a"
+        Flags = @()
+    },
+    @{
+        Name = "windows"
+        LibraryName = "liboxygenrt.a"
+        Flags = @("--target=x86_64-pc-windows-msvc")
     }
-    $objects += $object
-}
+)) {
+    $targetDirectory = Join-Path $OutputDirectory $target.Name
+    New-Item -ItemType Directory -Force -Path $targetDirectory | Out-Null
+    $library = Join-Path $targetDirectory $target.LibraryName
+    $objects = @()
 
-& $Archiver rcs $library @objects
-if ($LASTEXITCODE -ne 0) {
-    throw "The static-library archiver failed to create '$library'."
-}
+    foreach ($source in Get-ChildItem -Path $sourceDirectory -Filter "*.c" -File | Sort-Object Name) {
+        $object = Join-Path $targetDirectory "$($source.BaseName).o"
+        & $Clang @($target.Flags) -std=c17 -O2 -g -I $includeDirectory -c $source.FullName -o $object
+        if ($LASTEXITCODE -ne 0) {
+            throw "Clang failed to compile '$($source.Name)' for the $($target.Name) Oxygen runtime."
+        }
+        $objects += $object
+    }
 
-Write-Output $library
+    & $Archiver rcs $library @objects
+    if ($LASTEXITCODE -ne 0) {
+        throw "The static-library archiver failed to create '$library'."
+    }
+
+    Write-Output $library
+}

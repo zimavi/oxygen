@@ -17,11 +17,13 @@ public sealed partial class LlvmModuleGenerator
             function.PersonalityFn = _personality;
         var entry = function.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
+        EmitTracePush(builder, cls.Name, cls.ModuleName, ctor.Declaration.Location);
         var values = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         var thisValue = function.GetParam(0);
         values["this"] = thisValue;
         InitializeClassFieldStorage(builder, values, storage, cls, model);
+        InitializeExceptionStackTrace(builder, thisValue, storage, cls, model, llvmFunctions);
         if (ctor.IsSynthesized)
         {
             foreach (var field in cls.Fields)
@@ -49,6 +51,7 @@ public sealed partial class LlvmModuleGenerator
             EmitStatement(context, builder, function, statement, values, storage, storageRequirements,
                 model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
                 new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>());
+        EmitTracePop(builder);
         builder.BuildRetVoid();
     }
 
@@ -97,6 +100,7 @@ public sealed partial class LlvmModuleGenerator
             function.PersonalityFn = _personality;
         var entry = function.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
+        EmitTracePush(builder, cls.Name, cls.ModuleName, cls.Destructor!.Location);
         _currentFunction = function;
         var values = new Dictionary<string, LLVMValueRef> { ["this"] = function.GetParam(0) };
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
@@ -105,6 +109,7 @@ public sealed partial class LlvmModuleGenerator
             EmitStatement(context, builder, function, statement, values, storage,
                 new HashSet<string>(), model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
                 new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>());
+        EmitTracePop(builder);
         builder.BuildRetVoid();
     }
 
@@ -135,11 +140,11 @@ public sealed partial class LlvmModuleGenerator
                     LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
         foreach (var cls in model.Classes.Values)
         {
-            InitializeRuntimeTypeInfo(builder, cls.Name, cls.BaseTypeName, 1);
+            InitializeRuntimeTypeInfo(builder, cls.Name, cls.BaseTypeName, 1, model);
         }
         foreach (var interfaceSymbol in model.Interfaces.Values)
         {
-            InitializeRuntimeTypeInfo(builder, interfaceSymbol.Name, null, 2);
+            InitializeRuntimeTypeInfo(builder, interfaceSymbol.Name, null, 2, model);
         }
         foreach (var cls in model.Classes.Values)
         {
@@ -157,22 +162,55 @@ public sealed partial class LlvmModuleGenerator
         {
             var normal = nativeMain.AppendBasicBlock("oxygen.main.normal");
             var unwind = nativeMain.AppendBasicBlock("oxygen.main.unwind");
-            result = builder.BuildInvoke2(
-                oxygenMainType,
-                llvmFunctions[oxygenMain],
-                Array.Empty<LLVMValueRef>(),
-                normal,
-                unwind,
-                oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
-            builder.PositionAtEnd(unwind);
-            var landingType = LLVMTypeRef.CreateStruct(
-                [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32], false);
-            var landingPad = builder.BuildLandingPad(landingType, _personality, 1, "main.landingpad");
-            landingPad.AddClause(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)));
-            var exception = builder.BuildExtractValue(landingPad, 0, "main.exception");
-            builder.BuildCall2(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
-                new[] { exception }, (ReadOnlySpan<char>)string.Empty);
-            builder.BuildUnreachable();
+            if (_usesWindowsSeh)
+            {
+                result = builder.BuildInvoke2(oxygenMainType, llvmFunctions[oxygenMain],
+                    Array.Empty<LLVMValueRef>(), normal, unwind,
+                    oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
+                builder.PositionAtEnd(unwind);
+                var catchBody = nativeMain.AppendBasicBlock("main.catchpad");
+                var catchSwitch = builder.BuildCatchSwitch(default, default, 1, "main.catchswitch");
+                catchSwitch.AddHandler(catchBody);
+                builder.PositionAtEnd(catchBody);
+                var catchPad = builder.BuildCatchPad(catchSwitch,
+                    new LLVMValueRef[]
+                    {
+                        LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)),
+                        LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0))
+                    },
+                    "main.catchpad");
+                using var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad });
+                var exceptionPointer = GetWindowsExceptionPointer(catchPad);
+                var nativeException = builder.BuildCall2(
+                    exceptionPointer.FunctionType, exceptionPointer,
+                    new LLVMValueRef[] { catchPad }, "native.exception");
+                var exception = builder.BuildCallWithOperandBundles(
+                    _exceptionObject.FunctionType, _exceptionObject,
+                    new LLVMValueRef[] { nativeException },
+                    new LLVMOperandBundleRef[] { funclet }, "main.exception");
+                builder.BuildCallWithOperandBundles(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
+                    new LLVMValueRef[] { exception }, new LLVMOperandBundleRef[] { funclet });
+                builder.BuildUnreachable();
+            }
+            else
+            {
+                result = builder.BuildInvoke2(
+                    oxygenMainType,
+                    llvmFunctions[oxygenMain],
+                    Array.Empty<LLVMValueRef>(),
+                    normal,
+                    unwind,
+                    oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
+                builder.PositionAtEnd(unwind);
+                var landingType = LLVMTypeRef.CreateStruct(
+                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32], false);
+                var landingPad = builder.BuildLandingPad(landingType, _personality, 1, "main.landingpad");
+                landingPad.AddClause(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)));
+                var exception = builder.BuildExtractValue(landingPad, 0, "main.exception");
+                builder.BuildCall2(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
+                    new[] { exception }, (ReadOnlySpan<char>)string.Empty);
+                builder.BuildUnreachable();
+            }
             builder.PositionAtEnd(normal);
         }
         else
@@ -210,6 +248,7 @@ public sealed partial class LlvmModuleGenerator
             function.PersonalityFn = _personality;
         var entry = function.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
+        EmitTracePush(builder, symbol.Name, symbol.ModuleName, symbol.Declaration.Location);
         var values = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         _ownedScopes = new Stack<List<OwnedLocal>>();
@@ -260,12 +299,18 @@ public sealed partial class LlvmModuleGenerator
             {
                 var address = storage["this." + property.Name];
                 if (accessor.Kind == PropertyAccessorKind.Get)
+                {
+                    EmitTracePop(builder);
                     builder.BuildRet(builder.BuildLoad2(ToLlvmType(property.Type, model), address,
                         "property.get"));
+                }
                 else
                     builder.BuildStore(values["value"], address);
                 if (accessor.Kind == PropertyAccessorKind.Set)
+                {
+                    EmitTracePop(builder);
                     builder.BuildRetVoid();
+                }
                 return;
             }
         }
@@ -295,10 +340,34 @@ public sealed partial class LlvmModuleGenerator
         {
             CleanupOwnedScopes(builder, values, storage, model);
             if (emittedReturnType.IsVoid)
+            {
+                EmitTracePop(builder);
                 builder.BuildRetVoid();
+            }
             else
+            {
+                EmitTracePop(builder);
                 builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType, model), 0, false));
+            }
         }
+    }
+
+    private static void EmitTracePush(LLVMBuilderRef builder, string functionName, string fileName, SourceLocation location)
+    {
+        if (!_usesExceptions)
+            return;
+        var functionNameValue = builder.BuildGlobalStringPtr(functionName, "oxygen.trace.function");
+        var fileNameValue = builder.BuildGlobalStringPtr(fileName, "oxygen.trace.file");
+        builder.BuildCall2(_tracePush.FunctionType, _tracePush,
+            [functionNameValue, fileNameValue,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)Math.Max(0, location.Line), false),
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)Math.Max(0, location.Column), false)]);
+    }
+
+    private static void EmitTracePop(LLVMBuilderRef builder)
+    {
+        if (_usesExceptions)
+            builder.BuildCall2(_tracePop.FunctionType, _tracePop, []);
     }
 
     private static void InitializeClassFieldStorage(
@@ -319,6 +388,52 @@ public sealed partial class LlvmModuleGenerator
             storage[cls.Fields[index].Name] = fieldAddress;
             storage["this." + cls.Fields[index].Name] = fieldAddress;
         }
+    }
+
+    private static void InitializeExceptionStackTrace(
+        LLVMBuilderRef builder,
+        LLVMValueRef thisValue,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        ClassSymbol cls,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        if (!model.Classes.ContainsKey("Exception")
+            || !model.Classes.ContainsKey("StackTrace")
+            || !IsClassDerivedFrom(cls.Name, "Exception", model)
+            || !storage.TryGetValue("this.stack_trace", out var fieldAddress))
+            return;
+
+        var stackTraceClass = model.Classes["StackTrace"];
+        var constructor = stackTraceClass.Constructors.FirstOrDefault(candidate =>
+            candidate.Parameters.Count == 1
+            && candidate.Parameters[0].Type.IsClass
+            && candidate.Parameters[0].Type.StructName == "Exception");
+        if (constructor is null)
+            return;
+
+        var instance = builder.BuildAlloca(_classTypes["StackTrace"], "exception.stack_trace");
+        var vtable = builder.BuildStructGEP2(_classTypes["StackTrace"], instance, 0, "exception.stack_trace.vtable");
+        builder.BuildStore(GetTypeName(builder, "StackTrace"), vtable);
+        var virtualMethods = GetVirtualMethods(stackTraceClass, model);
+        for (var slot = 0; slot < _virtualSlotCount; slot++)
+        {
+            var slotAddress = builder.BuildStructGEP2(
+                _classTypes["StackTrace"], instance, (uint)slot + 1, "exception.stack_trace.vtable.slot");
+            var target = slot < virtualMethods.Count
+                ? builder.BuildBitCast(llvmFunctions[virtualMethods[slot]],
+                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "exception.stack_trace.method")
+                : LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0));
+            builder.BuildStore(target, slotAddress);
+        }
+
+        var exceptionValue = CoerceValue(builder, thisValue, SemanticType.Class(cls.Name),
+            SemanticType.Class("Exception"), model);
+        builder.BuildCall2(
+            _constructors[ConstructorKey(stackTraceClass, constructor)].FunctionType,
+            _constructors[ConstructorKey(stackTraceClass, constructor)],
+            [instance, exceptionValue]);
+        builder.BuildStore(instance, fieldAddress);
     }
 
     private static void CleanupOwnedScopes(

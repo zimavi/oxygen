@@ -24,9 +24,16 @@ completion, before a return leaves the construct, and during exception
 unwinding; if it throws or returns, that outcome replaces the pending one.
 
 The standard library provides `std.exception.Exception` as the root exception
-class. It contains the exception message and a `StackTrace` value. The trace
-records Oxygen function names and source locations captured while the
-exception propagates and can be formatted by the standard library.
+class. Construct it with the user-facing `Exception(message)` constructor; the
+runtime trace is not a constructor argument. It contains the exception message
+and a `StackTrace` value. The native
+runtime owns a bounded, address-stable trace copy captured at the throw site;
+each frame contains the Oxygen function, module/source name, line, and column.
+The runtime-backed `StackTrace` exposes the count and `frame_at(index)`
+constructs a `Frame` through bounds-checked accessors. Runtime plumbing is
+internal; derived exception constructors also receive it automatically. The
+runtime owns the frame storage until the matching catch or unhandled-exception
+path ends.
 
 Exception propagation is implemented by the runtime's handler frames. A
 function that does not handle an exception propagates it to its caller. Class
@@ -40,3 +47,11 @@ This is distinct from compiler diagnostics, which are reported before native
 code is generated. Compiler diagnostics are structured reports for invalid
 source, malformed native metadata, unsupported backend inputs, and native
 tool failures; see [Compiler diagnostics](diagnostics.md).
+
+On Windows targets produced by LLVM/Clang, exception propagation uses native
+SEH funclets (`catchswitch`, `catchpad`, and `cleanuppad`). The runtime bridges
+Oxygen object pointers through a private SEH exception code while preserving the
+version 1 Oxygen exception ABI. POSIX/Itanium targets continue to use the
+existing landing-pad implementation. MinGW/Itanium Windows targets are not
+covered by the native SEH lowering and must not be treated as equivalent to
+MSVC-compatible Windows COFF targets.

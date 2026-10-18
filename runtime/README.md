@@ -20,9 +20,8 @@ Runtime implementation files are organized by responsibility:
 
 - `src/runtime.c` contains runtime initialization.
 - `src/diagnostics.c` reports fatal runtime failures.
-- `src/exceptions.c` provides exception handler registration, dispatch, and
-  unhandled-exception termination.
-- `src/stack_trace.c` formats runtime-provided stack trace frames.
+- `src/exceptions.c` provides exception handler registration, dispatch,
+  throw-site trace capture, and unhandled-exception termination.
 - `src/types.c` handles runtime type registration and relationship checks.
 - `src/memory.c` provides allocation primitives.
 - `src/io.c` provides byte output and primitive formatting.
@@ -36,44 +35,48 @@ The Oxygen-to-C conversion allocates a NUL-terminated copy. Generic
 `stdlib.memory` allocation uses `oxygen_alloc` and `oxygen_free`; ownership of
 those allocations belongs to the Oxygen caller.
 
-Exceptions are represented by `oxygen_runtime_exception`, which contains a
-type name, message, and an optional array of
-`oxygen_runtime_stack_trace_frame` values. Generated code can register a
-callback with `__oxygen_runtime_push_exception_handler` and remove it with
-`__oxygen_runtime_pop_exception_handler`. Raising an exception dispatches to
-the current handler; without one, `__oxygen_runtime_unhandled_exception`
-prints the type, message, and stack trace to standard error, flushes the
-stream, and aborts with a non-zero status. Handler state is thread-local, so
-independent generated programs running on different threads do not share
-exception chains.
-
-The exception ABI is versioned by
-`OXYGEN_RUNTIME_EXCEPTION_ABI_VERSION` and
-`__oxygen_runtime_exception_abi_version()`. Generated code should initialize
-records with `__oxygen_runtime_exception_init`, attach borrowed trace frames
-with `__oxygen_runtime_exception_set_stack_trace`, and use the accessor
-functions when it needs to inspect a record. Trace frame and record pointers
-are borrowed; their storage must remain alive until dispatch returns. The
-`__oxygen_runtime_stack_trace_frame_at` accessor performs bounds checking and
-returns null for an invalid index.
-
 The public `std.exception` standard-library module contains the
-`Exception`, `StackTrace`, and `Frame` value classes. It intentionally keeps
-formatting and presentation in Oxygen while the C runtime only provides the
-stable record and fatal diagnostic ABI.
+`Exception`, `StackTrace`, and `Frame` representations. Callers construct
+exceptions with user data only (`Exception(message)`); runtime trace state is
+initialized by the class itself. Generated functions
+push and pop source frames through `__oxygen_runtime_trace_push` and
+`__oxygen_runtime_trace_pop`; `__oxygen_runtime_throw_object` copies the
+bounded active frame list into owned storage associated with the thrown
+object. The ABI exposes that storage through
+`__oxygen_runtime_exception_trace`. Unhandled exceptions include the message
+when the type metadata identifies its message field, followed by the captured
+frames.
+
+The source-level `std.exception.StackTrace` exposes the captured frame count
+through its `StackTrace(void* exception_object)` constructor and provides
+`frame_at(index)`. The latter uses bounds-checked runtime accessors for the
+opaque frame pointer, C-string names, line, and column, avoiding a foreign
+struct-return ABI. The runtime owns the frame storage until the matching catch
+or unhandled-exception path ends.
 
 LLVM exception lowering currently uses the POSIX/Itanium C++ unwinder
 (`__gxx_personality_v0` and the `__cxa_*` bridge) for native `throw`,
-`try/catch`, and `finally` control flow. Windows/SEH lowering is not yet
-implemented: the Windows bridge reports an unhandled exception rather than
-pretending that Itanium landing pads are compatible with SEH. Cross-compiling
-exception-enabled programs for Windows therefore requires a future
-`__C_specific_handler`/LLVM funclet implementation.
+`try/catch`, and `finally` control flow. On Windows, the runtime bridge uses
+the Clang/LLVM SEH exception record format instead: throwing raises the
+private `OXYGEN_RUNTIME_SEH_EXCEPTION_CODE` with the Oxygen object pointer as
+its payload, and catch handlers recover that pointer from
+`EXCEPTION_POINTERS`. Type matching follows the object's existing
+`oxygen_runtime_type_info` parent chain. `rethrow` preserves the active
+payload and SEH flags. The bridge does not install a second personality
+routine; Windows LLVM funclets and the platform `__C_specific_handler` own
+stack unwinding.
 
 From the repository root:
 
 ```powershell
 pwsh -File .\runtime\build.ps1
+```
+
+To remove all generated runtime objects and archives:
+
+```powershell
+pwsh -File .\runtime\build.ps1 -Clean
+./runtime/build.sh clean
 ```
 
 On POSIX-compatible platforms, use the shell script:
@@ -82,14 +85,15 @@ On POSIX-compatible platforms, use the shell script:
 ./runtime/build.sh
 ```
 
-Both scripts produce the same GNU-compatible archive, including debug symbols:
+Each script builds both exception ABIs and writes platform-specific artifacts,
+including debug symbols:
 
-- `runtime/build/liboxygenrt.a`
+- `runtime/build/posix/liboxygenrt.a` (Itanium C++ EH)
+- `runtime/build/windows/liboxygenrt.a` (Windows SEH)
 
-The runtime is compiled with `-O2 -g`. The archive format is intentionally
-independent of the host platform so it can be embedded into the executable
-linking pipeline. Both scripts use Clang for compilation and support overriding
-the compiler, archiver, and output directory.
+The runtime is compiled with `-O2 -g` using an explicit x86_64 target triple.
+Both scripts use Clang for compilation and support overriding the compiler,
+archiver, and output directory.
 
 For example:
 
@@ -100,7 +104,8 @@ OUTPUT_DIRECTORY=./artifacts/runtime \
 ./runtime/build.sh
 ```
 
-The scripts require Clang and a compatible GNU archive tool (`llvm-ar` or `ar`).
+Each script produces both platform libraries in one invocation. The scripts
+require Clang and a compatible archive tool (`llvm-ar`/`ar` or `llvm-lib`).
 
 The output is a static archive, not a complete executable. The CLI native
 build passes this archive after the LLVM-generated object file and then links
@@ -126,7 +131,7 @@ For example:
 ```powershell
 dotnet run --project .\src\Oxygen.Cli -- build .\main.oxy `
   --debug --optimization O0 `
-  --runtime .\runtime\build\liboxygenrt.a `
+  --runtime .\runtime\build\windows\liboxygenrt.a `
   --output .\program.exe
 ```
 

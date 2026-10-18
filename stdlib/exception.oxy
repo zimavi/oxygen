@@ -15,22 +15,57 @@ public class Frame {
         this.line = line;
         this.column = column;
     }
+
+    internal Frame(void* native_frame) {
+        this.function_name = std.exception.from_c_string(
+            std.exception.runtime_frame_function_name(native_frame));
+        this.file_name = std.exception.from_c_string(
+            std.exception.runtime_frame_file_name(native_frame));
+        this.line = std.exception.runtime_frame_line(native_frame);
+        this.column = std.exception.runtime_frame_column(native_frame);
+    }
 }
+
+@extern("oxygen_c_string_to_string")
+public extern string from_c_string(i8* value);
 
 public class StackTrace {
     public u64 count;
+    internal Exception exception_object;
 
-    public StackTrace(u64 count) {
+    internal StackTrace(u64 count) {
         this.count = count;
     }
+
+    internal StackTrace(Exception exception_object) {
+        this.count = std.exception.runtime_trace_count(exception_object);
+        this.exception_object = exception_object;
+    }
+
+    public Frame frame_at(u64 index) {
+        return new Frame(std.exception.runtime_trace_frame(exception_object, index));
+    }
 }
+
+@extern("__oxygen_runtime_exception_trace_count")
+public extern u64 runtime_trace_count(Exception exception_object);
+@extern("__oxygen_runtime_exception_trace_frame")
+public extern void* runtime_trace_frame(Exception exception_object, u64 index);
+@extern("__oxygen_runtime_trace_frame_function_name")
+public extern i8* runtime_frame_function_name(void* frame);
+@extern("__oxygen_runtime_trace_frame_file_name")
+public extern i8* runtime_frame_file_name(void* frame);
+@extern("__oxygen_runtime_trace_frame_line")
+public extern u32 runtime_frame_line(void* frame);
+@extern("__oxygen_runtime_trace_frame_column")
+public extern u32 runtime_frame_column(void* frame);
 
 public class Exception {
     public string message;
     public StackTrace stack_trace;
 
-    public Exception(string message, StackTrace stack_trace) {
+    public Exception(string message) {
         this.message = message;
-        this.stack_trace = stack_trace;
+        this.stack_trace = new StackTrace(this);
     }
 }

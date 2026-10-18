@@ -130,12 +130,19 @@ public sealed partial class LlvmModuleGenerator
         if (_exceptionContexts.Count == 0)
             return builder.BuildCall2(functionType, target, arguments, resultName);
 
+        var exceptionContext = _exceptionContexts.Peek();
+        LLVMValueRef result;
+        if (_usesWindowsSeh && exceptionContext.Pad.Handle != IntPtr.Zero)
+        {
+            using var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { exceptionContext.Pad });
+            return builder.BuildCallWithOperandBundles(functionType, target, arguments,
+                new LLVMOperandBundleRef[] { funclet }, resultName);
+        }
         var normal = _currentFunction.AppendBasicBlock("invoke.continue");
-        var result = builder.BuildInvoke2(functionType, target, arguments, normal,
-            _exceptionContexts.Peek().Unwind, resultName);
+        result = builder.BuildInvoke2(functionType, target, arguments, normal,
+            exceptionContext.Unwind, resultName);
         builder.PositionAtEnd(normal);
         return result;
     }
-
 
 }

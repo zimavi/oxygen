@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using LLVMSharp.Interop;
 using Oxygen.Compiler.Ast;
@@ -34,10 +35,15 @@ public sealed partial class LlvmModuleGenerator
     private static LLVMValueRef _exceptionEndCatch;
     private static LLVMValueRef _exceptionRethrow;
     private static LLVMValueRef _exceptionUnhandled;
+    private static LLVMValueRef _tracePush;
+    private static LLVMValueRef _tracePop;
+    private static LLVMValueRef _exceptionPointer;
+    private static LLVMModuleRef _module;
     private static LLVMValueRef _personality;
-    private sealed record ExceptionContext(LLVMBasicBlockRef Unwind);
+    private sealed record ExceptionContext(LLVMBasicBlockRef Unwind, LLVMValueRef Pad);
     private static Stack<ExceptionContext> _exceptionContexts = new();
     private static bool _usesExceptions;
+    private static bool _usesWindowsSeh;
     private static LLVMTypeRef ToLlvmStringType() =>
         LLVMTypeRef.CreateStruct([LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int64], false);
 
@@ -48,6 +54,8 @@ public sealed partial class LlvmModuleGenerator
 
         var context = LLVMContextRef.Create();
         var module = context.CreateModuleWithName(moduleName);
+        _module = module;
+        _exceptionPointer = default;
         var builder = context.CreateBuilder();
         _propertyAccessors.Clear();
         _accessorSymbols.Clear();
@@ -68,19 +76,20 @@ public sealed partial class LlvmModuleGenerator
         try
         {
             _usesExceptions = RequiresExceptionRuntime(model);
-            if (_usesExceptions && OperatingSystem.IsWindows())
-                throw new PlatformNotSupportedException(
-                    "Exception-enabled Oxygen programs are not supported on Windows yet because LLVM Windows SEH lowering is not implemented.");
+            _usesWindowsSeh = _usesExceptions && IsWindowsNativeSehTarget();
 
             _classTypes.Clear();
             _runtimeTypeInfos.Clear();
             _runtimeTypeInfoType = LLVMTypeRef.CreateStruct(
                 [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32,
-                    LLVMTypeRef.Int32, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false);
+                    LLVMTypeRef.Int32, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                    LLVMTypeRef.Int32], false);
             _constructors.Clear();
             _destructors.Clear();
             _virtualSlotCount = model.Classes.Values.Select(cls => GetVirtualMethods(cls, model).Count)
                 .DefaultIfEmpty().Max();
+            foreach (var cls in model.Classes.Values)
+                _classTypes[cls.Name] = context.CreateNamedStruct($"class.{cls.Name}");
             foreach (var cls in model.Classes.Values)
             {
                 var fields = (cls.IsValue
@@ -88,7 +97,7 @@ public sealed partial class LlvmModuleGenerator
                         : new[] { LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0) }
                             .Concat(Enumerable.Repeat(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), _virtualSlotCount)))
                     .Concat(cls.Fields.Select(field => ToLlvmType(field.Type, model))).ToArray();
-                _classTypes[cls.Name] = LLVMTypeRef.CreateStruct(fields, false);
+                _classTypes[cls.Name].StructSetBody(fields, false);
             }
             foreach (var cls in model.Classes.Values)
                 _runtimeTypeInfos[cls.Name] = AddRuntimeTypeInfoGlobal(module, cls.Name);
@@ -118,11 +127,13 @@ public sealed partial class LlvmModuleGenerator
                 LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32,
                     [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
                         LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int64], false));
-            _personality = module.AddFunction("__gxx_personality_v0",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32,
-                    [LLVMTypeRef.Int32, LLVMTypeRef.Int32, LLVMTypeRef.Int64,
-                        LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                        LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
+            _personality = module.AddFunction(_usesWindowsSeh ? "__C_specific_handler" : "__gxx_personality_v0",
+                _usesWindowsSeh
+                    ? LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32, [], true)
+                    : LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32,
+                        [LLVMTypeRef.Int32, LLVMTypeRef.Int32, LLVMTypeRef.Int64,
+                            LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                            LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
             _exceptionThrow = module.AddFunction("__oxygen_runtime_throw_object",
                 LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
                     [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
@@ -136,6 +147,13 @@ public sealed partial class LlvmModuleGenerator
             _exceptionUnhandled = module.AddFunction("__oxygen_runtime_unhandled_object",
                 LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
                     [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
+            _tracePush = module.AddFunction("__oxygen_runtime_trace_push",
+                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
+                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                        LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32,
+                        LLVMTypeRef.Int32], false));
+            _tracePop = module.AddFunction("__oxygen_runtime_trace_pop",
+                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [], false));
             foreach (var cls in model.Classes.Values)
             {
                 foreach (var ctor in cls.Constructors)
@@ -146,6 +164,7 @@ public sealed partial class LlvmModuleGenerator
                     _constructors[ConstructorKey(cls, ctor)] = module.AddFunction(
                         OxygenNameMangler.MangleConstructor(cls.ModuleName, cls, ctor), type);
                 }
+
                 if (cls.Destructor is not null)
                     _destructors[cls.Name] = module.AddFunction(
                         OxygenNameMangler.MangleDestructor(cls.ModuleName, cls),
@@ -219,6 +238,11 @@ public sealed partial class LlvmModuleGenerator
             throw;
         }
     }
+
+    private static bool IsWindowsNativeSehTarget() =>
+        OperatingSystem.IsWindows()
+        && !RuntimeInformation.RuntimeIdentifier.Contains("mingw", StringComparison.OrdinalIgnoreCase)
+        && !RuntimeInformation.OSDescription.Contains("mingw", StringComparison.OrdinalIgnoreCase);
 
     private static bool RequiresExceptionRuntime(SemanticModel model)
     {

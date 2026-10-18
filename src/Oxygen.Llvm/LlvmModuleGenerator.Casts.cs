@@ -97,7 +97,8 @@ public sealed partial class LlvmModuleGenerator
         LLVMBuilderRef builder,
         string typeName,
         string? parentType,
-        uint kind)
+        uint kind,
+        SemanticModel model)
     {
         var info = _runtimeTypeInfos[typeName];
         var name = builder.BuildGlobalStringPtr(typeName, $"oxygen.type.name.{typeName}");
@@ -112,6 +113,21 @@ public sealed partial class LlvmModuleGenerator
             ? LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0))
             : GetTypeName(builder, parentType);
         builder.BuildStore(parent, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 3, "type.parent"));
+        // Only advertise a message field when the generated class layout
+        // actually contains one.  Name-based inference made an unrelated
+        // class such as MyException unsafe for the native unhandled reporter.
+        var messageField = model.Classes.TryGetValue(typeName, out var cls)
+            ? cls.Fields.Select((field, index) => (field, index))
+                .FirstOrDefault(item => item.field.Name == "message"
+                    && item.field.Type.Kind == SemanticTypeKind.String)
+            : default;
+        var messageOffset = messageField.field is null
+            ? 0UL
+            : checked((ulong)(IntPtr.Size * (1 + _virtualSlotCount))
+                + (ulong)cls!.Fields.Take(messageField.index).Sum(field => (long)SizeOf(field.Type, model)));
+        builder.BuildStore(
+            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, messageOffset, false),
+            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 4, "type.message.offset"));
     }
 
     private static LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName)
@@ -296,9 +312,9 @@ public sealed partial class LlvmModuleGenerator
         type.Kind switch
         {
             SemanticTypeKind.Pointer => 8,
-            SemanticTypeKind.Class => model.Classes[type.StructName!].IsValue
+            SemanticTypeKind.Class => IsValueClass(type, model)
                 ? (ulong)model.Classes[type.StructName!].Fields.Sum(field => (long)SizeOf(field.Type, model))
-                : (ulong)(8 + model.Classes[type.StructName!].Fields.Sum(field => (long)SizeOf(field.Type, model))),
+                : 8,
             SemanticTypeKind.Interface => 16,
             SemanticTypeKind.String => 16,
             SemanticTypeKind.Array => checked((ulong)type.ArrayLength * SizeOf(type.ElementType!, model)),

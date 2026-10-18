@@ -47,7 +47,7 @@ public sealed class LlvmTests
     }
 
     [Fact]
-    public void MultiWorkerBuildsEnableThinLtoBackendJobsForBothStages()
+    public void MultiWorkerBuildsEnableThinLtoBackendJobsOnlyDuringLink()
     {
         var options = new NativeBuildOptions
         {
@@ -64,7 +64,7 @@ public sealed class LlvmTests
             "program",
             options);
 
-        Assert.Equal(["-O2", "-flto=thin", "-flto-jobs=4"], compilationArguments.Take(3));
+        Assert.Equal(["-O2", "-flto=thin"], compilationArguments.Take(2));
         Assert.Equal(["-O2", "-flto=thin", "-flto-jobs=4"], linkArguments.Take(3));
     }
 
@@ -270,6 +270,36 @@ public sealed class LlvmTests
 
         Assert.Contains("store i32 0", ir);
         Assert.Contains("zeroinitializer", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsMutuallyRecursiveClassFields()
+    {
+        var model = Analyze(
+            "class StackTrace { u64 count; Exception exception_object; } " +
+            "class Exception { string message; StackTrace stack_trace; } " +
+            "i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("%class.StackTrace", ir);
+        Assert.Contains("%class.Exception", ir);
+    }
+
+    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    public void EmitsSizeOfForMutuallyRecursiveReferenceClasses()
+    {
+        var model = Analyze(
+            "class StackTrace { Exception exception_object; } " +
+            "class Exception { StackTrace stack_trace; } " +
+            "u64 size_of_exception() { return sizeof(Exception); } " +
+            "i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("ret i64 8", ir);
     }
 
     [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]

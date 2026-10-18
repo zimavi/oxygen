@@ -9,6 +9,20 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
+    private static LLVMValueRef GetWindowsExceptionPointer(LLVMValueRef catchPad)
+    {
+        if (_exceptionPointer.Handle == IntPtr.Zero)
+        {
+            _exceptionPointer = _module.AddFunction(
+                "llvm.eh.exceptionpointer.p0",
+                LLVMTypeRef.CreateFunction(
+                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                    [catchPad.TypeOf], false));
+        }
+
+        return _exceptionPointer;
+    }
+
     private static bool EmitStatement(
         LLVMContextRef context,
         LLVMBuilderRef builder,
@@ -165,8 +179,11 @@ public sealed partial class LlvmModuleGenerator
                 }
                 else if (assignment.Target is MemberAccessExpression { Target: ThisExpression } thisMember)
                 {
-                    var owner = model.Classes.Values.First(cls =>
-                        cls.DeclaredProperties.Any(property => property.Name == thisMember.MemberName));
+                    var owner = model.Classes.Values.FirstOrDefault(cls =>
+                        cls.DeclaredProperties.Any(property => property.Name == thisMember.MemberName)
+                        || cls.Fields.Any(field => field.Name == thisMember.MemberName))
+                        ?? throw new InvalidOperationException(
+                            $"Class member '{thisMember.MemberName}' could not be resolved for this assignment.");
                     var thisProperty = owner.DeclaredProperties.FirstOrDefault(property => property.Name == thisMember.MemberName);
                     if (thisProperty is not null)
                     {
@@ -205,9 +222,15 @@ public sealed partial class LlvmModuleGenerator
                 {
                     EmitOwnedScopeDestructors(builder, values, storage, model);
                     if (emittedReturnType.IsVoid)
+                    {
+                        EmitTracePop(builder);
                         builder.BuildRetVoid();
+                    }
                     else
+                    {
+                        EmitTracePop(builder);
                         builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType, model), 0, false));
+                    }
                 }
                 else
                 {
@@ -218,6 +241,7 @@ public sealed partial class LlvmModuleGenerator
                         && model.ExpressionTypes[returnStatement.Value].IsClass)
                         RemoveOwned(returnedIdentifier.Name);
                     EmitOwnedScopeDestructors(builder, values, storage, model);
+                    EmitTracePop(builder);
                     builder.BuildRet(returnValue.Value);
                 }
                 return true;
@@ -561,8 +585,19 @@ public sealed partial class LlvmModuleGenerator
                     }
 
                     var normal = function.AppendBasicBlock("throw.returned");
-                    builder.BuildInvoke2(_exceptionThrow.FunctionType, _exceptionThrow,
-                        new[] { raw }, normal, _exceptionContexts.Peek().Unwind, "throw");
+                    var exceptionContext = _exceptionContexts.Peek();
+                    if (_usesWindowsSeh && exceptionContext.Pad.Handle != IntPtr.Zero)
+                    {
+                        using var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { exceptionContext.Pad });
+                        builder.BuildInvokeWithOperandBundles(_exceptionThrow.FunctionType, _exceptionThrow,
+                            new[] { raw }, normal, exceptionContext.Unwind, new LLVMOperandBundleRef[] { funclet },
+                            (ReadOnlySpan<char>)string.Empty);
+                    }
+                    else
+                    {
+                        builder.BuildInvoke2(_exceptionThrow.FunctionType, _exceptionThrow,
+                            new[] { raw }, normal, exceptionContext.Unwind, (ReadOnlySpan<char>)string.Empty);
+                    }
                     builder.PositionAtEnd(normal);
                     builder.BuildUnreachable();
                     return true;
@@ -588,13 +623,17 @@ public sealed partial class LlvmModuleGenerator
         SemanticType emittedReturnType,
         Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)> loops)
     {
+        if (_usesWindowsSeh)
+            return EmitWindowsSehTryStatement(context, builder, function, statement, values, storage,
+                storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+
         var body = function.AppendBasicBlock("try.body");
         var normal = function.AppendBasicBlock("try.normal");
         var landing = function.AppendBasicBlock("try.landingpad");
         builder.BuildBr(body);
         builder.PositionAtEnd(body);
         var outerExceptionContext = _exceptionContexts.Count == 0 ? null : _exceptionContexts.Peek();
-        _exceptionContexts.Push(new ExceptionContext(landing));
+        _exceptionContexts.Push(new ExceptionContext(landing, default));
         var bodyReturned = EmitStatement(context, builder, function, statement.Body, values, storage,
             storageRequirements, model, llvmFunctions, emittedReturnType, loops);
         _exceptionContexts.Pop();
@@ -698,9 +737,134 @@ public sealed partial class LlvmModuleGenerator
                 new[] { objectValue, GetTypeName(builder, possible) }, (ReadOnlySpan<char>)"catch.match");
             match = builder.BuildOr(match, candidate, "catch.match");
         }
+
         return builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, match,
             LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false), "catch.match");
     }
 
+    private static bool EmitWindowsSehTryStatement(
+            LLVMContextRef context,
+            LLVMBuilderRef builder,
+            LLVMValueRef function,
+            TryStatement statement,
+            Dictionary<string, LLVMValueRef> values,
+            Dictionary<string, LLVMValueRef> storage,
+            IReadOnlySet<string> storageRequirements,
+            SemanticModel model,
+            IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
+            SemanticType emittedReturnType,
+            Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)> loops)
+        {
+            var body = function.AppendBasicBlock("try.body");
+            var normal = function.AppendBasicBlock("try.normal");
+            var end = function.AppendBasicBlock("try.end");
+            var catchDispatch = function.AppendBasicBlock("try.catchswitch");
+            var catchBody = function.AppendBasicBlock("try.catchpad");
+            var unmatched = function.AppendBasicBlock("try.unmatched");
+            var outer = _exceptionContexts.Count == 0 ? null : _exceptionContexts.Peek();
+            var cleanup = statement.Finally is null ? default : function.AppendBasicBlock("try.cleanuppad");
+
+            builder.BuildBr(body);
+            builder.PositionAtEnd(body);
+            _exceptionContexts.Push(new ExceptionContext(catchDispatch, default));
+            var bodyReturned = EmitStatement(context, builder, function, statement.Body, values, storage,
+                storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+            _exceptionContexts.Pop();
+            if (!bodyReturned)
+                builder.BuildBr(normal);
+
+            builder.PositionAtEnd(catchDispatch);
+            var catchSwitch = builder.BuildCatchSwitch(default,
+                outer?.Unwind ?? (statement.Finally is null ? default : cleanup),
+                1, "try.catchswitch");
+            catchSwitch.AddHandler(catchBody);
+
+            builder.PositionAtEnd(catchBody);
+            var catchPad = builder.BuildCatchPad(catchSwitch,
+                new LLVMValueRef[]
+                {
+                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)),
+                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0))
+                },
+                "try.catchpad");
+            _exceptionContexts.Push(new ExceptionContext(
+                outer?.Unwind ?? (statement.Finally is null ? default : cleanup), catchPad));
+            var exceptionPointer = GetWindowsExceptionPointer(catchPad);
+            var nativeException = builder.BuildCall2(
+                exceptionPointer.FunctionType, exceptionPointer,
+                new LLVMValueRef[] { catchPad }, "native.exception");
+            var objectValue = builder.BuildCallWithOperandBundles(
+                _exceptionObject.FunctionType, _exceptionObject,
+                new LLVMValueRef[] { nativeException },
+                new LLVMOperandBundleRef[] { LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad }) },
+                "exception.object");
+            var catchBlocks = statement.Catches.Select((_, index) =>
+                function.AppendBasicBlock($"catch.{index}")).ToArray();
+            var next = unmatched;
+            var dispatchBlocks = statement.Catches.Select((_, index) =>
+                index == 0 ? catchBody : function.AppendBasicBlock($"catch.next{index}")).ToArray();
+            for (var index = 0; index < statement.Catches.Count; index++)
+            {
+                builder.PositionAtEnd(dispatchBlocks[index]);
+                var clause = statement.Catches[index];
+                if (clause.ExceptionType is null)
+                    builder.BuildBr(catchBlocks[index]);
+                else
+                {
+                    var target = FromTypeSyntax(clause.ExceptionType, model);
+                    var match = EmitExceptionTypeCheck(builder, objectValue, target, model);
+                    builder.BuildCondBr(match, catchBlocks[index],
+                        index + 1 < catchBlocks.Length ? dispatchBlocks[index + 1] : next);
+                }
+                if (clause.ExceptionType is null)
+                    break;
+            }
+            if (statement.Catches.Count == 0)
+                builder.BuildBr(unmatched);
+
+            builder.PositionAtEnd(unmatched);
+            using (var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad }))
+                builder.BuildCallWithOperandBundles(_exceptionRethrow.FunctionType, _exceptionRethrow,
+                    Array.Empty<LLVMValueRef>(), new LLVMOperandBundleRef[] { funclet });
+            builder.BuildUnreachable();
+
+            for (var index = 0; index < statement.Catches.Count; index++)
+            {
+                builder.PositionAtEnd(catchBlocks[index]);
+                var clause = statement.Catches[index];
+                if (clause.BindingName is not null && clause.ExceptionType is not null)
+                    values[clause.BindingName] = builder.BuildBitCast(objectValue,
+                        ToLlvmType(FromTypeSyntax(clause.ExceptionType, model), model), "caught.exception");
+                using (var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad }))
+                    builder.BuildCallWithOperandBundles(_exceptionEndCatch.FunctionType, _exceptionEndCatch,
+                        Array.Empty<LLVMValueRef>(), new LLVMOperandBundleRef[] { funclet });
+                var returned = EmitStatement(context, builder, function, clause.Body, values, storage,
+                    storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                if (!returned)
+                    builder.BuildCatchRet(catchPad, end);
+            }
+            _exceptionContexts.Pop();
+
+            builder.PositionAtEnd(normal);
+            var normalFinallyReturned = statement.Finally is not null
+                && EmitStatement(context, builder, function, statement.Finally, values, storage,
+                    storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+            if (!normalFinallyReturned)
+                builder.BuildBr(end);
+
+            if (statement.Finally is not null)
+            {
+                builder.PositionAtEnd(cleanup);
+                var cleanupPad = builder.BuildCleanupPad(default, Array.Empty<LLVMValueRef>(), "try.cleanuppad");
+                _exceptionContexts.Push(new ExceptionContext(outer?.Unwind ?? default, cleanupPad));
+                var cleanupReturned = EmitStatement(context, builder, function, statement.Finally, values, storage,
+                    storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                _exceptionContexts.Pop();
+                if (!cleanupReturned)
+                    builder.BuildCleanupRet(cleanupPad, outer?.Unwind ?? default);
+            }
+            builder.PositionAtEnd(end);
+            return normalFinallyReturned;
+    }
 
 }
