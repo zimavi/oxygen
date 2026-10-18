@@ -176,6 +176,7 @@ public sealed partial class LlvmModuleGenerator
         if (target.IsClass && (!source.IsClass || IsClassDerivedFrom(target.StructName!, source.StructName!, model)))
         {
             var possibleTypes = model.Classes.Keys
+                .Where(candidate => !model.Classes[candidate].IsGeneric)
                 .Where(candidate => IsClassDerivedFrom(candidate, target.StructName!, model))
                 .Where(candidate => !source.IsInterface
                     || ClassImplementsInterface(candidate, source.StructName!, model))
@@ -239,6 +240,7 @@ public sealed partial class LlvmModuleGenerator
             ? builder.BuildExtractValue(operand, 0, "pattern.data")
             : builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "pattern.object");
         var possibleTypes = model.Classes.Keys
+            .Where(candidate => !model.Classes[candidate].IsGeneric)
             .Where(candidate => target.IsClass
                 ? IsClassDerivedFrom(candidate, target.StructName!, model)
                 : ClassImplementsInterface(candidate, target.StructName!, model))

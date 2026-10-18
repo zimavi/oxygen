@@ -114,7 +114,8 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var className = expression.Type.NamedType
+        var className = NormalizeAggregateType(model.ExpressionTypes[expression], model).StructName
+            ?? expression.Type.NamedType
             ?? throw new InvalidOperationException("Class construction requires a named type.");
         return EmitClassConstruction(context, builder, className, expression.Arguments, true,
             values, storage, model, llvmFunctions);
@@ -124,7 +125,9 @@ public sealed partial class LlvmModuleGenerator
         LLVMContextRef context, LLVMBuilderRef builder, ClassConstructionExpression expression,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
-        EmitClassConstruction(context, builder, expression.TypeName, expression.Arguments, false,
+        EmitClassConstruction(context, builder,
+            NormalizeAggregateType(model.ExpressionTypes[expression], model).StructName ?? expression.TypeName,
+            expression.Arguments, false,
             values, storage, model, llvmFunctions);
 
     private static LLVMValueRef EmitClassConstruction(
@@ -133,6 +136,7 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        className = NormalizeAggregateType(SemanticType.Class(className), model).StructName ?? className;
         var cls = model.Classes[className];
         var classType = ToLlvmType(SemanticType.Class(className), model);
         LLVMValueRef instance;
@@ -183,9 +187,9 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var union = model.Unions[construction.UnionName];
+        var unionType = NormalizeAggregateType(model.ExpressionTypes[construction], model);
+        var union = model.Unions[unionType.EnumName ?? construction.UnionName];
         var index = union.Cases.Select((item, i) => (item, i)).First(pair => pair.item.Name == construction.CaseName).i;
-        var unionType = model.ExpressionTypes[construction];
         var result = LLVMValueRef.CreateConstNull(ToLlvmType(unionType, model));
         result = builder.BuildInsertValue(result,
             LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)index, false), 0, "union.tag");
@@ -259,8 +263,9 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var result = LLVMValueRef.CreateConstNull(ToLlvmType(SemanticType.Struct(literal.TypeName), model));
-        var structure = model.Structs[literal.TypeName];
+        var structureType = NormalizeAggregateType(model.ExpressionTypes[literal], model);
+        var result = LLVMValueRef.CreateConstNull(ToLlvmType(structureType, model));
+        var structure = model.Structs[structureType.StructName ?? literal.TypeName];
         foreach (var field in literal.Fields)
         {
             var index = structure.Fields.Select((candidate, index) => (candidate, index))

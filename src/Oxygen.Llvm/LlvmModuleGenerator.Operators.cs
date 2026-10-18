@@ -171,22 +171,9 @@ public sealed partial class LlvmModuleGenerator
         var rightType = model.ExpressionTypes[expression.Right];
         if (leftType != rightType && leftType.IsNumeric && rightType.IsNumeric)
         {
-            if (model.ExpressionTypes[expression] != SemanticType.FromPrimitive(PrimitiveType.Bool))
-            {
-                var common = model.ExpressionTypes[expression];
-                if (leftType != common)
-                    left = CoerceValue(builder, left, leftType, common, model);
-                if (rightType != common)
-                    right = CoerceValue(builder, right, rightType, common, model);
-            }
-            else if (leftType != rightType)
-            {
-                if (leftType.IsNumeric && rightType.IsNumeric)
-                {
-                    var common = leftType;
-                    right = CoerceValue(builder, right, rightType, common, model);
-                }
-            }
+            var common = CommonNumericType(leftType, rightType);
+            left = CoerceValue(builder, left, leftType, common, model);
+            right = CoerceValue(builder, right, rightType, common, model);
         }
         if ((leftType.IsPointer || rightType.IsPointer)
             && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
@@ -258,6 +245,21 @@ public sealed partial class LlvmModuleGenerator
             TokenKind.GreaterThanGreaterThan => builder.BuildAShr(left, right, "ashr"),
             _ => throw new InvalidOperationException($"Unsupported binary operator '{expression.Operator}'.")
         };
+    }
+
+    private static SemanticType CommonNumericType(SemanticType left, SemanticType right)
+    {
+        if (left == right)
+            return left;
+        if (left.Primitive is PrimitiveType.F64 || right.Primitive is PrimitiveType.F64)
+            return SemanticType.FromPrimitive(PrimitiveType.F64);
+        if (left.Primitive is PrimitiveType.F32 || right.Primitive is PrimitiveType.F32)
+            return SemanticType.FromPrimitive(PrimitiveType.F32);
+        var leftBits = IntegerBitWidth(left.Primitive!.Value);
+        var rightBits = IntegerBitWidth(right.Primitive!.Value);
+        if (leftBits != rightBits)
+            return leftBits > rightBits ? left : right;
+        return left;
     }
 
     private static LLVMValueRef EmitUnary(LLVMContextRef context, LLVMBuilderRef builder, UnaryExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)

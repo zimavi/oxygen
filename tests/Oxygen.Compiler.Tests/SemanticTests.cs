@@ -128,6 +128,70 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void MonomorphizesGenericClassUsesBeforeBackend()
+    {
+        var model = Analyze(
+            "class Box<T> { T value; Box(T value) { this.value = value; } T get() { return value; } } " +
+            "i32 main() { Box<i32> box = new Box<i32>(42); return box.get(); }");
+
+        var specialized = Assert.Single(model.Classes.Values, item =>
+            item.Name.StartsWith("Box__ox_", StringComparison.Ordinal));
+        Assert.False(specialized.IsGeneric);
+        Assert.Contains(specialized.Fields, field =>
+            field.Type == SemanticType.FromPrimitive(PrimitiveType.I32));
+        Assert.Contains(specialized.Methods, method =>
+            method.Name == "get" && method.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I32));
+        Assert.Contains(model.ResolvedCalls.Values, call =>
+            call.Name == "get" && call.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I32));
+    }
+
+    [Fact]
+    public void MonomorphizesGenericUnionUsesBeforeBackend()
+    {
+        var model = Analyze(
+            "union Option<T> { Some(T); None; } " +
+            "i32 main() { Option<i32> value = Option<i32>.Some(42); " +
+            "switch (value) { case Some(number): return number; case None: return 0; } }");
+
+        var specialized = Assert.Single(model.Unions, pair =>
+            pair.Key.StartsWith("Option__ox_", StringComparison.Ordinal)).Value;
+        Assert.False(specialized.IsGeneric);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), specialized.Cases[0].PayloadType);
+    }
+
+    [Fact]
+    public void MonomorphizesGenericInterfaceAndImplementingClassUses()
+    {
+        var model = Analyze(
+            "interface Boxed<T> { T get(); } " +
+            "class Box<T> : Boxed<T> { T value; Box(T value) { this.value = value; } T get() { return value; } } " +
+            "i32 main() { Boxed<i32> box = new Box<i32>(42); return box.get(); }");
+
+        Assert.Contains(model.Interfaces.Keys, name =>
+            name.StartsWith("Boxed__ox_", StringComparison.Ordinal));
+        Assert.Contains(model.Classes.Keys, name =>
+            name.StartsWith("Box__ox_", StringComparison.Ordinal));
+        Assert.Contains(model.ResolvedCalls.Values, call =>
+            call.Name == "get" && call.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I32));
+    }
+
+    [Fact]
+    public void KeepsMultipleGenericClassSpecializationsSeparate()
+    {
+        var model = Analyze(
+            "class Box<T> { T value; Box(T value) { this.value = value; } T get() { return value; } } " +
+            "i32 main() { Box<i32> first = new Box<i32>(1); Box<i64> second = new Box<i64>(2); " +
+            "return first.get() + cast<i32>(second.get()); }");
+
+        Assert.Equal(2, model.Classes.Values.Count(item =>
+            item.Name.StartsWith("Box__ox_", StringComparison.Ordinal)));
+        Assert.Contains(model.ResolvedCalls.Values, call =>
+            call.Name == "get" && call.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I32));
+        Assert.Contains(model.ResolvedCalls.Values, call =>
+            call.Name == "get" && call.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I64));
+    }
+
+    [Fact]
     public void EnforcesReadOnlyAndConstructorOnlyPropertyWrites()
     {
         Analyze(
@@ -307,6 +371,33 @@ public sealed class SemanticTests
             "interface Printable { i32 value(); } class Item : Printable { i32 value() { return 1; } } i32 main() { return 0; }");
 
         Assert.Single(model.Interfaces["Printable"].Methods);
+    }
+
+    [Fact]
+    public void ValidatesGenericInterfaceContracts()
+    {
+        var model = Analyze(
+            "interface Iterator<T> { T next(T value); } class Item<T> : Iterator<T> { T next(T value) { return value; } } i32 main() { return 0; }");
+
+        Assert.Single(model.Interfaces["Iterator"].Methods);
+    }
+
+    [Fact]
+    public void ValidatesGenericInterfaceContractsWithGenericReturnTypes()
+    {
+        var model = Analyze(
+            "union Option<T> { Some(T); None; } interface Iterator<T> { Option<T> next(); } class Item<T> : Iterator<T> { Option<T> next() { return Option<T>.None; } } i32 main() { return 0; }");
+
+        Assert.Single(model.Interfaces["Iterator"].Methods);
+    }
+
+    [Fact]
+    public void SpecializesGenericInterfaceContractsForConcreteArguments()
+    {
+        var model = Analyze(
+            "interface Producer<T> { T value(); } class Item : Producer<i32> { i32 value() { return 1; } } i32 main() { return 0; }");
+
+        Assert.Single(model.Interfaces["Producer"].Methods);
     }
 
     [Fact]
@@ -676,6 +767,16 @@ public sealed class SemanticTests
         var exception = Assert.Throws<SemanticException>(() =>
             Analyze("i32 main() { u8 value = 256; return 0; }"));
         Assert.Contains("Cannot initialize", exception.Message);
+    }
+
+    [Fact]
+    public void PromotesSmallerNumericOperandsInBinaryExpressions()
+    {
+        var model = Analyze("i32 main() { i8 small = 1; i64 large = 2; i64 result = small + large; return 0; }");
+
+        var addition = Assert.Single(model.ExpressionTypes,
+            pair => pair.Key is BinaryExpression binary && binary.Operator == TokenKind.Plus);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I64), addition.Value);
     }
 
     [Fact]

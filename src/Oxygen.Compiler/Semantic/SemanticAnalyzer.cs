@@ -15,6 +15,7 @@ public sealed partial class SemanticAnalyzer
     private readonly List<VariableSymbol> _declaredVariables = [];
     private readonly HashSet<VariableDeclarationStatement> _escapingClassLocals = [];
     private readonly Dictionary<ForInStatement, IteratorProtocol> _iteratorProtocols = [];
+    private readonly Dictionary<CallExpression, SemanticType> _callReceiverTypes = [];
     private string? _sourceName;
     private readonly Dictionary<string, StructSymbol> _structsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
@@ -121,6 +122,7 @@ public sealed partial class SemanticAnalyzer
         _declaredVariables.Clear();
         _escapingClassLocals.Clear();
         _iteratorProtocols.Clear();
+        _callReceiverTypes.Clear();
         _structsByName.Clear();
         _enumsByName.Clear();
         _unionsByName.Clear();
@@ -238,7 +240,7 @@ public sealed partial class SemanticAnalyzer
             {
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.Fields.Select(field =>
-                            new ClassFieldSymbol(field.Name, ResolveType(field.Type), field, field.Visibility))
+                            new ClassFieldSymbol(field.Name, ResolveType(field.Type), field, field.Visibility, field.IsConst))
                         .Concat(declaration.DeclaredProperties
                             .Where(property => property.Accessors.Any(accessor => accessor.Kind is PropertyAccessorKind.Get
                                 or PropertyAccessorKind.Set or PropertyAccessorKind.Init))
@@ -281,7 +283,17 @@ public sealed partial class SemanticAnalyzer
                 {
                     Fields = fields,
                     Methods = methods,
-                    Constructors = constructors
+                    Constructors = constructors,
+                    InterfaceTypes = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
+                    {
+                        var types = declaration.InterfaceTypeSyntaxes is { Count: > 0 }
+                            ? declaration.InterfaceTypeSyntaxes.Select(ResolveType).ToList()
+                            : declaration.Interfaces.Select(name => SemanticType.Interface(name)).ToList();
+                        if (declaration.BaseTypeSyntax is { Count: > 0 }
+                            && _interfacesByName.ContainsKey(declaration.BaseTypeSyntax[0].NamedType!))
+                            types.Insert(0, ResolveType(declaration.BaseTypeSyntax[0]));
+                        return types;
+                    })
                 };
             }
         }
@@ -441,6 +453,14 @@ public sealed partial class SemanticAnalyzer
         {
             if (symbol.IsExternal)
                 continue;
+            var owner = _classesByName.Values.FirstOrDefault(cls =>
+                cls.Methods.Any(method => ReferenceEquals(method, symbol)));
+            var previousGenericTypes = _genericTypes;
+            if (owner is not null)
+                _genericTypes = owner.DeclaredTypeParameters.ToDictionary(
+                    parameter => parameter,
+                    SemanticType.GenericParameter,
+                    StringComparer.Ordinal);
             try
             {
                 _sourceName = functionSources.GetValueOrDefault(symbol);
@@ -457,6 +477,10 @@ public sealed partial class SemanticAnalyzer
                     exception.Length,
                     sourceName: functionSources.GetValueOrDefault(symbol));
             }
+            finally
+            {
+                _genericTypes = previousGenericTypes;
+            }
         }
         for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
         {
@@ -470,6 +494,11 @@ public sealed partial class SemanticAnalyzer
                 var classSymbol = _classesByName[declaration.Name];
                 foreach (var constructor in classSymbol.Constructors)
                 {
+                    var previousGenericTypes = _genericTypes;
+                    _genericTypes = classSymbol.DeclaredTypeParameters.ToDictionary(
+                        parameter => parameter,
+                        SemanticType.GenericParameter,
+                        StringComparer.Ordinal);
                     try
                     {
                         AnalyzeFunction(
@@ -491,6 +520,10 @@ public sealed partial class SemanticAnalyzer
                             sourceName: sourceNames is not null && unitIndex < sourceNames.Count
                                 ? sourceNames[unitIndex]
                                 : null);
+                    }
+                    finally
+                    {
+                        _genericTypes = previousGenericTypes;
                     }
                 }
 
@@ -521,6 +554,9 @@ public sealed partial class SemanticAnalyzer
             }
         }
 
+        var aggregateSpecializations = MonomorphizeAggregates(
+            compilationUnits, functions, functionsByName, expressionTypes, resolvedCalls, mainFunction);
+
         if (diagnostics is not null)
         {
             foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads))
@@ -549,7 +585,8 @@ public sealed partial class SemanticAnalyzer
                 group => (IReadOnlyList<FunctionSymbol>)group.SelectMany(pair => pair.Value).ToList(),
                 StringComparer.Ordinal);
         return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName, _enumsByName, _unionsByName,
-            _classesByName, _interfacesByName, _escapingClassLocals, _iteratorProtocols);
+            _classesByName, _interfacesByName, _escapingClassLocals, _iteratorProtocols,
+            aggregateSpecializations);
     }
 
     private static FunctionSymbol CreateConstructorFunctionSymbol(string moduleName, ConstructorSymbol constructor)
@@ -696,19 +733,19 @@ public sealed partial class SemanticAnalyzer
                         property.Declaration.Location, property.Name.Length);
                 }
             }
-            foreach (var contract in interfaceNames.SelectMany(name => GetInterfaceMethods(name, [])))
+            foreach (var contract in GetInterfaceContracts(classSymbol, interfaceNames))
             {
                 if (!classSymbol.Methods.Concat(inherited).Any(method =>
                         method.Name == contract.Name && method.Parameters.Select(parameter => parameter.Type)
-                            .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type))
-                        && method.ReturnType == contract.ReturnType))
+                            .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type), SemanticTypeComparer.Instance)
+                        && SemanticTypeComparer.Instance.Equals(method.ReturnType, contract.ReturnType)))
                     throw Error($"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
                         classSymbol.Declaration.Location);
             }
             foreach (var contract in interfaceNames.SelectMany(name => _interfacesByName[name].DeclaredProperties))
             {
                 var implementation = classSymbol.Fields.FirstOrDefault(field => field.Name == contract.Name);
-                if (implementation is null || implementation.Type != contract.Type)
+                if (implementation is null || !SemanticTypeComparer.Instance.Equals(implementation.Type, contract.Type))
                     throw Error($"Class '{classSymbol.Name}' does not implement interface property '{contract.Name}'",
                         classSymbol.Declaration.Location);
                 if (contract.Declaration.HasGetter
@@ -734,7 +771,9 @@ public sealed partial class SemanticAnalyzer
         if (!active.Add(name))
             throw Error($"Class inheritance cycle involving '{name}'", _classesByName[name].Declaration.Location);
         var cls = _classesByName[name];
-        var methods = cls.BaseTypeName is null ? [] : GetClassMethods(cls.BaseTypeName, active);
+        var methods = cls.BaseTypeName is not null && _classesByName.ContainsKey(cls.BaseTypeName)
+            ? GetClassMethods(cls.BaseTypeName, active)
+            : [];
         active.Remove(name);
         var result = methods.ToList();
         foreach (var method in cls.Methods)
@@ -751,7 +790,9 @@ public sealed partial class SemanticAnalyzer
         if (!active.Add(name))
             throw Error($"Class inheritance cycle involving '{name}'", _classesByName[name].Declaration.Location);
         var cls = _classesByName[name];
-        var properties = cls.BaseTypeName is null ? [] : GetClassProperties(cls.BaseTypeName, active).ToList();
+        var properties = cls.BaseTypeName is not null && _classesByName.ContainsKey(cls.BaseTypeName)
+            ? GetClassProperties(cls.BaseTypeName, active).ToList()
+            : [];
         active.Remove(name);
         foreach (var property in cls.DeclaredProperties)
         {
@@ -798,6 +839,80 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Interface inheritance cycle involving '{name}'", _interfacesByName[name].Declaration.Location);
         active.Remove(name);
         return _interfacesByName[name].Methods;
+    }
+
+    private IReadOnlyList<FunctionSymbol> GetInterfaceContracts(ClassSymbol classSymbol, IReadOnlyList<string> interfaceNames)
+    {
+        var contracts = new List<FunctionSymbol>();
+        foreach (var interfaceType in classSymbol.DeclaredInterfaceTypes)
+        {
+            if (!_interfacesByName.TryGetValue(interfaceType.StructName!, out var interfaceSymbol))
+                continue;
+
+            var substitutions = interfaceSymbol.DeclaredTypeParameters
+                .Zip(interfaceType.TypeArguments ?? [], (name, type) => (name, type))
+                .ToDictionary(pair => pair.name, pair => pair.type, StringComparer.Ordinal);
+            contracts.AddRange(interfaceSymbol.Methods.Select(method => SubstituteFunctionTypes(method, substitutions)));
+        }
+
+        foreach (var name in interfaceNames)
+        {
+            if (!classSymbol.DeclaredInterfaceTypes.Any(type => type.StructName == name))
+                contracts.AddRange(GetInterfaceMethods(name, []));
+        }
+
+        return contracts;
+    }
+
+    private static FunctionSymbol SubstituteFunctionTypes(
+        FunctionSymbol function,
+        IReadOnlyDictionary<string, SemanticType> substitutions) =>
+        function with
+        {
+            ReturnType = SubstituteGenericType(function.ReturnType, substitutions),
+            Parameters = function.Parameters
+                .Select(parameter => parameter with { Type = SubstituteGenericType(parameter.Type, substitutions) })
+                .ToArray()
+        };
+
+    private sealed class SemanticTypeComparer : IEqualityComparer<SemanticType>
+    {
+        public static SemanticTypeComparer Instance { get; } = new();
+
+        public bool Equals(SemanticType? left, SemanticType? right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left is null || right is null
+                || left.Kind != right.Kind
+                || left.Primitive != right.Primitive
+                || left.StructName != right.StructName
+                || left.EnumName != right.EnumName
+                || left.GenericParameterName != right.GenericParameterName
+                || left.ArrayLength != right.ArrayLength)
+                return false;
+            if (!Equals(left.Pointee, right.Pointee) || !Equals(left.ElementType, right.ElementType))
+                return false;
+            return (left.TypeArguments ?? []).SequenceEqual(right.TypeArguments ?? [], this);
+        }
+
+        public int GetHashCode(SemanticType type)
+        {
+            var hash = new HashCode();
+            hash.Add(type.Kind);
+            hash.Add(type.Primitive);
+            hash.Add(type.StructName);
+            hash.Add(type.EnumName);
+            hash.Add(type.GenericParameterName);
+            hash.Add(type.ArrayLength);
+            if (type.Pointee is not null)
+                hash.Add(GetHashCode(type.Pointee));
+            if (type.ElementType is not null)
+                hash.Add(GetHashCode(type.ElementType));
+            foreach (var argument in type.TypeArguments ?? [])
+                hash.Add(GetHashCode(argument));
+            return hash.ToHashCode();
+        }
     }
 
     public SemanticResult AnalyzeWithDiagnostics(
@@ -1138,9 +1253,15 @@ public sealed partial class SemanticAnalyzer
         var className = function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..];
         if (_classesByName.TryGetValue(className, out var ownerClass))
         {
-            scope = new Scope(null, MarkVariableUsed, SemanticType.Class(ownerClass.Name));
+            var ownerTypeArguments = ownerClass.DeclaredTypeParameters
+                .Select(parameter => _genericTypes.TryGetValue(parameter, out var type)
+                    ? type
+                    : SemanticType.GenericParameter(parameter))
+                .ToArray();
+            scope = new Scope(null, MarkVariableUsed,
+                SemanticType.Class(ownerClass.Name, ownerTypeArguments.Length == 0 ? null : ownerTypeArguments));
             foreach (var field in ownerClass.Fields)
-                scope.Declare(field.Name, new VariableSymbol(field.Type, false, field.Declaration, false));
+                scope.Declare(field.Name, new VariableSymbol(field.Type, field.IsConst, field.Declaration, false));
         }
         _currentOwnerClass = _classesByName.GetValueOrDefault(className);
         _currentIsConstructor = isConstructor;
@@ -1154,6 +1275,9 @@ public sealed partial class SemanticAnalyzer
 
         _loopDepth = 0;
         _breakableDepth = 0;
+        if (isConstructor && _currentOwnerClass is not null)
+            AnalyzeFieldInitializers(_currentOwnerClass, parameterScope, functions, moduleName, imports,
+                expressionTypes, resolvedCalls);
         var hasReturn = AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (!function.ReturnType.IsVoid && !hasReturn)
         {
@@ -1181,6 +1305,28 @@ public sealed partial class SemanticAnalyzer
                     ReportWarning(name, variable.Declaration.Location, length);
                 }
             }
+        }
+    }
+
+    private void AnalyzeFieldInitializers(
+        ClassSymbol ownerClass,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        foreach (var field in ownerClass.Fields)
+        {
+            var initializer = field.Declaration.Initializer;
+            if (initializer is null)
+                continue;
+            var valueType = AnalyzeExpression(initializer, scope, functions, moduleName, imports,
+                expressionTypes, resolvedCalls, expectedType: field.Type);
+            if (!CanAssign(field.Type, initializer, valueType))
+                throw Error($"Cannot initialize field '{field.Name}' with {valueType}; expected {field.Type}",
+                    initializer.Location);
         }
     }
 
@@ -1339,6 +1485,9 @@ public sealed partial class SemanticAnalyzer
                         if (valueType.IsUnion)
                         {
                             var union = _unionsByName[valueType.EnumName!];
+                            var unionSubstitutions = union.DeclaredTypeParameters
+                                .Zip(valueType.TypeArguments ?? [], (name, type) => (name, type))
+                                .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
                             var seen = new HashSet<string>(StringComparer.Ordinal);
                             var caseReturns = new bool[switchStatement.Cases.Count];
                             for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
@@ -1353,7 +1502,9 @@ public sealed partial class SemanticAnalyzer
                                     throw Error($"Union case '{item.CaseName}' {(unionCase.PayloadType is null ? "does not have" : "requires")} a payload binding", item.Location);
                                 var caseScope = new Scope(scope, MarkVariableUsed);
                                 if (item.BindingName is not null)
-                                    caseScope.Declare(item.BindingName, new VariableSymbol(unionCase.PayloadType!, false, item, false));
+                                    caseScope.Declare(item.BindingName, new VariableSymbol(
+                                        SubstituteGenericType(unionCase.PayloadType!, unionSubstitutions),
+                                        false, item, false));
                                 var bodyReturns = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                                 caseReturns[index] = bodyReturns || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
                             }
@@ -1655,6 +1806,15 @@ public sealed partial class SemanticAnalyzer
                 && scope.Lookup(memberIdentifier.Name, memberIdentifier.Location).IsConst)
                 throw Error($"Cannot assign to a field of const variable '{memberIdentifier.Name}'", target.Location,
                     memberIdentifier.Name.Length);
+            var targetClass = member.Target is ThisExpression && _currentOwnerClass is not null
+                ? _currentOwnerClass
+                : member.Target is IdentifierExpression classIdentifier
+                    && scope.Lookup(classIdentifier.Name, classIdentifier.Location).Type.IsClass
+                    ? _classesByName[scope.Lookup(classIdentifier.Name, classIdentifier.Location).Type.StructName!]
+                    : null;
+            var field = targetClass?.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+            if (field is not null && field.IsConst && !_currentIsConstructor)
+                throw Error($"Cannot assign to const field '{field.Name}'", target.Location, field.Name.Length);
             ValidatePropertyWrite(member, scope);
         }
         else if (target is IndexExpression index
@@ -1853,7 +2013,7 @@ public sealed partial class SemanticAnalyzer
     }
 
     private static bool IsSized(SemanticType type) =>
-        !type.IsVoid && !type.IsGenericParameter;
+        !type.IsVoid;
 
     private SemanticType AnalyzeUnionConstruction(
         UnionConstructionExpression construction, Scope scope,
@@ -1953,6 +2113,9 @@ public sealed partial class SemanticAnalyzer
         if (targetType.IsClass)
         {
             var cls = _classesByName[targetType.StructName!];
+            var substitutions = cls.DeclaredTypeParameters
+                .Zip(targetType.TypeArguments ?? [], (name, type) => (name, type))
+                .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
             var property = FindProperty(cls, member.MemberName);
             if (property is not null)
             {
@@ -1961,18 +2124,22 @@ public sealed partial class SemanticAnalyzer
                 if (getter is null)
                     throw Error($"Property '{property.Name}' is write-only", member.Location, property.Name.Length);
                 EnsureAccessorVisible(property, getter, member.Location);
-                return property.Type;
+                return SubstituteGenericType(property.Type, substitutions);
             }
             var field = cls.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (field is not null)
-                return field.Type;
+                return SubstituteGenericType(field.Type, substitutions);
             if (cls.Methods.Any(method => method.Name == member.MemberName))
                 return SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.Void));
             throw Error($"Class '{cls.Name}' has no member named '{member.MemberName}'", member.Location);
         }
         if (targetType.IsInterface)
         {
-            var contract = _interfacesByName[targetType.StructName!].DeclaredProperties
+            var interfaceSymbol = _interfacesByName[targetType.StructName!];
+            var substitutions = interfaceSymbol.DeclaredTypeParameters
+                .Zip(targetType.TypeArguments ?? [], (name, type) => (name, type))
+                .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
+            var contract = interfaceSymbol.DeclaredProperties
                 .FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (contract is null)
                 throw Error($"Interface '{targetType.StructName}' has no member named '{member.MemberName}'",
@@ -1981,7 +2148,7 @@ public sealed partial class SemanticAnalyzer
                 accessor => accessor.Kind == PropertyAccessorKind.Get)
                 ?? throw Error($"Property '{contract.Name}' is write-only", member.Location, contract.Name.Length);
             EnsureAccessorVisible(contract, getter, member.Location);
-            return contract.Type;
+            return SubstituteGenericType(contract.Type, substitutions);
         }
         if (!targetType.IsStruct)
             throw Error($"Member access requires a struct or class value, got {targetType}", member.Location);
@@ -2031,14 +2198,31 @@ public sealed partial class SemanticAnalyzer
             throw Error("Only declared classes can be constructed with 'new'", expression.Location);
         var arguments = expression.Arguments.Select(argument =>
             AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
+        var constructedType = expression.Type.DeclaredTypeArguments.Count == 0
+            ? SemanticType.Class(cls.Name)
+            : ResolveType(expression.Type);
+        var substitutions = cls.DeclaredTypeParameters
+            .Zip(constructedType.TypeArguments ?? [], (name, type) => (name, type))
+            .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
         var matches = cls.Constructors.Where(constructor => constructor.Parameters.Count == arguments.Length)
             .Where(constructor => constructor.Parameters.Select((parameter, index) =>
-                CanAssign(parameter.Type, expression.Arguments[index], arguments[index])).All(match => match)).ToArray();
+            {
+                if (expression.Type.DeclaredTypeArguments.Count == 0)
+                    InferClassTypeArguments(parameter.Type, arguments[index], cls.DeclaredTypeParameters, substitutions);
+                return CanAssign(
+                    SubstituteGenericType(parameter.Type, substitutions),
+                    expression.Arguments[index],
+                    arguments[index]);
+            }).All(match => match)).ToArray();
         if (matches.Length == 0)
             throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
         if (matches.Length > 1)
             throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
-        return SemanticType.Class(cls.Name);
+        if (substitutions.Count != cls.DeclaredTypeParameters.Count)
+            throw Error($"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
+                expression.Location);
+        return SemanticType.Class(cls.Name,
+            cls.DeclaredTypeParameters.Count == 0 ? null : cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray());
     }
 
     private SemanticType AnalyzeClassConstructionExpression(
@@ -2051,14 +2235,69 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Class '{expression.TypeName}' is not declared", expression.Location);
         var arguments = expression.Arguments.Select(argument =>
             AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
+        var substitutions = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
+        if (expression.ExplicitTypeArguments.Count > 0)
+        {
+            ValidateTypeArgumentCount(
+                new TypeSyntax(null, false, expression.Location, NamedType: expression.TypeName,
+                    TypeArguments: expression.ExplicitTypeArguments.ToArray()),
+                cls.DeclaredTypeParameters.Count);
+            foreach (var (name, type) in cls.DeclaredTypeParameters.Zip(
+                         expression.ExplicitTypeArguments.Select(ResolveType)))
+                substitutions[name] = type;
+        }
         var matches = cls.Constructors.Where(constructor => constructor.Parameters.Count == arguments.Length)
             .Where(constructor => constructor.Parameters.Select((parameter, index) =>
-                CanAssign(parameter.Type, expression.Arguments[index], arguments[index])).All(match => match)).ToArray();
+            {
+                if (expression.ExplicitTypeArguments.Count == 0)
+                    InferClassTypeArguments(parameter.Type, arguments[index], cls.DeclaredTypeParameters, substitutions);
+                return CanAssign(
+                    SubstituteGenericType(parameter.Type, substitutions),
+                    expression.Arguments[index],
+                    arguments[index]);
+            }).All(match => match)).ToArray();
         if (matches.Length == 0)
             throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
         if (matches.Length > 1)
             throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
-        return SemanticType.Class(cls.Name);
+        if (substitutions.Count != cls.DeclaredTypeParameters.Count)
+            throw Error($"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
+                expression.Location);
+        return SemanticType.Class(
+            expression.TypeName,
+            cls.DeclaredTypeParameters.Count == 0 ? null : cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray());
+    }
+
+    private static void InferClassTypeArguments(
+        SemanticType pattern,
+        SemanticType actual,
+        IReadOnlyList<string> parameters,
+        IDictionary<string, SemanticType> substitutions)
+    {
+        if (pattern.IsGenericParameter && parameters.Contains(pattern.GenericParameterName!, StringComparer.Ordinal))
+        {
+            if (substitutions.TryGetValue(pattern.GenericParameterName!, out var existing))
+            {
+                if (existing != actual)
+                    substitutions.Remove(pattern.GenericParameterName!);
+            }
+            else
+                substitutions[pattern.GenericParameterName!] = actual;
+            return;
+        }
+
+        if (pattern.IsPointer && actual.IsPointer)
+        {
+            InferClassTypeArguments(pattern.Pointee!, actual.Pointee!, parameters, substitutions);
+            return;
+        }
+
+        if (pattern.Kind != actual.Kind || pattern.StructName != actual.StructName)
+            return;
+        var patternArguments = pattern.TypeArguments ?? [];
+        var actualArguments = actual.TypeArguments ?? [];
+        foreach (var pair in patternArguments.Zip(actualArguments))
+            InferClassTypeArguments(pair.First, pair.Second, parameters, substitutions);
     }
 
     private SemanticType AnalyzeUnary(
@@ -2165,46 +2404,33 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Operator '{expression.Operator}' is not valid for pointer operands", expression.Location);
         }
 
-        if (expression.Operator is TokenKind.Ampersand or TokenKind.Pipe or TokenKind.Caret
-            or TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan)
-        {
-            if (!left.IsInteger || !right.IsInteger)
-                throw Error($"Operator '{expression.Operator}' requires integer operands", expression.Location);
-            return left;
-        }
+        var requiresInteger = expression.Operator is TokenKind.Ampersand or TokenKind.Pipe or TokenKind.Caret
+            or TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan or TokenKind.Percent;
+        if (requiresInteger && (!left.IsInteger || !right.IsInteger))
+            throw Error($"Operator '{expression.Operator}' requires integer operands", expression.Location);
+        if (!left.IsNumeric || !right.IsNumeric)
+            throw Error($"Binary operator '{expression.Operator}' requires numeric operands", expression.Location);
 
-        if (expression.Operator == TokenKind.Percent && (!left.IsInteger || !right.IsInteger))
-            throw Error("The '%' operator requires integer operands", expression.Location);
-
-        if (left != right)
-        {
-            if (left.IsNumeric && right.IsNumeric)
-            {
-                if (!CanAssign(left, expression.Right, right) && !CanAssign(right, expression.Left, left))
-                    throw Error($"Binary operator '{expression.Operator}' requires matching operand types", expression.Location);
-                return isComparison ? SemanticType.FromPrimitive(PrimitiveType.Bool)
-                    : CanAssign(left, expression.Right, right) ? left : right;
-            }
-
-            throw Error($"Binary operator '{expression.Operator}' requires matching operand types", expression.Location);
-        }
+        var commonType = GetCommonNumericType(left, right, expression);
 
         if (isComparison)
         {
-            if (expression.Operator is not (TokenKind.EqualsEquals or TokenKind.BangEquals) && !left.IsNumeric)
-            {
-                throw Error($"Operator '{expression.Operator}' requires numeric operands", expression.Location);
-            }
-
             return SemanticType.FromPrimitive(PrimitiveType.Bool);
         }
 
-        if (!left.IsNumeric)
-        {
-            throw Error($"Operator '{expression.Operator}' requires numeric operands", expression.Location);
-        }
+        return commonType;
+    }
 
-        return left;
+    private SemanticType GetCommonNumericType(SemanticType left, SemanticType right, Expression expression)
+    {
+        if (left == right)
+            return left;
+        if (CanAssign(left, ((BinaryExpression)expression).Right, right))
+            return left;
+        if (CanAssign(right, ((BinaryExpression)expression).Left, left))
+            return right;
+        throw Error($"Binary operator '{((BinaryExpression)expression).Operator}' requires compatible numeric types",
+            expression.Location);
     }
 
     private SemanticType AnalyzeConditional(
@@ -2261,10 +2487,20 @@ public sealed partial class SemanticAnalyzer
             if (item.PayloadType is not null)
             {
                 var actual = AnalyzeExpression(call.Arguments[0], scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-                if (!CanAssign(item.PayloadType, call.Arguments[0], actual))
-                    throw Error($"Union case '{item.Name}' expects {item.PayloadType}, got {actual}", call.Location);
+                var substitutions = union.DeclaredTypeParameters
+                    .Select((name, index) => (name, type: call.ExplicitTypeArguments.Count > index
+                        ? ResolveType(call.ExplicitTypeArguments[index])
+                        : expectedType?.TypeArguments is { Count: > 0 } && expectedType.EnumName == union.Name
+                            ? expectedType.TypeArguments[index]
+                            : SemanticType.GenericParameter(name)))
+                    .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
+                if (!CanAssign(SubstituteGenericType(item.PayloadType, substitutions), call.Arguments[0], actual))
+                    throw Error($"Union case '{item.Name}' expects {SubstituteGenericType(item.PayloadType, substitutions)}, got {actual}", call.Location);
             }
-            return SemanticType.Union(union.Name);
+            var unionArguments = call.ExplicitTypeArguments.Count > 0
+                ? call.ExplicitTypeArguments.Select(ResolveType).ToArray()
+                : expectedType?.EnumName == union.Name ? expectedType.TypeArguments : null;
+            return SemanticType.Union(union.Name, unionArguments);
         }
         if (call.Name == "length")
         {
@@ -2284,17 +2520,23 @@ public sealed partial class SemanticAnalyzer
             if (receiver is not null)
             {
                 var receiverType = receiver.Type;
+                _callReceiverTypes[call] = receiverType;
                 if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
                 {
                     var methodCandidates = GetClassMethods(receiverClass.Name, []).Where(method => method.Name == methodName).ToArray();
+                    var substitutions = receiverClass.DeclaredTypeParameters
+                        .Zip(receiverType.TypeArguments ?? [], (name, type) => (name, type))
+                        .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
                     var methodArgumentTypes = call.Arguments.Select(argument =>
                         AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
                     var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
                         .Where(method => method.Parameters.Select((parameter, index) =>
-                            CanAssign(parameter.Type, call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
+                            CanAssign(SubstituteGenericType(parameter.Type, substitutions),
+                                call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
                     if (expectedType is not null)
                     {
-                        var exactExpected = methodMatches.Where(method => method.ReturnType == expectedType).ToArray();
+                        var exactExpected = methodMatches.Where(method =>
+                            SubstituteGenericType(method.ReturnType, substitutions) == expectedType).ToArray();
                         if (exactExpected.Length == 1)
                             methodMatches = exactExpected;
                     }
@@ -2302,7 +2544,7 @@ public sealed partial class SemanticAnalyzer
                     {
                         resolvedCalls[call] = methodMatches[0];
                         _usedFunctions.Add(methodMatches[0]);
-                        return methodMatches[0].ReturnType;
+                        return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
                     }
                     if (methodMatches.Length > 1)
                         throw Error($"Method call '{methodName}' is ambiguous; provide an expected return type", call.Location);
@@ -2312,16 +2554,20 @@ public sealed partial class SemanticAnalyzer
                 else if (receiverType.IsInterface && _interfacesByName.TryGetValue(receiverType.StructName!, out var receiverInterface))
                 {
                     var methodCandidates = receiverInterface.Methods.Where(method => method.Name == methodName).ToArray();
+                    var substitutions = receiverInterface.DeclaredTypeParameters
+                        .Zip(receiverType.TypeArguments ?? [], (name, type) => (name, type))
+                        .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
                     var methodArgumentTypes = call.Arguments.Select(argument =>
                         AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
                     var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
                         .Where(method => method.Parameters.Select((parameter, index) =>
-                            CanAssign(parameter.Type, call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
+                            CanAssign(SubstituteGenericType(parameter.Type, substitutions),
+                                call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
                     if (methodMatches.Length == 1)
                     {
                         resolvedCalls[call] = methodMatches[0];
                         _usedFunctions.Add(methodMatches[0]);
-                        return methodMatches[0].ReturnType;
+                        return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
                     }
                     if (methodMatches.Length > 1)
                         throw Error($"Method call '{methodName}' is ambiguous; provide an expected return type", call.Location);
@@ -2456,11 +2702,12 @@ public sealed partial class SemanticAnalyzer
 
     private bool CanAssign(SemanticType target, Expression value, SemanticType actual)
     {
-        if (target == actual)
+        if (SemanticTypeComparer.Instance.Equals(target, actual))
             return true;
         if (target.IsUnion && actual.IsUnion
             && target.EnumName == actual.EnumName
-            && (actual.TypeArguments is null || actual.TypeArguments.Count == 0))
+            && ((actual.TypeArguments is null || actual.TypeArguments.Count == 0)
+                || SemanticTypeComparer.Instance.Equals(target, actual)))
             return true;
         if (target.IsPointer && actual.IsNumeric && TryGetConstantInteger(value, out var nullValue) && nullValue == 0)
             return true;
@@ -2560,9 +2807,7 @@ public sealed partial class SemanticAnalyzer
         var targetUnsigned = IsUnsigned(targetPrimitive);
         return sourceUnsigned == targetUnsigned
             ? targetBits >= sourceBits
-            : !sourceUnsigned && !targetUnsigned
-                ? targetBits >= sourceBits
-                : sourceUnsigned && !targetUnsigned && targetBits > sourceBits;
+            : targetBits > sourceBits;
     }
 
     private static bool IsInteger(PrimitiveType type) =>
@@ -2784,6 +3029,13 @@ public sealed partial class SemanticAnalyzer
             ? replacement
             : type.IsPointer && type.Pointee is not null
                 ? SemanticType.PointerTo(SubstituteGenericType(type.Pointee, substitutions))
+            : type.TypeArguments is { Count: > 0 }
+                ? type with
+                {
+                    TypeArguments = type.TypeArguments
+                        .Select(argument => SubstituteGenericType(argument, substitutions))
+                        .ToArray()
+                }
                 : type;
 
     private FunctionSymbol SpecializeFunction(
@@ -2854,7 +3106,11 @@ public sealed partial class SemanticAnalyzer
                 WhenFalse = Expr(e.WhenFalse)
             },
             CallExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray(), TypeArguments = e.TypeArguments?.Select(Type).ToArray() },
-            ClassConstructionExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray() },
+            ClassConstructionExpression e => e with
+            {
+                Arguments = e.Arguments.Select(Expr).ToArray(),
+                TypeArguments = e.TypeArguments?.Select(Type).ToArray()
+            },
             NewExpression e => e with { Type = Type(e.Type), Arguments = e.Arguments.Select(Expr).ToArray() },
             CastExpression e => e with { TargetType = Type(e.TargetType), Operand = Expr(e.Operand) },
             SizeOfExpression e => e with { TargetType = e.TargetType is null ? null : Type(e.TargetType), Operand = e.Operand is null ? null : Expr(e.Operand) },

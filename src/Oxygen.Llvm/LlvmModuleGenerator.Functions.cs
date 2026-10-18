@@ -29,6 +29,16 @@ public sealed partial class LlvmModuleGenerator
             foreach (var field in cls.Fields)
                 builder.BuildStore(CreateZeroValue(field.Type, model), storage["this." + field.Name]);
         }
+        foreach (var field in cls.Fields)
+        {
+            if (field.Declaration.Initializer is null)
+                continue;
+            var initializer = EmitExpression(context, builder, field.Declaration.Initializer,
+                values, storage, model, llvmFunctions);
+            builder.BuildStore(CoerceValue(builder, initializer,
+                model.ExpressionTypes[field.Declaration.Initializer], field.Type, model),
+                storage["this." + field.Name]);
+        }
         var storageRequirements = CollectStorageRequirements(ctor.Declaration.Body);
         for (var i = 0; i < ctor.Parameters.Count; i++)
         {
@@ -83,7 +93,7 @@ public sealed partial class LlvmModuleGenerator
                     : new[]
                     {
                         CreateZeroValue(SemanticType.FromPrimitive(PrimitiveType.I32), model),
-                        CreateZeroValue(SemanticType.FromPrimitive(PrimitiveType.I32), model)
+                        CreateZeroValue(UnionPayloadType(type, model), model)
                     };
             var packed = type.Kind == SemanticTypeKind.Struct && model.Structs[type.StructName!].IsPacked;
             return LLVMValueRef.CreateConstStruct(fields, packed);
@@ -138,15 +148,15 @@ public sealed partial class LlvmModuleGenerator
             LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
                 [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
                     LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
-        foreach (var cls in model.Classes.Values)
+        foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
         {
             InitializeRuntimeTypeInfo(builder, cls.Name, cls.BaseTypeName, 1, model);
         }
-        foreach (var interfaceSymbol in model.Interfaces.Values)
+        foreach (var interfaceSymbol in model.Interfaces.Values.Where(iface => !iface.IsGeneric))
         {
             InitializeRuntimeTypeInfo(builder, interfaceSymbol.Name, null, 2, model);
         }
-        foreach (var cls in model.Classes.Values)
+        foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
         {
             if (cls.BaseTypeName is not null)
                 RegisterRuntimeType(builder, registerType, cls.Name, cls.BaseTypeName);

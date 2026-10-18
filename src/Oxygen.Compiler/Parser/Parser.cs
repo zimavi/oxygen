@@ -173,11 +173,18 @@ public sealed partial class Parser
         var typeParameters = ParseTypeParameters();
         string? baseType = null;
         var interfaces = new List<string>();
+        var baseTypeSyntax = (TypeSyntax?)null;
+        var interfaceTypeSyntaxes = new List<TypeSyntax>();
         if (Match(TokenKind.Colon))
         {
-            baseType = Consume(TokenKind.Identifier, "Expected a base type.").Lexeme;
+            baseTypeSyntax = ParseNamedTypeReferenceSyntax("Expected a base type.");
+            baseType = baseTypeSyntax.NamedType;
             while (Match(TokenKind.Comma))
-                interfaces.Add(Consume(TokenKind.Identifier, "Expected an interface name.").Lexeme);
+            {
+                var interfaceType = ParseNamedTypeReferenceSyntax("Expected an interface name.");
+                interfaces.Add(interfaceType.NamedType!);
+                interfaceTypeSyntaxes.Add(interfaceType);
+            }
         }
 
         Consume(TokenKind.OpenBrace, "Expected '{' after class declaration.");
@@ -234,6 +241,7 @@ public sealed partial class Parser
             }
 
             var memberLocation = Current.Location;
+            var isConst = Match(TokenKind.Const);
             var type = ParseType(allowInferred: false);
             var memberName = ConsumeIdentifierLike("Expected a class member name.").Lexeme;
             if (Check(TokenKind.OpenParenthesis))
@@ -250,14 +258,37 @@ public sealed partial class Parser
             {
                 if (isVirtual || isOverride)
                     throw Error("Only class methods may use 'virtual' or 'override'.", Current);
+                Expression? initializer = null;
+                if (Match(TokenKind.Equals))
+                    initializer = ParseExpression();
+                if (isConst && initializer is null)
+                    throw Error("A const class field must have an initializer.", Current);
                 Consume(TokenKind.Semicolon, "Expected ';' after class field.");
-                fields.Add(new ClassFieldDeclaration(type, memberName, memberVisibility, memberLocation));
+                fields.Add(new ClassFieldDeclaration(type, memberName, memberVisibility, memberLocation,
+                    initializer, isConst));
             }
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after class declaration.");
         Match(TokenKind.Semicolon);
         return new ClassDeclaration(name, baseType, interfaces, fields, properties, methods, constructors, destructor, visibility,
-            location, annotations, typeParameters);
+            location, annotations, typeParameters)
+        {
+            BaseTypeSyntax = baseTypeSyntax is null ? null : [baseTypeSyntax],
+            InterfaceTypeSyntaxes = interfaceTypeSyntaxes
+        };
+    }
+
+    private string ParseNamedTypeReference(string message)
+    {
+        return ParseNamedTypeReferenceSyntax(message).NamedType!;
+    }
+
+    private TypeSyntax ParseNamedTypeReferenceSyntax(string message)
+    {
+        var type = ParseType(allowInferred: false);
+        if (type.NamedType is null || type.IsPointer || type.IsArray || type.IsString)
+            throw Error(message, Current);
+        return type;
     }
 
     private InterfaceDeclaration ParseInterface()
@@ -317,6 +348,8 @@ public sealed partial class Parser
             BlockStatement? body = null;
             var auto = false;
             if (Match(TokenKind.Semicolon))
+                auto = true;
+            else if (Check(TokenKind.CloseBrace))
                 auto = true;
             else
                 body = ParseBlock();
@@ -967,11 +1000,13 @@ public sealed partial class Parser
             case TokenKind.Identifier:
                 var name = token.Lexeme;
                 var qualifiedParts = new List<string> { name };
-                while (Match(TokenKind.Dot))
-                    qualifiedParts.Add(ConsumeIdentifierLike("Expected an identifier after '.'.").Lexeme);
-                name = string.Join(".", qualifiedParts);
-
                 var typeArguments = ParseTypeArguments();
+                while (Match(TokenKind.Dot))
+                {
+                    qualifiedParts.Add(ConsumeIdentifierLike("Expected an identifier after '.'.").Lexeme);
+                    typeArguments ??= ParseTypeArguments();
+                }
+                name = string.Join(".", qualifiedParts);
                 if (Match(TokenKind.OpenParenthesis))
                 {
                     var arguments = new List<Expression>();
@@ -984,9 +1019,8 @@ public sealed partial class Parser
                     }
 
                     Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
-                    if ((typeArguments is null || typeArguments.Count == 0)
-                        && name.IndexOf('.') < 0 && name.Length > 0 && char.IsUpper(name[0]))
-                        return new ClassConstructionExpression(name, arguments, token.Location);
+                    if (name.IndexOf('.') < 0 && name.Length > 0 && char.IsUpper(name[0]))
+                        return new ClassConstructionExpression(name, arguments, token.Location, typeArguments);
                     return new CallExpression(name, arguments, token.Location, typeArguments);
                 }
 
@@ -1013,6 +1047,9 @@ public sealed partial class Parser
                     }
                     return literal;
                 }
+
+                if (typeArguments is not null && qualifiedParts.Count > 1)
+                    return new CallExpression(name, [], token.Location, typeArguments);
 
                 if (qualifiedParts.Count > 1)
                 {
@@ -1186,7 +1223,8 @@ public sealed partial class Parser
                 case TokenKind.GreaterThan:
                     depth--;
                     if (depth == 0)
-                        return index + 1 < _tokens.Count && _tokens[index + 1].Kind == TokenKind.OpenParenthesis;
+                        return index + 1 < _tokens.Count
+                            && _tokens[index + 1].Kind is TokenKind.OpenParenthesis or TokenKind.Dot;
                     break;
                 case TokenKind.EndOfFile:
                     return false;

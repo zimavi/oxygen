@@ -730,7 +730,7 @@ public sealed partial class LlvmModuleGenerator
         LLVMBuilderRef builder, LLVMValueRef objectValue, SemanticType target, SemanticModel model)
     {
         var match = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false);
-        foreach (var possible in model.Classes.Keys.Where(candidate =>
+        foreach (var possible in model.Classes.Keys.Where(candidate => !model.Classes[candidate].IsGeneric).Where(candidate =>
                      IsClassDerivedFrom(candidate, target.StructName!, model)))
         {
             var candidate = builder.BuildCall2(_isInstance.FunctionType, _isInstance,

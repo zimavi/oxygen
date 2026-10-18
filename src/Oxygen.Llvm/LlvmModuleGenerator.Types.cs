@@ -9,21 +9,76 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
+    private static bool HasGenericAggregateOwner(FunctionSymbol symbol, SemanticModel model)
+    {
+        var separator = symbol.ModuleName.LastIndexOf('.');
+        if (separator < 0)
+            return false;
+        var owner = symbol.ModuleName[(separator + 1)..];
+        return model.Classes.TryGetValue(owner, out var cls) && cls.IsGeneric
+            || model.Interfaces.TryGetValue(owner, out var iface) && iface.IsGeneric;
+    }
+
+    private static bool HasGenericType(SemanticType type) =>
+        type.IsGenericParameter
+        || (type.Pointee is not null && HasGenericType(type.Pointee))
+        || (type.ElementType is not null && HasGenericType(type.ElementType))
+        || (type.TypeArguments?.Any(HasGenericType) ?? false);
+
     private static LLVMTypeRef ToLlvmFunctionType(FunctionSymbol symbol, SemanticModel model)
     {
-        var parameterTypes = symbol.Parameters
-            .Select(parameter => UsesPointerStringAbi(symbol) && parameter.Type.Kind == SemanticTypeKind.String
-                ? LLVMTypeRef.CreatePointer(ToLlvmStringType(), 0)
-                : ToLlvmType(parameter.Type, model))
-            .ToList();
+        var parameterTypes = new List<LLVMTypeRef>();
+        foreach (var parameter in symbol.Parameters)
+        {
+            try
+            {
+                parameterTypes.Add(UsesPointerStringAbi(symbol) && parameter.Type.Kind == SemanticTypeKind.String
+                    ? LLVMTypeRef.CreatePointer(ToLlvmStringType(), 0)
+                    : ToLlvmType(parameter.Type, model));
+            }
+            catch (KeyNotFoundException exception)
+            {
+                throw new InvalidOperationException($"Cannot lower parameter '{parameter.Name}' of '{symbol.QualifiedName}' with type '{parameter.Type}'.", exception);
+            }
+        }
         if (IsClassMethod(symbol, model))
         {
-            var owner = symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..];
-            parameterTypes.Insert(0, model.Interfaces.ContainsKey(owner)
-                ? LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)
-                : ToLlvmType(SemanticType.Class(owner), model));
+            var owner = model.Interfaces.Values.FirstOrDefault(iface => iface.Methods.Contains(symbol))?.Name
+                ?? model.Classes.Values.FirstOrDefault(cls => cls.Methods.Contains(symbol))?.Name
+                ?? symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..];
+            if (!model.Classes.ContainsKey(owner) && !model.Interfaces.ContainsKey(owner))
+            {
+                var candidates = model.Classes.Keys
+                    .Where(name => name.StartsWith(owner + "__ox_", StringComparison.Ordinal))
+                    .ToArray();
+                if (candidates.Length == 1)
+                    owner = candidates[0];
+            }
+            if (!model.Classes.ContainsKey(owner) && !model.Interfaces.ContainsKey(owner))
+                throw new InvalidOperationException($"Cannot lower owner '{owner}' for '{symbol.QualifiedName}'. Classes: {string.Join(", ", model.Classes.Keys)}");
+            try
+            {
+                parameterTypes.Insert(0, model.Interfaces.ContainsKey(owner)
+                    ? LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)
+                    : ToLlvmType(SemanticType.Class(owner), model));
+            }
+            catch (KeyNotFoundException exception)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot lower receiver '{owner}' for '{symbol.QualifiedName}'. Classes: {string.Join(", ", model.Classes.Keys)}",
+                    exception);
+            }
         }
-        return LLVMTypeRef.CreateFunction(ToLlvmType(symbol.ReturnType, model), parameterTypes.ToArray(), false);
+        LLVMTypeRef returnType;
+        try
+        {
+            returnType = ToLlvmType(symbol.ReturnType, model);
+        }
+        catch (KeyNotFoundException exception)
+        {
+            throw new InvalidOperationException($"Cannot lower return type of '{symbol.QualifiedName}': '{symbol.ReturnType}'.", exception);
+        }
+        return LLVMTypeRef.CreateFunction(returnType, parameterTypes.ToArray(), false);
     }
 
     private static bool IsClassMethod(FunctionSymbol symbol, SemanticModel model) =>
@@ -35,7 +90,10 @@ public sealed partial class LlvmModuleGenerator
         symbol.IsExternal &&
         symbol.NativeName is "oxygen_write_stdout" or "oxygen_write_stderr";
 
-    private static LLVMTypeRef ToLlvmType(SemanticType type, SemanticModel model) => type.Primitive switch
+    private static LLVMTypeRef ToLlvmType(SemanticType type, SemanticModel model)
+    {
+        type = NormalizeAggregateType(type, model);
+        return type.Primitive switch
     {
         PrimitiveType.I8 or PrimitiveType.U8 => LLVMTypeRef.Int8,
         PrimitiveType.I16 or PrimitiveType.U16 => LLVMTypeRef.Int16,
@@ -63,6 +121,49 @@ public sealed partial class LlvmModuleGenerator
             [LLVMTypeRef.Int32, ToLlvmType(UnionPayloadType(type, model), model)], false),
         _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
     };
+    }
+
+    private static SemanticType NormalizeAggregateType(SemanticType type, SemanticModel model)
+    {
+        if (type.IsPointer)
+            return SemanticType.PointerTo(NormalizeAggregateType(type.Pointee!, model));
+        if (type.IsArray)
+            return SemanticType.ArrayOf(NormalizeAggregateType(type.ElementType!, model), type.ArrayLength);
+        if (type.TypeArguments is not { Count: > 0 })
+        {
+            var baseName = type.StructName ?? type.EnumName;
+            if (baseName is not null)
+            {
+                var candidates = model.AggregateSpecializations
+                    .Where(pair => pair.Value.StartsWith(baseName + "__ox_", StringComparison.Ordinal))
+                    .Select(pair => pair.Value)
+                    .Concat(model.Classes.Keys.Where(name =>
+                        name.StartsWith(baseName + "__ox_", StringComparison.Ordinal)))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                if (candidates.Length == 1)
+                    return type.Kind == SemanticTypeKind.Union
+                        ? type with { EnumName = candidates[0] }
+                        : type with { StructName = candidates[0] };
+            }
+            return type;
+        }
+        var directKey = $"{type.Kind}:{type.StructName ?? type.EnumName}<{string.Join(",", type.TypeArguments)}>";
+        if (model.AggregateSpecializations.TryGetValue(directKey, out var directSpecialized))
+            return type.Kind == SemanticTypeKind.Union
+                ? type with { EnumName = directSpecialized, TypeArguments = null }
+                : type with { StructName = directSpecialized, TypeArguments = null };
+        var normalized = type with
+        {
+            TypeArguments = type.TypeArguments.Select(argument => NormalizeAggregateType(argument, model)).ToArray()
+        };
+        var key = $"{normalized.Kind}:{normalized.StructName ?? normalized.EnumName}<{string.Join(",", normalized.TypeArguments)}>";
+        if (!model.AggregateSpecializations.TryGetValue(key, out var specialized))
+            return normalized;
+        return normalized.Kind == SemanticTypeKind.Union
+            ? normalized with { EnumName = specialized, TypeArguments = null }
+            : normalized with { StructName = specialized, TypeArguments = null };
+    }
 
     private static SemanticType UnionPayloadType(SemanticType type, SemanticModel model)
     {
@@ -156,14 +257,17 @@ public sealed partial class LlvmModuleGenerator
             return SemanticType.String;
         if (syntax.NamedType is not null)
         {
+            var arguments = syntax.DeclaredTypeArguments.Count == 0
+                ? null
+                : syntax.DeclaredTypeArguments.Select(argument => FromTypeSyntax(argument, model)).ToArray();
             if (model.Classes.ContainsKey(syntax.NamedType))
-                return SemanticType.Class(syntax.NamedType);
+                return NormalizeAggregateType(SemanticType.Class(syntax.NamedType, arguments), model);
             if (model.Interfaces.ContainsKey(syntax.NamedType))
-                return SemanticType.Interface(syntax.NamedType);
+                return NormalizeAggregateType(SemanticType.Interface(syntax.NamedType, arguments), model);
             if (model.Structs.ContainsKey(syntax.NamedType))
-                return SemanticType.Struct(syntax.NamedType);
+                return NormalizeAggregateType(SemanticType.Struct(syntax.NamedType, arguments), model);
             if (model.Unions.ContainsKey(syntax.NamedType))
-                return SemanticType.Union(syntax.NamedType);
+                return NormalizeAggregateType(SemanticType.Union(syntax.NamedType, arguments), model);
             return SemanticType.Enum(syntax.NamedType);
         }
         if (syntax.Primitive is null)

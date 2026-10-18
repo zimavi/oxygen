@@ -27,11 +27,11 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        foreach (var rootDirectory in rootDirectories)
+        foreach (var sourceDirectory in DiscoverSourceDirectories(rootDirectories))
         {
             try
             {
-                foreach (var path in Directory.EnumerateFiles(rootDirectory, "*.oxy", SearchOption.AllDirectories)
+                foreach (var path in Directory.EnumerateFiles(sourceDirectory, "*.oxy", SearchOption.AllDirectories)
                              .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
                 {
                     if (visitedFiles.Contains(Path.GetFullPath(path)))
@@ -57,9 +57,9 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                 diagnostics.Add(
                     DiagnosticPhase.Toolchain,
                     DiagnosticSeverity.Error,
-                    $"Unable to enumerate source directory '{rootDirectory}': {exception.Message}",
+                    $"Unable to enumerate source directory '{sourceDirectory}': {exception.Message}",
                     new SourceLocation(1, 1),
-                    sourceName: rootDirectory);
+                    sourceName: sourceDirectory);
             }
         }
 
@@ -112,6 +112,37 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
         }
 
         return new ResolvedSourceModules(sources, units, diagnostics.Diagnostics);
+    }
+
+    private static IEnumerable<string> DiscoverSourceDirectories(IReadOnlyList<string> rootDirectories)
+    {
+        var directories = new HashSet<string>(rootDirectories, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rootDirectory in rootDirectories)
+        {
+            var directory = new DirectoryInfo(rootDirectory);
+            while (directory is not null)
+            {
+                var standardLibraryDirectory = Path.Combine(directory.FullName, "stdlib");
+                if (Directory.Exists(standardLibraryDirectory))
+                    directories.Add(Path.GetFullPath(standardLibraryDirectory));
+
+                directory = directory.Parent;
+            }
+        }
+
+        var oxygenPath = Environment.GetEnvironmentVariable("OXYGEN_PATH");
+        if (!string.IsNullOrWhiteSpace(oxygenPath))
+        {
+            var oxygenDirectory = new DirectoryInfo(Path.GetFullPath(oxygenPath));
+            var standardLibraryDirectory = oxygenDirectory.Name.Equals("stdlib", StringComparison.OrdinalIgnoreCase)
+                ? oxygenDirectory.FullName
+                : Path.Combine(oxygenDirectory.FullName, "stdlib");
+            if (Directory.Exists(standardLibraryDirectory))
+                directories.Add(Path.GetFullPath(standardLibraryDirectory));
+        }
+
+        return directories;
     }
 
 }

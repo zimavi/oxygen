@@ -30,10 +30,11 @@ fi
 
 for target in posix windows; do
     if [ "$target" = "windows" ]; then
-        target_flags="--target=x86_64-pc-windows-msvc"
+        target_flags="--target=x86_64-pc-windows-msvc -fuse-ld=lld /winsysroot ~/msvc-sysroot /std:c17"
         library_name="liboxygenrt.a"
+        CLANG="clang-cl"
     else
-        target_flags=""
+        target_flags="-std=c17"
         library_name="liboxygenrt.a"
     fi
 
@@ -43,7 +44,7 @@ for target in posix windows; do
     objects=
     for source in "$SOURCE_DIRECTORY"/*.c; do
         object="$target_directory/$(basename "${source%.c}").o"
-        "$CLANG" $target_flags -std=c17 -O2 -g -I "$INCLUDE_DIRECTORY" -c "$source" -o "$object"
+        "$CLANG" $target_flags -O2 -g -I "$INCLUDE_DIRECTORY" -c "$source" -o "$object"
         objects="$objects $object"
     done
     # shellcheck disable=SC2086

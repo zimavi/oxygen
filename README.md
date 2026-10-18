@@ -93,6 +93,12 @@ Useful CLI options include:
 - `--optimization`, `-O` — optimization level passed to native code generation
 - `--jobs`, `-j` — backend worker count / ThinLTO parallelism
 
+Source imports are resolved from the directories containing the supplied source
+files. The compiler also automatically discovers a `stdlib/` directory in an
+ancestor of those directories, or under the directory specified by
+`OXYGEN_PATH`, so repository standard-library modules do not need to be passed
+individually.
+
 ## Documentation
 
 The `docs/` directory contains language notes for arrays, classes, control flow,
@@ -108,4 +114,3 @@ lexer, parser, AST, semantic analysis, LLVM IR generation, runtime, and native b
 
 If you are contributing new functionality, inspect the relevant source, tests, and docs first,
 then keep changes focused and add tests alongside behavior changes.
-

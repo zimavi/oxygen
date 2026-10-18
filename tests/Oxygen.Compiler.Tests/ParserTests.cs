@@ -154,6 +154,45 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesGenericClassInterfacesAndQualifiedUnionCases()
+    {
+        var unit = Parse(
+            "interface Iterator<T> { Option<T> next(); } " +
+            "class Items<T> : Iterator<T> { Option<T> next() { return Option<T>.None; } } " +
+            "i32 main() { return 0; }");
+
+        var iterator = Assert.Single(unit.Interfaces);
+        Assert.Equal(["T"], iterator.DeclaredTypeParameters.Select(parameter => parameter.Name));
+        var items = Assert.Single(unit.Classes);
+        Assert.Equal("Iterator", items.BaseType);
+        var next = Assert.Single(items.Methods);
+        var unionCase = Assert.IsType<CallExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(next.Body.Statements)).Value);
+        Assert.Equal("Option.None", unionCase.Name);
+        Assert.Single(unionCase.ExplicitTypeArguments);
+    }
+
+    [Fact]
+    public void ParsesConstructorsDestructorsAutoPropertiesAndInitializedFields()
+    {
+        var unit = Parse(
+            "class Buffer { const i32 size = 4; i32 position = 0; " +
+            "public i32 Length { get; private set } " +
+            "public Buffer(i32 length) { this.Length = length; } " +
+            "public ~Buffer() { position = 0; } } " +
+            "i32 main() { return 0; }");
+
+        var buffer = Assert.Single(unit.Classes);
+        Assert.Equal(2, buffer.Fields.Count);
+        Assert.True(buffer.Fields[0].IsConst);
+        Assert.NotNull(buffer.Fields[0].Initializer);
+        Assert.NotNull(buffer.Fields[1].Initializer);
+        Assert.True(Assert.Single(buffer.DeclaredProperties).HasGetter);
+        Assert.Single(buffer.Constructors);
+        Assert.NotNull(buffer.Destructor);
+    }
+
+    [Fact]
     public void ParsesTaggedUnionsAndSwitchCases()
     {
         var unit = Parse(

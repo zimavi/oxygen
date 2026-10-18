@@ -18,9 +18,15 @@ public sealed record StructSymbol(
 {
     public string QualifiedName => $"{ModuleName}.{Name}";
     public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
+    public bool IsGeneric => DeclaredTypeParameters.Count != 0;
 }
 
-public sealed record ClassFieldSymbol(string Name, SemanticType Type, ClassFieldDeclaration Declaration, Visibility Visibility);
+public sealed record ClassFieldSymbol(
+    string Name,
+    SemanticType Type,
+    ClassFieldDeclaration Declaration,
+    Visibility Visibility,
+    bool IsConst = false);
 public sealed record PropertySymbol(
     string Name,
     SemanticType Type,
@@ -45,11 +51,14 @@ public sealed record ClassSymbol(
     Visibility Visibility,
     bool IsValue = false,
     IReadOnlyList<string>? TypeParameters = null,
-    IReadOnlyList<PropertySymbol>? Properties = null)
+    IReadOnlyList<PropertySymbol>? Properties = null,
+    IReadOnlyList<SemanticType>? InterfaceTypes = null)
 {
     public string QualifiedName => $"{ModuleName}.{Name}";
     public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
+    public bool IsGeneric => DeclaredTypeParameters.Count != 0;
     public IReadOnlyList<PropertySymbol> DeclaredProperties => Properties ?? [];
+    public IReadOnlyList<SemanticType> DeclaredInterfaceTypes => InterfaceTypes ?? [];
 }
 public sealed record InterfaceSymbol(
     string Name,
@@ -62,6 +71,7 @@ public sealed record InterfaceSymbol(
 {
     public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
     public IReadOnlyList<PropertySymbol> DeclaredProperties => Properties ?? [];
+    public bool IsGeneric => DeclaredTypeParameters.Count != 0;
 }
 
 public sealed record EnumMemberSymbol(string Name, int Value, EnumMemberDeclaration Declaration);
@@ -83,6 +93,7 @@ public sealed record UnionSymbol(
     IReadOnlyList<string>? TypeParameters = null)
 {
     public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
+    public bool IsGeneric => DeclaredTypeParameters.Count != 0;
     public IReadOnlyDictionary<string, UnionCaseSymbol> CasesByName =>
         Cases.ToDictionary(item => item.Name, StringComparer.Ordinal);
 }
@@ -132,7 +143,8 @@ public sealed class SemanticModel
         IReadOnlyDictionary<string, ClassSymbol>? classes = null,
         IReadOnlyDictionary<string, InterfaceSymbol>? interfaces = null,
         IReadOnlySet<VariableDeclarationStatement>? escapingClassLocals = null,
-        IReadOnlyDictionary<ForInStatement, IteratorProtocol>? iteratorProtocols = null)
+        IReadOnlyDictionary<ForInStatement, IteratorProtocol>? iteratorProtocols = null,
+        IReadOnlyDictionary<string, string>? aggregateSpecializations = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -146,6 +158,7 @@ public sealed class SemanticModel
         Interfaces = interfaces ?? new Dictionary<string, InterfaceSymbol>();
         EscapingClassLocals = escapingClassLocals ?? new HashSet<VariableDeclarationStatement>();
         IteratorProtocols = iteratorProtocols ?? new Dictionary<ForInStatement, IteratorProtocol>();
+        AggregateSpecializations = aggregateSpecializations ?? new Dictionary<string, string>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -165,4 +178,5 @@ public sealed class SemanticModel
     public IReadOnlyDictionary<string, InterfaceSymbol> Interfaces { get; }
     public IReadOnlySet<VariableDeclarationStatement> EscapingClassLocals { get; }
     public IReadOnlyDictionary<ForInStatement, IteratorProtocol> IteratorProtocols { get; }
+    public IReadOnlyDictionary<string, string> AggregateSpecializations { get; }
 }

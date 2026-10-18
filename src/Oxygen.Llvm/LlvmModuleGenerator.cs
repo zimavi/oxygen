@@ -61,14 +61,18 @@ public sealed partial class LlvmModuleGenerator
         _accessorSymbols.Clear();
         _interfaceTables.Clear();
         _interfaceSlots.Clear();
-        var accessorSymbols = model.Classes.Values.SelectMany(cls => CreatePropertyAccessorSymbols(cls, model))
-            .Concat(model.Interfaces.Values.SelectMany(iface => CreateInterfaceAccessorSymbols(iface))).ToList();
+        var concreteClasses = model.Classes.Values.Where(cls => !cls.IsGeneric).ToArray();
+        var concreteInterfaces = model.Interfaces.Values.Where(iface => !iface.IsGeneric).ToArray();
+        var accessorSymbols = concreteClasses.SelectMany(cls => CreatePropertyAccessorSymbols(cls, model))
+            .Concat(concreteInterfaces.SelectMany(iface => CreateInterfaceAccessorSymbols(iface))).ToList();
         var symbols = model.Functions.Values
             .Concat(model.ResolvedCalls.Values)
-            .Concat(model.Classes.Values.SelectMany(cls => cls.Methods))
-            .Concat(model.Interfaces.Values.SelectMany(iface => iface.Methods))
+            .Concat(concreteClasses.SelectMany(cls => cls.Methods))
+            .Concat(concreteInterfaces.SelectMany(iface => iface.Methods))
             .Concat(accessorSymbols)
-            .Where(symbol => !symbol.IsGeneric)
+            .Where(symbol => !symbol.IsGeneric && !HasGenericAggregateOwner(symbol, model)
+                && !HasGenericType(symbol.ReturnType)
+                && symbol.Parameters.All(parameter => !HasGenericType(parameter.Type)))
             .Distinct()
             .ToList();
         var llvmFunctions = new Dictionary<FunctionSymbol, LLVMValueRef>();
@@ -86,11 +90,11 @@ public sealed partial class LlvmModuleGenerator
                     LLVMTypeRef.Int32], false);
             _constructors.Clear();
             _destructors.Clear();
-            _virtualSlotCount = model.Classes.Values.Select(cls => GetVirtualMethods(cls, model).Count)
+            _virtualSlotCount = concreteClasses.Select(cls => GetVirtualMethods(cls, model).Count)
                 .DefaultIfEmpty().Max();
-            foreach (var cls in model.Classes.Values)
+            foreach (var cls in concreteClasses)
                 _classTypes[cls.Name] = context.CreateNamedStruct($"class.{cls.Name}");
-            foreach (var cls in model.Classes.Values)
+            foreach (var cls in concreteClasses)
             {
                 var fields = (cls.IsValue
                         ? Enumerable.Empty<LLVMTypeRef>()
@@ -99,20 +103,21 @@ public sealed partial class LlvmModuleGenerator
                     .Concat(cls.Fields.Select(field => ToLlvmType(field.Type, model))).ToArray();
                 _classTypes[cls.Name].StructSetBody(fields, false);
             }
-            foreach (var cls in model.Classes.Values)
+
+            foreach (var cls in concreteClasses)
                 _runtimeTypeInfos[cls.Name] = AddRuntimeTypeInfoGlobal(module, cls.Name);
-            foreach (var interfaceSymbol in model.Interfaces.Values)
+            foreach (var interfaceSymbol in concreteInterfaces)
                 _runtimeTypeInfos[interfaceSymbol.Name] = AddRuntimeTypeInfoGlobal(module, interfaceSymbol.Name);
             foreach (var symbol in symbols)
             {
                 var functionType = ToLlvmFunctionType(symbol, model);
                 llvmFunctions[symbol] = module.AddFunction(OxygenNameMangler.Mangle(symbol.ModuleName, symbol), functionType);
             }
-            foreach (var iface in model.Interfaces.Values)
+            foreach (var iface in concreteInterfaces)
             {
                 var slots = GetInterfaceSlots(iface);
                 _interfaceSlots[iface.Name] = slots;
-                foreach (var cls in model.Classes.Values.Where(cls => ClassImplementsInterface(cls.Name, iface.Name, model)))
+                foreach (var cls in concreteClasses.Where(cls => ClassImplementsInterface(cls.Name, iface.Name, model)))
                     AddInterfaceTable(module, cls, iface, slots, llvmFunctions, model);
             }
             var allocType = LLVMTypeRef.CreateFunction(
@@ -154,7 +159,7 @@ public sealed partial class LlvmModuleGenerator
                         LLVMTypeRef.Int32], false));
             _tracePop = module.AddFunction("__oxygen_runtime_trace_pop",
                 LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [], false));
-            foreach (var cls in model.Classes.Values)
+            foreach (var cls in concreteClasses)
             {
                 foreach (var ctor in cls.Constructors)
                 {
@@ -194,10 +199,10 @@ public sealed partial class LlvmModuleGenerator
 
             foreach (var symbol in symbols)
             {
-                if (!symbol.IsExternal)
+                if (!symbol.IsExternal && !IsInterfaceContract(symbol, model))
                     EmitFunction(context, builder, llvmFunctions[symbol], symbol, model, llvmFunctions);
             }
-            foreach (var cls in model.Classes.Values)
+            foreach (var cls in concreteClasses)
             {
                 foreach (var ctor in cls.Constructors)
                     EmitConstructor(context, builder, _constructors[ConstructorKey(cls, ctor)], cls, ctor, model, llvmFunctions);
@@ -247,13 +252,17 @@ public sealed partial class LlvmModuleGenerator
     private static bool RequiresExceptionRuntime(SemanticModel model)
     {
         IEnumerable<BlockStatement> bodies = model.Functions.Values
+            .Where(function => !function.IsGeneric)
             .Select(function => function.Declaration.Body)
-            .Concat(model.Classes.Values.SelectMany(cls => cls.Constructors.Select(ctor => ctor.Declaration.Body)))
-            .Concat(model.Classes.Values
+            .Concat(model.Classes.Values.Where(cls => !cls.IsGeneric)
+                .SelectMany(cls => cls.Constructors.Select(ctor => ctor.Declaration.Body)))
+            .Concat(model.Classes.Values.Where(cls => !cls.IsGeneric)
                 .Where(cls => cls.Destructor is not null)
                 .Select(cls => cls.Destructor!.Body))
-            .Concat(model.Classes.Values.SelectMany(cls => cls.Methods.Select(method => method.Declaration.Body)))
-            .Concat(model.Interfaces.Values.SelectMany(iface => iface.Methods.Select(method => method.Declaration.Body)));
+            .Concat(model.Classes.Values.Where(cls => !cls.IsGeneric)
+                .SelectMany(cls => cls.Methods.Select(method => method.Declaration.Body)))
+            .Concat(model.Interfaces.Values.Where(iface => !iface.IsGeneric)
+                .SelectMany(iface => iface.Methods.Select(method => method.Declaration.Body)));
 
         return bodies.Any(ContainsExceptionStatement);
     }
@@ -279,5 +288,8 @@ public sealed partial class LlvmModuleGenerator
 
     private static string ConstructorKey(ClassSymbol cls, ConstructorSymbol ctor) =>
             cls.Name + "(" + string.Join(",", ctor.Parameters.Select(p => OxygenNameMangler.EncodeType(p.Type))) + ")";
+
+    private static bool IsInterfaceContract(FunctionSymbol symbol, SemanticModel model) =>
+        model.Interfaces.Values.Any(iface => iface.Methods.Contains(symbol));
 
 }

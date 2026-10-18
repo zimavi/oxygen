@@ -15,7 +15,9 @@ public sealed partial class LlvmModuleGenerator
         if (parts.Length == 2 && model.Unions.TryGetValue(parts[0], out var union))
         {
             var index = union.Cases.Select((item, i) => (item, i)).First(pair => pair.item.Name == parts[1]).i;
-            var unionType = model.ExpressionTypes[expression];
+            var unionType = NormalizeAggregateType(model.ExpressionTypes[expression], model);
+            if (unionType.EnumName is not null && model.Unions.TryGetValue(unionType.EnumName, out var specializedUnion))
+                union = specializedUnion;
             var result = LLVMValueRef.CreateConstNull(ToLlvmType(unionType, model));
             result = builder.BuildInsertValue(result, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)index, false), 0, "union.tag");
             if (expression.Arguments.Count == 1)

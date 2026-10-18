@@ -85,7 +85,9 @@ public sealed record ClassFieldDeclaration(
     TypeSyntax Type,
     string Name,
     Visibility Visibility,
-    SourceLocation Location) : SyntaxNode(Location);
+    SourceLocation Location,
+    Expression? Initializer = null,
+    bool IsConst = false) : SyntaxNode(Location);
 
 public enum PropertyAccessorKind { Get, Set, Init }
 
@@ -137,6 +139,8 @@ public sealed record ClassDeclaration(
     IReadOnlyList<AnnotationSyntax>? Annotations = null,
     IReadOnlyList<TypeParameterSyntax>? TypeParameters = null) : SyntaxNode(Location)
 {
+    public IReadOnlyList<TypeSyntax>? BaseTypeSyntax { get; init; }
+    public IReadOnlyList<TypeSyntax>? InterfaceTypeSyntaxes { get; init; }
     public IReadOnlyList<PropertyDeclaration> DeclaredProperties => Properties ?? [];
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
     public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];
@@ -408,7 +412,11 @@ public sealed record NewExpression(
 public sealed record ClassConstructionExpression(
     string TypeName,
     IReadOnlyList<Expression> Arguments,
-    SourceLocation Location) : Expression(Location);
+    SourceLocation Location,
+    IReadOnlyList<TypeSyntax>? TypeArguments = null) : Expression(Location)
+{
+    public IReadOnlyList<TypeSyntax> ExplicitTypeArguments => TypeArguments ?? [];
+}
 
 public sealed record SwitchCase(
     string? CaseName,
