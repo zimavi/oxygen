@@ -24,16 +24,18 @@ completion, before a return leaves the construct, and during exception
 unwinding; if it throws or returns, that outcome replaces the pending one.
 
 The standard library provides `std.exception.Exception` as the root exception
-class. Construct it with the user-facing `Exception(message)` constructor; the
-runtime trace is not a constructor argument. It contains the exception message
+class. Construct it with the user-facing `Exception(message)` constructor, or with
+`Exception()` for an empty message; the runtime trace is not a constructor
+argument. It contains the exception message
 and a `StackTrace` value. The native
 runtime owns a bounded, address-stable trace copy captured at the throw site;
 each frame contains the Oxygen function, module/source name, line, and column.
 The runtime-backed `StackTrace` exposes the count and `frame_at(index)`
 constructs a `Frame` through bounds-checked accessors. Runtime plumbing is
-internal; derived exception constructors also receive it automatically. The
-runtime owns the frame storage until the matching catch or unhandled-exception
-path ends.
+internal. The standard `Exception` constructors create the trace, and a derived
+exception class reaches them through its constructor's `base(...)` call, or
+through the implicit parameterless base call. The runtime owns the frame storage
+until the matching catch or unhandled-exception path ends.
 
 Exception propagation is implemented by the runtime's handler frames. A
 function that does not handle an exception propagates it to its caller. Class

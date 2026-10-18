@@ -17,12 +17,15 @@ public sealed partial class SemanticAnalyzer
         private readonly Scope? _parent;
         private readonly Action<VariableSymbol> _markUsed;
         private readonly SemanticType? _thisType;
+        private readonly string? _thisError;
 
-        public Scope(Scope? parent = null, Action<VariableSymbol>? markUsed = null, SemanticType? thisType = null)
+        public Scope(Scope? parent = null, Action<VariableSymbol>? markUsed = null, SemanticType? thisType = null,
+            string? thisError = null)
         {
             _parent = parent;
             _markUsed = markUsed ?? (_ => { });
             _thisType = thisType ?? parent?._thisType;
+            _thisError = thisError ?? parent?._thisError;
         }
 
         public void Declare(string name, VariableSymbol symbol) => _variables.Add(name, symbol);
@@ -41,7 +44,7 @@ public sealed partial class SemanticAnalyzer
                   ?? throw Error($"Variable '{name}' is not declared", location, name.Length);
 
         public SemanticType LookupThis(SourceLocation location) =>
-            _thisType ?? throw Error("'this' is only valid inside a class instance body", location, 4);
+            _thisType ?? throw Error(_thisError ?? "'this' is only valid inside a class instance body", location, 4);
 
         private VariableSymbol MarkUsed(VariableSymbol symbol)
         {

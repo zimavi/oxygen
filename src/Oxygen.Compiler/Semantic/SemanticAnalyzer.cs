@@ -20,6 +20,10 @@ public sealed partial class SemanticAnalyzer
         new(ReferenceEqualityComparer.Instance);
     // Calls written as `receiver.name(...)` that resolve to a free function with the receiver as its first argument.
     private readonly HashSet<CallExpression> _receiverArgumentCalls = new(ReferenceEqualityComparer.Instance);
+    // Constructor chosen for each `new C(...)` and `C(...)` expression, and for each constructor's chained call.
+    private readonly Dictionary<SyntaxNode, int> _constructorSelections = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<ConstructorDeclaration, int> _constructorChainTargets =
+        new(ReferenceEqualityComparer.Instance);
     private string? _sourceName;
     private readonly Dictionary<string, StructSymbol> _structsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
@@ -128,6 +132,8 @@ public sealed partial class SemanticAnalyzer
         _iteratorProtocols.Clear();
         _callReceiverTypes.Clear();
         _receiverArgumentCalls.Clear();
+        _constructorSelections.Clear();
+        _constructorChainTargets.Clear();
         _structsByName.Clear();
         _enumsByName.Clear();
         _unionsByName.Clear();
@@ -551,7 +557,7 @@ public sealed partial class SemanticAnalyzer
                             unit.Imports,
                             expressionTypes,
                             resolvedCalls,
-                            isConstructor: true);
+                            constructor.Declaration);
                     }
                     catch (SemanticException exception) when (diagnostics is not null)
                     {
@@ -571,6 +577,9 @@ public sealed partial class SemanticAnalyzer
                         _genericTypes = previousGenericTypes;
                     }
                 }
+                ValidateConstructorChains(classSymbol, diagnostics, sourceNames is not null && unitIndex < sourceNames.Count
+                    ? sourceNames[unitIndex]
+                    : null);
 
                 if (classSymbol.Destructor is not null)
                 {
@@ -637,7 +646,9 @@ public sealed partial class SemanticAnalyzer
             _classesByName, _interfacesByName, _escapingClassLocals, _iteratorProtocols,
             aggregateSpecializations,
             new Dictionary<CallExpression, SemanticType>(_callReceiverTypes, ReferenceEqualityComparer.Instance),
-            new HashSet<CallExpression>(_receiverArgumentCalls, ReferenceEqualityComparer.Instance));
+            new HashSet<CallExpression>(_receiverArgumentCalls, ReferenceEqualityComparer.Instance),
+            new Dictionary<SyntaxNode, int>(_constructorSelections, ReferenceEqualityComparer.Instance),
+            new Dictionary<ConstructorDeclaration, int>(_constructorChainTargets, ReferenceEqualityComparer.Instance));
     }
 
     private static FunctionSymbol CreateConstructorFunctionSymbol(string moduleName, ConstructorSymbol constructor)
@@ -1299,7 +1310,7 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
-        bool isConstructor = false)
+        ConstructorDeclaration? constructor = null)
     {
         _declaredVariables.Clear();
         _definitelyNullVariables.Clear();
@@ -1319,20 +1330,29 @@ public sealed partial class SemanticAnalyzer
                     field.IsConst, field.Declaration, false));
         }
         _currentOwnerClass = _classesByName.GetValueOrDefault(className);
-        _currentIsConstructor = isConstructor;
+        _currentIsConstructor = constructor is not null;
         var parameterScope = new Scope(scope, MarkVariableUsed);
+        // A constructor's initializer runs before the object's fields are initialized, so its arguments see the
+        // parameters but neither the fields nor `this`.
+        var initializerScope = new Scope(null, MarkVariableUsed,
+            thisError: "'this' cannot be used in a constructor initializer");
         foreach (var parameter in function.Parameters)
         {
             var variable = new VariableSymbol(parameter.Type, false, parameter.Declaration, true);
             parameterScope.Declare(parameter.Name, variable);
+            initializerScope.Declare(parameter.Name, variable);
             _declaredVariables.Add(variable);
         }
 
         _loopDepth = 0;
         _breakableDepth = 0;
-        if (isConstructor && _currentOwnerClass is not null)
-            AnalyzeFieldInitializers(_currentOwnerClass, parameterScope, functions, moduleName, imports,
+        if (constructor is not null && _currentOwnerClass is not null)
+        {
+            AnalyzeFieldInitializers(_currentOwnerClass, scope, functions, moduleName, imports,
                 expressionTypes, resolvedCalls);
+            AnalyzeConstructorInitializer(constructor, _currentOwnerClass, initializerScope, functions, moduleName,
+                imports, expressionTypes, resolvedCalls);
+        }
         var hasReturn = AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (!function.ReturnType.IsVoid && !hasReturn)
         {
@@ -1372,7 +1392,8 @@ public sealed partial class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
-        foreach (var field in ownerClass.Fields)
+        // Inherited fields are initialized by the base class's constructor, which runs before this one.
+        foreach (var field in ownerClass.Fields.Where(field => ownerClass.DeclaresField(field.Name)))
         {
             var initializer = _fieldInitializerOverrides?.GetValueOrDefault(field.Declaration)
                 ?? field.Declaration.Initializer;
@@ -1384,6 +1405,111 @@ public sealed partial class SemanticAnalyzer
             if (!CanAssign(fieldType, initializer, valueType))
                 throw Error($"Cannot initialize field '{field.Name}' with {valueType}; expected {fieldType}",
                     initializer.Location);
+        }
+    }
+
+    // Resolves the constructor that runs before a constructor's body: the one named by its `this(...)` or `base(...)`
+    // initializer, or the parameterless base constructor when it has no initializer. Overloads are selected as for
+    // `new` expressions, and the arguments are checked against the target's parameters.
+    private void AnalyzeConstructorInitializer(
+        ConstructorDeclaration constructor,
+        ClassSymbol owner,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        var initializer = constructor.Initializer;
+        // An interface named after ':' is an implemented interface, so only a class counts as a base class.
+        var baseClass = owner.BaseTypeName is not null && _classesByName.TryGetValue(owner.BaseTypeName, out var baseType)
+            ? baseType
+            : null;
+        if (initializer?.Kind == ConstructorInitializerKind.Base && baseClass is null)
+            throw Error($"Constructor of '{owner.Name}' cannot call 'base' because '{owner.Name}' has no base class",
+                initializer.Location, "base".Length);
+        if (initializer is null && baseClass is null)
+            return;
+
+        var targetsThis = initializer?.Kind == ConstructorInitializerKind.This;
+        var target = targetsThis ? owner : baseClass!;
+        var arguments = initializer?.Arguments ?? [];
+        var argumentTypes = arguments.Select(argument =>
+            AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
+        // `this` takes the owner's own type arguments; `base` takes the arguments written in the base type.
+        var typeArguments = targetsThis
+            ? owner.DeclaredTypeParameters.Select(parameter => _genericTypes.TryGetValue(parameter, out var type)
+                ? type
+                : SemanticType.GenericParameter(parameter)).ToArray()
+            : owner.Declaration.BaseTypeSyntax is { Count: > 0 } baseSyntax
+                ? ResolveType(baseSyntax[0]).TypeArguments
+                : null;
+        var substitutions = target.DeclaredTypeParameters
+            .Zip(typeArguments ?? [], (name, type) => (name, type))
+            .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
+
+        var matches = target.Constructors.Select((overload, position) => (overload, position))
+            .Where(item => item.overload.Parameters.Count == arguments.Count)
+            .Where(item => item.overload.Parameters.Select((parameter, index) => CanAssign(
+                SubstituteGenericType(parameter.Type, substitutions), arguments[index], argumentTypes[index]))
+                .All(match => match))
+            .ToArray();
+        var location = initializer?.Location ?? constructor.Location;
+        if (matches.Length == 0)
+        {
+            if (initializer is null)
+                throw Error(
+                    $"Constructor of '{owner.Name}' must call a base constructor because '{target.Name}' has no " +
+                    "parameterless constructor; add ': base(...)' to the constructor",
+                    location);
+            throw Error($"No constructor of '{target.Name}' matches the supplied arguments", location);
+        }
+        if (matches.Length > 1)
+            throw Error($"Constructor call for '{target.Name}' is ambiguous", location);
+        _constructorChainTargets[constructor] = matches[0].position;
+    }
+
+    private static int IndexOfConstructor(ClassSymbol cls, ConstructorSymbol constructor)
+    {
+        for (var index = 0; index < cls.Constructors.Count; index++)
+        {
+            if (ReferenceEquals(cls.Constructors[index], constructor))
+                return index;
+        }
+        throw new InvalidOperationException($"Constructor is not declared by class '{cls.Name}'.");
+    }
+
+    // Constructors that call `this(...)` must not form a cycle. A cycle is reported once, at the first of its
+    // constructors in declaration order; a chain that leads into a cycle without returning to its start is not.
+    private void ValidateConstructorChains(ClassSymbol cls, DiagnosticBag? diagnostics, string? sourceName)
+    {
+        var declarations = cls.Constructors.Select(constructor => constructor.Declaration).ToArray();
+        var reported = new HashSet<int>();
+        for (var start = 0; start < declarations.Length; start++)
+        {
+            if (reported.Contains(start))
+                continue;
+            var path = new List<int> { start };
+            var current = start;
+            while (declarations[current].Initializer?.Kind == ConstructorInitializerKind.This
+                   && _constructorChainTargets.TryGetValue(declarations[current], out var next))
+            {
+                if (next == start)
+                {
+                    ReportOrThrow(diagnostics,
+                        $"Constructor chain of '{cls.Name}' forms a cycle",
+                        declarations[start].Initializer!.Location,
+                        "this".Length,
+                        sourceName);
+                    reported.UnionWith(path);
+                    break;
+                }
+                if (path.Contains(next))
+                    break;
+                path.Add(next);
+                current = next;
+            }
         }
     }
 
@@ -2275,6 +2401,7 @@ public sealed partial class SemanticAnalyzer
             throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
         if (matches.Length > 1)
             throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
+        _constructorSelections[expression] = IndexOfConstructor(cls, matches[0]);
         if (substitutions.Count != cls.DeclaredTypeParameters.Count)
             throw Error($"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
                 expression.Location);
@@ -2319,6 +2446,7 @@ public sealed partial class SemanticAnalyzer
             throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
         if (matches.Length > 1)
             throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
+        _constructorSelections[expression] = IndexOfConstructor(cls, matches[0]);
         if (substitutions.Count != cls.DeclaredTypeParameters.Count)
             throw Error($"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
                 expression.Location);

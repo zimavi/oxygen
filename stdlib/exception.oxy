@@ -64,8 +64,12 @@ public class Exception {
     public string message;
     public StackTrace stack_trace;
 
-    public Exception(string message) {
-        this.message = message;
+    public Exception() {
+        this.message = "";
         this.stack_trace = new StackTrace(this);
+    }
+
+    public Exception(string message) : this() {
+        this.message = message;
     }
 }

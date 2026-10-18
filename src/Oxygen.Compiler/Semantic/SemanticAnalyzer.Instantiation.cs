@@ -163,6 +163,7 @@ public sealed partial class SemanticAnalyzer
         public IEnumerable<Expression> Expressions() =>
             FieldInitializers.Values.SelectMany(EnumerateExpressions)
                 .Concat(Methods.Values.SelectMany(method => EnumerateExpressions(method.Body)))
+                .Concat(Constructors.Values.SelectMany(constructor => constructor.Initializer?.Arguments ?? []))
                 .Concat(Constructors.Values.SelectMany(constructor => EnumerateExpressions(constructor.Body)))
                 .Concat(EnumerateExpressions(Destructor?.Body));
     }
@@ -228,7 +229,7 @@ public sealed partial class SemanticAnalyzer
             };
             AnalyzeInstantiatedMember(name, context?.SourceName, substitutions, reportWarnings: false,
                 () => AnalyzeFunction(CreateConstructorFunctionSymbol(cls.ModuleName, symbol), functions, ownerModule,
-                    imports, expressionTypes, resolvedCalls, isConstructor: true),
+                    imports, expressionTypes, resolvedCalls, symbol.Declaration),
                 fieldInitializers);
         }
 
@@ -280,8 +281,12 @@ public sealed partial class SemanticAnalyzer
             source with
             {
                 Parameters = source.Parameters.Select(Parameter).ToArray(),
-                Body = Block(source.Body)
+                Body = Block(source.Body),
+                Initializer = source.Initializer is null ? null : InitializerCall(source.Initializer)
             };
+
+        public ConstructorInitializer InitializerCall(ConstructorInitializer source) =>
+            source with { Arguments = source.Arguments.Select(Expression).ToArray() };
 
         public DestructorDeclaration Destructor(DestructorDeclaration source) =>
             source with { Body = Block(source.Body) };

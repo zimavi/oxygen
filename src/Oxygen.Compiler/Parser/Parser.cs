@@ -235,8 +235,9 @@ public sealed partial class Parser
                 var constructorLocation = Current.Location;
                 Advance();
                 var parameters = ParseParameters();
+                var initializer = ParseConstructorInitializer();
                 constructors.Add(new ConstructorDeclaration(name, parameters, ParseBlock(), memberVisibility,
-                    constructorLocation));
+                    constructorLocation) { Initializer = initializer });
                 continue;
             }
 
@@ -389,6 +390,28 @@ public sealed partial class Parser
         }
         Consume(TokenKind.CloseParenthesis, "Expected ')' after parameters.");
         return parameters;
+    }
+
+    // `: this(...)` or `: base(...)` between a constructor's parameters and its body.
+    private ConstructorInitializer? ParseConstructorInitializer()
+    {
+        if (!Match(TokenKind.Colon))
+            return null;
+        var location = Current.Location;
+        var kind = Match(TokenKind.This) ? ConstructorInitializerKind.This
+            : Match(TokenKind.Base) ? ConstructorInitializerKind.Base
+            : throw Error("Expected 'this' or 'base' after ':' in a constructor declaration.", Current);
+        Consume(TokenKind.OpenParenthesis, "Expected '(' after 'this' or 'base' in a constructor initializer.");
+        var arguments = new List<Expression>();
+        if (!Check(TokenKind.CloseParenthesis))
+        {
+            do
+            {
+                arguments.Add(ParseExpression());
+            } while (Match(TokenKind.Comma));
+        }
+        Consume(TokenKind.CloseParenthesis, "Expected ')' after constructor initializer arguments.");
+        return new ConstructorInitializer(kind, arguments, location);
     }
 
     private Visibility ParseVisibility()

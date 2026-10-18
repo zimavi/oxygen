@@ -35,11 +35,14 @@ class Counter : Labeled {
 
 Instances are created with `new Type(arguments)`. A parameterless constructor
 is generated when no constructor is declared. Constructors are overloadable by
-parameter types. Interface and class contracts are checked during semantic
-analysis, including missing methods, incompatible signatures, duplicate
-methods, invalid base types, and inheritance cycles.
+parameter types, and a constructor may call another constructor of its class or
+of its base class (see [Constructor chaining](#constructor-chaining)). Interface
+and class contracts are checked during semantic analysis, including missing
+methods, incompatible signatures, duplicate methods, invalid base types, and
+inheritance cycles.
 
-Methods and constructors may use `this` to refer to their current instance:
+Methods and constructors may use `this` to refer to their current instance,
+except in a constructor initializer (see below):
 
 ```oxygen
 class Counter {
@@ -59,6 +62,55 @@ Parameters and local variables may shadow fields. Unqualified field access
 continues to work when no parameter or local has the same name; use `this.field`
 to explicitly access the field when a name is shadowed. `this` is only valid in
 class instance bodies, not in free functions.
+
+## Constructor chaining
+
+A constructor may begin with `: this(...)` to delegate to another constructor of
+its class, or `: base(...)` to run a constructor of its base class first:
+
+```oxygen
+class Exception {
+    string message;
+
+    Exception() {
+        message = "";
+    }
+
+    Exception(string message) : this() {
+        this.message = message;
+    }
+}
+
+class Failure : Exception {
+    i32 code;
+
+    Failure(string message, i32 code) : base(message) {
+        this.code = code;
+    }
+}
+```
+
+The chained constructor is chosen by overload resolution, as for `new`. Its
+arguments are checked against the parameters of that constructor and may use only
+the constructor's own parameters: they cannot name fields or `this`, because the
+object is not yet initialized. A `base(...)` initializer is an error in a class
+without a base class.
+
+A constructor without an initializer in a class with a base class calls the
+base class's parameterless constructor, as if it had written `: base()`. When the
+base class has no parameterless constructor, the constructor must name a base
+constructor explicitly. A class without declared constructors gets an implicit
+call to that parameterless constructor, so it is an error in the same case.
+A `this(...)` chain must not form a cycle.
+
+Construction runs in this order:
+
+1. The chained constructor runs first and initializes the inherited part of the
+   object. A `this(...)` call delegates all initialization to the target
+   constructor, so the steps below run only once, in that constructor.
+2. The class's own field initializers run in declaration order. Inherited fields
+   are initialized by the base constructor, not by the derived class.
+3. The constructor body runs.
 
 Class methods can opt into vtable dispatch with `virtual`. An overriding
 method must use `override`; overriding a non-virtual method, or omitting
@@ -215,8 +267,9 @@ Cat sameCat = cast<Cat>(printable);
 ```
 
 When a class has no explicit constructor, the compiler synthesizes a public
-parameterless constructor. It zero-initializes every declared and inherited
-field using a valid type-specific zero value: numeric zero, `false`, null
+parameterless constructor. It calls the base class's parameterless constructor
+when the class has a base class, then zero-initializes each field the class
+declares using a valid type-specific zero value: numeric zero, `false`, null
 references and pointers, or a zero aggregate.
 
 Runtime type patterns use `is` and can optionally bind the checked value:

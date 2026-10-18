@@ -132,7 +132,7 @@ public sealed partial class LlvmModuleGenerator
             ?? expression.Type.NamedType
             ?? throw new InvalidOperationException("Class construction requires a named type.");
         return EmitClassConstruction(context, builder, className, expression.Arguments, true,
-            values, storage, model, llvmFunctions);
+            model.ConstructorSelections[expression], values, storage, model, llvmFunctions);
     }
 
     private static LLVMValueRef EmitClassConstructionExpression(
@@ -141,12 +141,12 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
         EmitClassConstruction(context, builder,
             NormalizeAggregateType(model.ExpressionTypes[expression], model).StructName ?? expression.TypeName,
-            expression.Arguments, false,
+            expression.Arguments, false, model.ConstructorSelections[expression],
             values, storage, model, llvmFunctions);
 
     private static LLVMValueRef EmitClassConstruction(
         LLVMContextRef context, LLVMBuilderRef builder, string className,
-        IReadOnlyList<Expression> arguments, bool heapAllocated,
+        IReadOnlyList<Expression> arguments, bool heapAllocated, int constructorIndex,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
@@ -187,7 +187,7 @@ public sealed partial class LlvmModuleGenerator
                     LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "vtable.method"), slotAddress);
             }
         }
-        var ctor = cls.Constructors.First(candidate => candidate.Parameters.Count == arguments.Count);
+        var ctor = cls.Constructors[constructorIndex];
         var args = new List<LLVMValueRef> { instance };
         for (var i = 0; i < arguments.Count; i++)
             args.Add(CoerceValue(builder, EmitExpression(context, builder, arguments[i], values, storage, model, llvmFunctions),

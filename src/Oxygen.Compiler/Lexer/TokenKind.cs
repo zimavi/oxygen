@@ -21,6 +21,7 @@ public enum TokenKind
     Catch,
     Finally,
     This,
+    Base,
     Module,
     Import,
     Public,

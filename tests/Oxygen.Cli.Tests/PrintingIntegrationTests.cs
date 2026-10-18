@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Xunit;
 
 namespace Oxygen.Cli.Tests;
@@ -60,42 +59,15 @@ public sealed class PrintingIntegrationTests : IDisposable
             """);
         var executable = Path.Combine(_directory, "main.exe");
 
-        var build = RunProcess(Path.Combine(AppContext.BaseDirectory, "oxygenc.exe"),
-            ["build", source, "-o", executable, "-r", RuntimeLibrary]);
+        var build = NativeProgram.RunProcess(Path.Combine(AppContext.BaseDirectory, "oxygenc.exe"),
+            ["build", source, "-o", executable, "-r", NativeProgram.RuntimeLibrary]);
         Assert.True(build.ExitCode == 0, build.Error);
 
-        var run = RunProcess(executable, []);
+        var run = NativeProgram.RunProcess(executable, []);
         Assert.Equal(0, run.ExitCode);
         Assert.Equal(
             "0\n-9223372036854775808\n18446744073709551615\n255\n0.3\n123.456789\n-2.5\n3\n1\n1.5\ntrue\ntext\n3,-4\n" +
             "79228162514264337593543950336\ninf\n-inf\nnan\n",
             run.Output.Replace("\r\n", "\n"));
-    }
-
-    // The repository root is five levels above the test assembly's output folder (bin/Debug/net10.0).
-    private static string RepositoryRoot =>
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-
-    private static string RuntimeLibrary =>
-        Path.Combine(RepositoryRoot, "runtime", "build", "windows", "liboxygenrt.a");
-
-    private static (int ExitCode, string Output, string Error) RunProcess(string fileName, IEnumerable<string> arguments)
-    {
-        var startInfo = new ProcessStartInfo(fileName)
-        {
-            RedirectStandardError = true,
-            RedirectStandardOutput = true,
-            UseShellExecute = false
-        };
-        foreach (var argument in arguments)
-            startInfo.ArgumentList.Add(argument);
-        // The compiler looks for the standard library under OXYGEN_PATH when the source is outside the repository.
-        startInfo.Environment["OXYGEN_PATH"] = RepositoryRoot;
-
-        using var process = Process.Start(startInfo)!;
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, output, error);
     }
 }

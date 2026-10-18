@@ -23,23 +23,12 @@ public sealed partial class LlvmModuleGenerator
         var thisValue = function.GetParam(0);
         values["this"] = thisValue;
         InitializeClassFieldStorage(builder, values, storage, cls, model);
-        InitializeExceptionStackTrace(builder, thisValue, storage, cls, model, llvmFunctions);
-        if (ctor.IsSynthesized)
-        {
-            foreach (var field in cls.Fields)
-                builder.BuildStore(CreateZeroValue(field.Type, model), storage["this." + field.Name]);
-        }
-        foreach (var field in cls.Fields)
-        {
-            if (field.Declaration.Initializer is null)
-                continue;
-            var initializer = EmitExpression(context, builder, field.Declaration.Initializer,
-                values, storage, model, llvmFunctions);
-            builder.BuildStore(CoerceValue(builder, initializer,
-                model.ExpressionTypes[field.Declaration.Initializer], field.Type, model),
-                storage["this." + field.Name]);
-        }
+        // Field initializers see the fields only, so they keep this view when a parameter shadows a field.
+        var fieldValues = new Dictionary<string, LLVMValueRef>(values, StringComparer.Ordinal);
+        var fieldStorage = new Dictionary<string, LLVMValueRef>(storage, StringComparer.Ordinal);
         var storageRequirements = CollectStorageRequirements(ctor.Declaration.Body);
+        foreach (var argument in ctor.Declaration.Initializer?.Arguments ?? [])
+            CollectStorageRequirements(argument, storageRequirements);
         for (var i = 0; i < ctor.Parameters.Count; i++)
         {
             var parameter = function.GetParam((uint)i + 1);
@@ -57,12 +46,62 @@ public sealed partial class LlvmModuleGenerator
             }
         }
         _currentFunction = function;
+
+        // The chained constructor runs before anything this constructor initializes. `this(...)` delegates all
+        // initialization to another constructor of the class; `base(...)` and the implicit base call initialize
+        // the inherited part, after which this class's own fields are initialized.
+        var delegatesToThis = ctor.Declaration.Initializer?.Kind == ConstructorInitializerKind.This;
+        if (model.ConstructorChainTargets.ContainsKey(ctor.Declaration))
+            EmitConstructorChain(context, builder, cls, ctor.Declaration, values, storage, model, llvmFunctions);
+        if (!delegatesToThis)
+        {
+            var ownFields = cls.Fields.Where(field => cls.DeclaresField(field.Name)).ToArray();
+            if (ctor.IsSynthesized)
+            {
+                foreach (var field in ownFields)
+                    builder.BuildStore(CreateZeroValue(field.Type, model), fieldStorage["this." + field.Name]);
+            }
+            foreach (var field in ownFields)
+            {
+                if (field.Declaration.Initializer is null)
+                    continue;
+                var initializer = EmitExpression(context, builder, field.Declaration.Initializer,
+                    fieldValues, fieldStorage, model, llvmFunctions);
+                builder.BuildStore(CoerceValue(builder, initializer,
+                    model.ExpressionTypes[field.Declaration.Initializer], field.Type, model),
+                    fieldStorage["this." + field.Name]);
+            }
+        }
         foreach (var statement in ctor.Declaration.Body.Statements)
             EmitStatement(context, builder, function, statement, values, storage, storageRequirements,
                 model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
                 new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>());
         EmitTracePop(builder);
         builder.BuildRetVoid();
+    }
+
+    // Calls the constructor that semantic analysis selected for `: this(...)`, `: base(...)`, or the implicit base
+    // call. The arguments are evaluated in the constructor's parameter scope.
+    private static void EmitConstructorChain(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        ClassSymbol cls,
+        ConstructorDeclaration declaration,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var targetsThis = declaration.Initializer?.Kind == ConstructorInitializerKind.This;
+        var targetClass = targetsThis ? cls : model.Classes[cls.BaseTypeName!];
+        var target = targetClass.Constructors[model.ConstructorChainTargets[declaration]];
+        var targetFunction = _constructors[ConstructorKey(targetClass, target)];
+        var arguments = declaration.Initializer?.Arguments ?? [];
+        var args = new List<LLVMValueRef> { values["this"] };
+        for (var i = 0; i < arguments.Count; i++)
+            args.Add(CoerceValue(builder, EmitExpression(context, builder, arguments[i], values, storage, model, llvmFunctions),
+                model.ExpressionTypes[arguments[i]], target.Parameters[i].Type, model));
+        builder.BuildCall2(targetFunction.FunctionType, targetFunction, args.ToArray(), (ReadOnlySpan<char>)string.Empty);
     }
 
     private static LLVMValueRef CreateZeroValue(SemanticType type, SemanticModel model)
@@ -398,52 +437,6 @@ public sealed partial class LlvmModuleGenerator
             storage[cls.Fields[index].Name] = fieldAddress;
             storage["this." + cls.Fields[index].Name] = fieldAddress;
         }
-    }
-
-    private static void InitializeExceptionStackTrace(
-        LLVMBuilderRef builder,
-        LLVMValueRef thisValue,
-        IReadOnlyDictionary<string, LLVMValueRef> storage,
-        ClassSymbol cls,
-        SemanticModel model,
-        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
-    {
-        if (!model.Classes.ContainsKey("Exception")
-            || !model.Classes.ContainsKey("StackTrace")
-            || !IsClassDerivedFrom(cls.Name, "Exception", model)
-            || !storage.TryGetValue("this.stack_trace", out var fieldAddress))
-            return;
-
-        var stackTraceClass = model.Classes["StackTrace"];
-        var constructor = stackTraceClass.Constructors.FirstOrDefault(candidate =>
-            candidate.Parameters.Count == 1
-            && candidate.Parameters[0].Type.IsClass
-            && candidate.Parameters[0].Type.StructName == "Exception");
-        if (constructor is null)
-            return;
-
-        var instance = builder.BuildAlloca(_classTypes["StackTrace"], "exception.stack_trace");
-        var vtable = builder.BuildStructGEP2(_classTypes["StackTrace"], instance, 0, "exception.stack_trace.vtable");
-        builder.BuildStore(GetTypeName(builder, "StackTrace"), vtable);
-        var virtualMethods = GetVirtualMethods(stackTraceClass, model);
-        for (var slot = 0; slot < _virtualSlotCount; slot++)
-        {
-            var slotAddress = builder.BuildStructGEP2(
-                _classTypes["StackTrace"], instance, (uint)slot + 1, "exception.stack_trace.vtable.slot");
-            var target = slot < virtualMethods.Count
-                ? builder.BuildBitCast(llvmFunctions[virtualMethods[slot]],
-                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "exception.stack_trace.method")
-                : LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0));
-            builder.BuildStore(target, slotAddress);
-        }
-
-        var exceptionValue = CoerceValue(builder, thisValue, SemanticType.Class(cls.Name),
-            SemanticType.Class("Exception"), model);
-        builder.BuildCall2(
-            _constructors[ConstructorKey(stackTraceClass, constructor)].FunctionType,
-            _constructors[ConstructorKey(stackTraceClass, constructor)],
-            [instance, exceptionValue]);
-        builder.BuildStore(instance, fieldAddress);
     }
 
     private static void CleanupOwnedScopes(

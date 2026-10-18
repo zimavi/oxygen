@@ -112,12 +112,23 @@ public sealed record PropertyDeclaration(
     public bool HasInitializer => Accessors.Any(a => a.Kind == PropertyAccessorKind.Init);
 }
 
+public enum ConstructorInitializerKind { This, Base }
+
+// The `: this(...)` or `: base(...)` call that starts a constructor body.
+public sealed record ConstructorInitializer(
+    ConstructorInitializerKind Kind,
+    IReadOnlyList<Expression> Arguments,
+    SourceLocation Location) : SyntaxNode(Location);
+
 public sealed record ConstructorDeclaration(
     string ClassName,
     IReadOnlyList<ParameterDeclaration> Parameters,
     BlockStatement Body,
     Visibility Visibility,
-    SourceLocation Location) : SyntaxNode(Location);
+    SourceLocation Location) : SyntaxNode(Location)
+{
+    public ConstructorInitializer? Initializer { get; init; }
+}
 
 public sealed record DestructorDeclaration(
     string ClassName,

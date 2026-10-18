@@ -258,6 +258,39 @@ public sealed class LlvmTests
     }
 
     [Fact]
+    public void EmitsConstructorChainCallsForThisAndBaseInitializers()
+    {
+        var model = Analyze(
+            "class Base { i32 value = 1; Base() { } Base(i32 extra) : this() { value = extra; } } " +
+            "class Child : Base { i32 own = 2; Child() : base(3) { } } " +
+            "i32 main() { Child child = new Child(); return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        var baseClass = model.Classes["Base"];
+        var parameterless = OxygenNameMangler.MangleConstructor(baseClass.ModuleName, baseClass, baseClass.Constructors[0]);
+        var withValue = OxygenNameMangler.MangleConstructor(baseClass.ModuleName, baseClass, baseClass.Constructors[1]);
+        Assert.Contains($"call void @{withValue}(", ir);
+        Assert.Contains($"call void @{parameterless}(", ir);
+    }
+
+    [Fact]
+    public void SynthesizedConstructorZeroInitializesOnlyItsOwnPropertyStorage()
+    {
+        var model = Analyze(
+            "class Base { public i32 Level { get; private set; } } " +
+            "class Account : Base { public i32 Balance { get; private set; } } " +
+            "i32 main() { Account account = new Account(); return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("store i32 0, ptr %field.Balance", ir);
+        Assert.Contains("store i32 0, ptr %field.Level", ir);
+    }
+
+    [Fact]
     public void EmitsSynthesizedConstructorAggregateZeroInitialization()
     {
         var model = Analyze(

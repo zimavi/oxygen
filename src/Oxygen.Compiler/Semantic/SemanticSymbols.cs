@@ -59,6 +59,11 @@ public sealed record ClassSymbol(
     public bool IsGeneric => DeclaredTypeParameters.Count != 0;
     public IReadOnlyList<PropertySymbol> DeclaredProperties => Properties ?? [];
     public IReadOnlyList<SemanticType> DeclaredInterfaceTypes => InterfaceTypes ?? [];
+
+    // Whether the class declares the field, as opposed to inheriting it from its base class. Property storage
+    // belongs to the class that declares the property.
+    public bool DeclaresField(string name) =>
+        Declaration.Fields.Any(field => field.Name == name) || DeclaredProperties.Any(property => property.Name == name);
 }
 public sealed record InterfaceSymbol(
     string Name,
@@ -146,7 +151,9 @@ public sealed class SemanticModel
         IReadOnlyDictionary<ForInStatement, IteratorProtocol>? iteratorProtocols = null,
         IReadOnlyDictionary<string, string>? aggregateSpecializations = null,
         IReadOnlyDictionary<CallExpression, SemanticType>? callReceiverTypes = null,
-        IReadOnlySet<CallExpression>? receiverArgumentCalls = null)
+        IReadOnlySet<CallExpression>? receiverArgumentCalls = null,
+        IReadOnlyDictionary<SyntaxNode, int>? constructorSelections = null,
+        IReadOnlyDictionary<ConstructorDeclaration, int>? constructorChainTargets = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -163,6 +170,8 @@ public sealed class SemanticModel
         AggregateSpecializations = aggregateSpecializations ?? new Dictionary<string, string>();
         CallReceiverTypes = callReceiverTypes ?? new Dictionary<CallExpression, SemanticType>();
         ReceiverArgumentCalls = receiverArgumentCalls ?? new HashSet<CallExpression>();
+        ConstructorSelections = constructorSelections ?? new Dictionary<SyntaxNode, int>();
+        ConstructorChainTargets = constructorChainTargets ?? new Dictionary<ConstructorDeclaration, int>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -191,4 +200,12 @@ public sealed class SemanticModel
     // Calls such as `value.write()` on a primitive or struct receiver. The receiver is passed as the first
     // argument of the resolved function.
     public IReadOnlySet<CallExpression> ReceiverArgumentCalls { get; }
+
+    // The constructor selected by overload resolution for each `new C(...)` and `C(...)` expression, as an index
+    // into the constructed class's Constructors.
+    public IReadOnlyDictionary<SyntaxNode, int> ConstructorSelections { get; }
+
+    // The constructor called by each constructor's `: this(...)`, `: base(...)`, or implicit base call, as an
+    // index into Constructors of the class it targets: the declaring class for `this`, its base class otherwise.
+    public IReadOnlyDictionary<ConstructorDeclaration, int> ConstructorChainTargets { get; }
 }

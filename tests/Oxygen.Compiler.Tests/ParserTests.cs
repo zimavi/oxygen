@@ -522,6 +522,30 @@ public sealed class ParserTests
         Assert.Equal(TokenKind.LessThanLessThan, Assert.IsType<BinaryExpression>(shift.Value).Operator);
     }
 
+    [Fact]
+    public void ParsesConstructorInitializersWithThisAndBase()
+    {
+        var unit = Parse(
+            "class Child : Base { Child() : this(1) { } Child(i32 value) : base(value, 2) { } Child(bool flag) { } }");
+
+        var constructors = unit.Classes[0].Constructors;
+        var chained = Assert.IsType<ConstructorInitializer>(constructors[0].Initializer);
+        Assert.Equal(ConstructorInitializerKind.This, chained.Kind);
+        Assert.Single(chained.Arguments);
+        var inherited = Assert.IsType<ConstructorInitializer>(constructors[1].Initializer);
+        Assert.Equal(ConstructorInitializerKind.Base, inherited.Kind);
+        Assert.Equal(2, inherited.Arguments.Count);
+        Assert.Null(constructors[2].Initializer);
+    }
+
+    [Fact]
+    public void RejectsConstructorInitializerThatIsNotThisOrBase()
+    {
+        var exception = Assert.Throws<ParseException>(() =>
+            Parse("class Child : Base { Child() : other() { } }"));
+        Assert.Contains("Expected 'this' or 'base'", exception.Message);
+    }
+
     private CompilationUnit Parse(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
 }

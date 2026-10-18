@@ -40,7 +40,7 @@ public sealed class SemanticTests
             "@extern(\"__oxygen_runtime_exception_trace_count\") public extern u64 runtime_trace_count(Exception exception_object); " +
             "class StackTrace { u64 count; StackTrace(Exception exception_object) { count = program.runtime_trace_count(exception_object); } } " +
             "class Exception { string message; StackTrace stack_trace; Exception(string message) { this.message = message; this.stack_trace = new StackTrace(this); } } " +
-            "class Failure : Exception { Failure(string message) { } } " +
+            "class Failure : Exception { Failure(string message) : base(message) { } } " +
             "i32 main() { Exception error = new Exception(\"failure\"); Failure derived = new Failure(\"derived\"); return 0; }");
 
         Assert.Contains(model.Functions.Values, symbol =>
@@ -1560,6 +1560,101 @@ public sealed class SemanticTests
         var error = Assert.Single(result.Diagnostics, diagnostic =>
             diagnostic.Message == "A type named 'Option' is already declared");
         Assert.Equal("second/collection.oxy", error.SourceName);
+    }
+
+    [Fact]
+    public void ResolvesBaseConstructorByArgumentType()
+    {
+        var model = Analyze(
+            "class Base { Base(i32 value) { } Base(string text) { } } " +
+            "class Child : Base { Child() : base(\"text\") { } } i32 main() { return 0; }");
+
+        var constructor = model.Classes["Child"].Constructors.Single().Declaration;
+        Assert.Equal(1, model.ConstructorChainTargets[constructor]);
+    }
+
+    [Fact]
+    public void ResolvesThisConstructorAndNewExpressionByArgumentType()
+    {
+        var model = Analyze(
+            "class Item { i32 value; Item() : this(1) { } Item(i32 value) { this.value = value; } " +
+            "Item(string text) { value = 2; } } " +
+            "i32 main() { Item item = new Item(\"text\"); return item.value; }");
+
+        var parameterless = model.Classes["Item"].Constructors[0].Declaration;
+        Assert.Equal(1, model.ConstructorChainTargets[parameterless]);
+        var creation = Assert.IsType<NewExpression>(
+            Assert.IsType<VariableDeclarationStatement>(model.MainFunction!.Declaration.Body.Statements[0]).Initializer);
+        Assert.Equal(2, model.ConstructorSelections[creation]);
+    }
+
+    [Fact]
+    public void RecordsImplicitParameterlessBaseConstructorForDerivedConstructors()
+    {
+        var model = Analyze(
+            "class Base { i32 value = 1; } class Child : Base { i32 extra = 2; Child() { } } " +
+            "i32 main() { return 0; }");
+
+        var constructor = model.Classes["Child"].Constructors.Single().Declaration;
+        Assert.Equal(0, model.ConstructorChainTargets[constructor]);
+    }
+
+    [Fact]
+    public void AnalyzesConstructorInitializerOfGenericBaseClass()
+    {
+        var model = Analyze(
+            "class Boxed<T> { T value; Boxed(T value) { this.value = value; } } " +
+            "class Box<T> : Boxed<T> { Box(T value) : base(value) { } } " +
+            "i32 main() { Box<i32> box = new Box<i32>(4); return 0; }");
+
+        Assert.Contains(model.Classes.Values, cls => cls.Name.StartsWith("Boxed__", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RequiresBaseConstructorWhenBaseHasNoParameterlessConstructor()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Base { Base(i32 value) { } } class Child : Base { } i32 main() { return 0; }"));
+        Assert.Contains("must call a base constructor", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsBaseInitializerWithoutBaseClass()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "interface Printable { } class Item : Printable { Item() : base() { } } i32 main() { return 0; }"));
+        Assert.Contains("has no base class", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsConstructorInitializerWithoutMatchingConstructor()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Base { Base(i32 value) { } } class Child : Base { Child() : base(\"text\") { } } " +
+            "i32 main() { return 0; }"));
+        Assert.Contains("No constructor of 'Base' matches", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsConstructorChainCycles()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Item { Item() : this(1) { } Item(i32 value) : this() { } } i32 main() { return 0; }"));
+        Assert.Contains("forms a cycle", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsThisAndFieldsInConstructorInitializer()
+    {
+        var thisError = Assert.Throws<SemanticException>(() => Analyze(
+            "class Base { Base(i32 value) { } } class Child : Base { i32 value; Child() : base(this.value) { } } " +
+            "i32 main() { return 0; }"));
+        Assert.Contains("cannot be used in a constructor initializer", thisError.Message);
+
+        var fieldError = Assert.Throws<SemanticException>(() => Analyze(
+            "class Base { Base(i32 value) { } } class Child : Base { i32 value; Child() : base(value) { } } " +
+            "i32 main() { return 0; }"));
+        Assert.Contains("'value' is not declared", fieldError.Message);
     }
 
     private SemanticModel Analyze(string source)

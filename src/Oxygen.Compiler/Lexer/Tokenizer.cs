@@ -23,6 +23,7 @@ public sealed class Tokenizer
             ["catch"] = TokenKind.Catch,
             ["finally"] = TokenKind.Finally,
             ["this"] = TokenKind.This,
+            ["base"] = TokenKind.Base,
             ["module"] = TokenKind.Module,
             ["import"] = TokenKind.Import,
             ["public"] = TokenKind.Public,

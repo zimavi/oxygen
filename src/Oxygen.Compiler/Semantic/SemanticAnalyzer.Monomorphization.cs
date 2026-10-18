@@ -150,6 +150,11 @@ public sealed partial class SemanticAnalyzer
                     foreach (var parameter in constructor.Parameters)
                         AddType(SubstituteAggregate(parameter.Type, substitutions, aggregateNames));
                 AddType(SubstituteAggregate(cls.DeclaredInterfaceTypes.FirstOrDefault(), substitutions, aggregateNames));
+                // A generic base class is specialized for the same arguments, so that its constructor can be called.
+                if (cls.Declaration.BaseTypeSyntax is { Count: > 0 } baseSyntax)
+                    AddType(SubstituteAggregate(
+                        ConcreteType(baseSyntax[0], cls.DeclaredTypeParameters.ToHashSet(StringComparer.Ordinal)),
+                        substitutions, aggregateNames));
                 // The member bodies are analyzed for these concrete arguments. That types every
                 // expression concretely, specializes the generic functions they call, and
                 // reveals aggregates that only appear inside bodies (e.g. `Iterator(this)`).
@@ -385,10 +390,13 @@ public sealed partial class SemanticAnalyzer
                 specializedMethods, expressionTypes, resolvedCalls, name)).ToArray();
         var constructors = source.Constructors.Select(constructor =>
         {
-            var body = CloneBlock(
-                instantiation.Constructors.GetValueOrDefault(constructor.Declaration)?.Body
-                    ?? constructor.Declaration.Body,
-                substitutions, aggregateNames, expressionTypes, source, resolvedCalls);
+            var instantiated = instantiation.Constructors.GetValueOrDefault(constructor.Declaration)
+                ?? constructor.Declaration;
+            var body = CloneBlock(instantiated.Body, substitutions, aggregateNames, expressionTypes, source, resolvedCalls);
+            var initializer = instantiated.Initializer is null
+                ? null
+                : CloneInitializer(instantiated.Initializer, substitutions, aggregateNames, expressionTypes, source,
+                    resolvedCalls);
             var constructorDeclaration = constructor.Declaration with
             {
                 ClassName = name,
@@ -396,8 +404,11 @@ public sealed partial class SemanticAnalyzer
                 {
                     Type = RewriteTypeSyntax(parameter.Declaration.Type, substitutions, aggregateNames)
                 }).ToArray(),
-                Body = body
+                Body = body,
+                Initializer = initializer
             };
+            if (_constructorChainTargets.TryGetValue(instantiated, out var chainTarget))
+                _constructorChainTargets[constructorDeclaration] = chainTarget;
             return constructor with
             {
                 ClassName = name,
@@ -637,6 +648,8 @@ public sealed partial class SemanticAnalyzer
         {
             foreach (var parameter in constructor.Parameters)
                 add(parameter.Type, parameters);
+            foreach (var argument in constructor.Initializer?.Arguments ?? [])
+                CollectExpressionSyntax(argument, parameters, add);
             CollectBlockSyntax(constructor.Body, parameters, add);
         }
         if (declaration.Destructor is not null)
@@ -1120,8 +1133,23 @@ public sealed partial class SemanticAnalyzer
             if (_receiverArgumentCalls.Contains(call))
                 _receiverArgumentCalls.Add(cloned);
         }
+        if (_constructorSelections.TryGetValue(source, out var selection))
+            _constructorSelections[result] = selection;
         return result;
     }
+
+    private ConstructorInitializer CloneInitializer(
+        ConstructorInitializer source,
+        IReadOnlyDictionary<string, SemanticType> substitutions,
+        IReadOnlyDictionary<string, string> aggregateNames,
+        Dictionary<Expression, SemanticType> expressionTypes,
+        object owner,
+        Dictionary<CallExpression, FunctionSymbol> resolvedCalls) =>
+        source with
+        {
+            Arguments = source.Arguments.Select(argument =>
+                CloneExpression(argument, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)).ToArray()
+        };
 
     private PropertyDeclaration CloneProperty(
         PropertyDeclaration source,
