@@ -82,7 +82,9 @@ var buildCommand = new Command("build", "Build the project")
     runtimeOption,
     standardLibraryOption
 };
-buildCommand.SetAction(result =>
+// Exit codes: 0 on success, 1 when the program could not be compiled (errors in the source, unreadable
+// inputs, or a failing native toolchain), 2 when the compiler itself failed on valid source.
+int RunBuild(System.CommandLine.ParseResult result)
 {
     FileInfo[]? paths = result.GetValue(sourcesArgument);
     var inputDiagnostics = new DiagnosticBag();
@@ -109,7 +111,7 @@ buildCommand.SetAction(result =>
     if (inputDiagnostics.HasErrors)
     {
         DisplayDiagnostics(inputDiagnostics.Diagnostics, rootSources, formatter, useColor);
-        return;
+        return ExitCodes.CompilationFailed;
     }
     var tokenizer = new Tokenizer(Log.Logger.ForContext("SourceContext", "Lexer"));
     var resolved = new SourceModuleResolver(tokenizer, Log.Logger.ForContext("SourceContext", "Resolver"))
@@ -124,7 +126,7 @@ buildCommand.SetAction(result =>
                 .Select(group => group.First()).ToList(),
             formatter,
             useColor);
-        return;
+        return ExitCodes.CompilationFailed;
     }
 
     var externalModules = new List<ExternalModuleDeclaration>();
@@ -146,7 +148,7 @@ buildCommand.SetAction(result =>
                 new SourceLocation(1, 1),
                 sourceName: modulePath.FullName);
             DisplayDiagnostics(diagnostics.Diagnostics, sources, formatter, useColor);
-            return;
+            return ExitCodes.CompilationFailed;
         }
     }
     var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
@@ -160,7 +162,7 @@ buildCommand.SetAction(result =>
         DisplayDiagnostics(semanticResult.Diagnostics, sources, formatter, useColor);
         if (semanticResult.HasBlockingDiagnostics(warningsAsErrors))
         {
-            return;
+            return ExitCodes.CompilationFailed;
         }
     }
 
@@ -178,7 +180,8 @@ buildCommand.SetAction(result =>
             exception.Message,
             new SourceLocation(1, 1));
         DisplayDiagnostics(diagnostics.Diagnostics, sources, formatter, useColor);
-        return;
+        // The source already passed semantic analysis, so a backend failure is a compiler limitation or bug.
+        return ExitCodes.InternalError;
     }
 
     using (generated)
@@ -195,7 +198,7 @@ buildCommand.SetAction(result =>
                 Directory.CreateDirectory(irOutputDirectory);
 
             File.WriteAllText(irOutputPath, generated.ToString());
-            return;
+            return ExitCodes.Success;
         }
 
         var runtimePath = result.GetValue(runtimeOption)?.FullName
@@ -232,13 +235,32 @@ buildCommand.SetAction(result =>
                 exception.Message,
                 new SourceLocation(1, 1));
             DisplayDiagnostics(diagnostics.Diagnostics, sources, formatter, useColor);
+            return ExitCodes.CompilationFailed;
         }
+    }
+
+    return ExitCodes.Success;
+}
+
+buildCommand.SetAction(result =>
+{
+    try
+    {
+        return RunBuild(result);
+    }
+    catch (Exception exception) when (exception is not OutOfMemoryException)
+    {
+        // Ordinary invalid programs are reported as diagnostics; reaching this point means the
+        // compiler violated one of its own invariants.
+        Console.Error.WriteLine("oxygenc: internal compiler error. This is a bug in the compiler, not in your program.");
+        Console.Error.WriteLine(exception);
+        return ExitCodes.InternalError;
     }
 });
 
 rootCommand.Add(buildCommand);
 
-rootCommand.Parse(args).Invoke();
+return rootCommand.Parse(args).Invoke();
 
 static void DisplayDiagnostics(
     IReadOnlyList<Diagnostic> diagnostics,

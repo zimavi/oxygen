@@ -1,62 +1,183 @@
 module std.io;
 
+import std.memory;
+import std.strings;
+
 @extern("oxygen_write_stdout")
 public extern void write_stdout(string value);
 
 @extern("oxygen_write_stderr")
 public extern void write_stderr(string value);
 
-public void print(string value) {
+// Values that print/println can write. Primitive types and string implement Printable by a built-in
+// rule; each one is written by the private `write` function for its type below. Classes implement it by
+// declaring `void write()`.
+public interface Printable {
+    void write();
+}
+
+// Writes a NUL-terminated buffer. The buffer is only read during the call.
+void write_c(i8* text) {
+    write_stdout(from_c_string(text));
+}
+
+void write_unsigned(u64 value) {
+    i8* text = memory.alloc<i8>(21);
+    i32 position = 20;
+    text[position] = 0;
+    u64 rest = value;
+    while (true) {
+        position = position - 1;
+        text[position] = cast<i8>(48 + cast<i32>(rest % 10));
+        rest = rest / 10;
+        if (rest == 0) {
+            break;
+        }
+    }
+    write_c(text + position);
+    memory.free(text);
+}
+
+void write_signed(i64 value) {
+    if (value < 0) {
+        write_stdout("-");
+        write_unsigned(0 - cast<u64>(value));
+    } else {
+        write_unsigned(cast<u64>(value));
+    }
+}
+
+// Writes an integer-valued double of at least 2^64 exactly. Halving is exact for these values, so the
+// value is a 64-bit integer times 2^doublings. The decimal digits of that integer are doubled back up,
+// one decimal digit at a time, least significant first.
+void write_exact_integer(f64 value) {
+    f64 halved = value;
+    i32 doublings = 0;
+    while (halved >= 18446744073709551616.0) {
+        halved = halved / 2.0;
+        doublings = doublings + 1;
+    }
+    u64 mantissa = cast<u64>(halved);
+    // A finite double has at most 309 decimal digits.
+    i8* digits = memory.alloc<i8>(330);
+    i32 count = 0;
+    u64 rest = mantissa;
+    while (true) {
+        digits[count] = cast<i8>(rest % 10);
+        rest = rest / 10;
+        count = count + 1;
+        if (rest == 0) {
+            break;
+        }
+    }
+    i32 step = 0;
+    while (step < doublings) {
+        i32 index = 0;
+        i32 carry = 0;
+        while (index < count) {
+            i32 digit = cast<i32>(digits[index]) * 2 + carry;
+            digits[index] = cast<i8>(digit % 10);
+            carry = digit / 10;
+            index = index + 1;
+        }
+        if (carry != 0) {
+            digits[count] = cast<i8>(carry);
+            count = count + 1;
+        }
+        step = step + 1;
+    }
+    i8* text = memory.alloc<i8>(count + 1);
+    i32 position = 0;
+    while (position < count) {
+        text[position] = cast<i8>(48 + cast<i32>(digits[count - 1 - position]));
+        position = position + 1;
+    }
+    text[count] = 0;
+    write_c(text);
+    memory.free(text);
+    memory.free(digits);
+}
+
+// Writes a float with six digits after the decimal point, rounded half up, and without trailing zeros.
+// NaN is written as `nan`, infinities as `inf` or `-inf`, and finite values of 2^64 and above as their
+// exact integer value.
+void write_float(f64 value) {
+    if (value != value) {
+        write_stdout("nan");
+        return;
+    }
+    f64 magnitude = value;
+    if (value < 0.0) {
+        write_stdout("-");
+        magnitude = 0.0 - value;
+    }
+    // Only an infinity is unchanged by halving, since every other positive value gets smaller.
+    if (magnitude > 0.0 && magnitude * 0.5 == magnitude) {
+        write_stdout("inf");
+        return;
+    }
+    if (magnitude >= 18446744073709551616.0) {
+        write_exact_integer(magnitude);
+        return;
+    }
+    u64 whole = cast<u64>(magnitude);
+    f64 fraction = magnitude - cast<f64>(whole);
+    u64 micros = cast<u64>(fraction * 1000000.0 + 0.5);
+    if (micros >= 1000000) {
+        whole = whole + 1;
+        micros = micros - 1000000;
+    }
+    write_unsigned(whole);
+    if (micros != 0) {
+        i8* digits = memory.alloc<i8>(7);
+        i32 index = 5;
+        while (index >= 0) {
+            digits[index] = cast<i8>(48 + cast<i32>(micros % 10));
+            micros = micros / 10;
+            index = index - 1;
+        }
+        i32 last = 5;
+        while (digits[last] == 48) {
+            last = last - 1;
+        }
+        digits[last + 1] = 0;
+        write_stdout(".");
+        write_c(digits);
+        memory.free(digits);
+    }
+}
+
+// The `write` functions below are the built-in implementations of Printable for the primitive types and
+// string. They are private, so ordinary calls such as `io.write(value)` do not reach them; a method call
+// on a value of those types does.
+void write(string value) {
     write_stdout(value);
 }
 
-public void println(string value) {
-    write_stdout(value);
+void write(bool value) {
+    if (value) {
+        write_stdout("true");
+    } else {
+        write_stdout("false");
+    }
+}
+
+void write(i8 value) { write_signed(cast<i64>(value)); }
+void write(i16 value) { write_signed(cast<i64>(value)); }
+void write(i32 value) { write_signed(cast<i64>(value)); }
+void write(i64 value) { write_signed(value); }
+void write(u8 value) { write_unsigned(cast<u64>(value)); }
+void write(u16 value) { write_unsigned(cast<u64>(value)); }
+void write(u32 value) { write_unsigned(cast<u64>(value)); }
+void write(u64 value) { write_unsigned(value); }
+void write(f32 value) { write_float(cast<f64>(value)); }
+void write(f64 value) { write_float(value); }
+
+public void print<T : Printable>(T value) {
+    value.write();
+}
+
+public void println<T : Printable>(T value) {
+    value.write();
     write_stdout("\n");
 }
-
-@extern("oxygen_print_i8")
-public extern void print(i8 value);
-@extern("oxygen_print_i16")
-public extern void print(i16 value);
-@extern("oxygen_print_i32")
-public extern void print(i32 value);
-@extern("oxygen_print_i64")
-public extern void print(i64 value);
-@extern("oxygen_print_u8")
-public extern void print(u8 value);
-@extern("oxygen_print_u16")
-public extern void print(u16 value);
-@extern("oxygen_print_u32")
-public extern void print(u32 value);
-@extern("oxygen_print_u64")
-public extern void print(u64 value);
-@extern("oxygen_print_f32")
-public extern void print(f32 value);
-@extern("oxygen_print_f64")
-public extern void print(f64 value);
-@extern("oxygen_print_bool")
-public extern void print(bool value);
-
-@extern("oxygen_println_i8")
-public extern void println(i8 value);
-@extern("oxygen_println_i16")
-public extern void println(i16 value);
-@extern("oxygen_println_i32")
-public extern void println(i32 value);
-@extern("oxygen_println_i64")
-public extern void println(i64 value);
-@extern("oxygen_println_u8")
-public extern void println(u8 value);
-@extern("oxygen_println_u16")
-public extern void println(u16 value);
-@extern("oxygen_println_u32")
-public extern void println(u32 value);
-@extern("oxygen_println_u64")
-public extern void println(u64 value);
-@extern("oxygen_println_f32")
-public extern void println(f32 value);
-@extern("oxygen_println_f64")
-public extern void println(f64 value);
-@extern("oxygen_println_bool")
-public extern void println(bool value);

@@ -78,8 +78,19 @@ public sealed partial class LlvmModuleGenerator
         {
             throw new InvalidOperationException($"Cannot lower return type of '{symbol.QualifiedName}': '{symbol.ReturnType}'.", exception);
         }
+        if (ReturnsStringThroughPointer(symbol))
+        {
+            // An external string result is written through a trailing out-pointer, not returned by value.
+            parameterTypes.Add(LLVMTypeRef.CreatePointer(ToLlvmStringType(), 0));
+            returnType = LLVMTypeRef.Void;
+        }
         return LLVMTypeRef.CreateFunction(returnType, parameterTypes.ToArray(), false);
     }
+
+    // External functions return string through a trailing out-pointer, because a 16-byte struct return
+    // is classified differently by LLVM and by the C ABI of each target.
+    private static bool ReturnsStringThroughPointer(FunctionSymbol symbol) =>
+        symbol.IsExternal && symbol.ReturnType.Kind == SemanticTypeKind.String;
 
     private static bool IsClassMethod(FunctionSymbol symbol, SemanticModel model) =>
         _accessorSymbols.Contains(symbol)
@@ -247,27 +258,32 @@ public sealed partial class LlvmModuleGenerator
         return value;
     }
 
-    private static SemanticType FromTypeSyntax(TypeSyntax syntax, SemanticModel model)
+    // Specializations are keyed by structural types (`Box<Cell<i32>>`), so the type is built
+    // structurally and normalized to its specialized name once, at the top.
+    private static SemanticType FromTypeSyntax(TypeSyntax syntax, SemanticModel model) =>
+        NormalizeAggregateType(StructuralTypeFromSyntax(syntax, model), model);
+
+    private static SemanticType StructuralTypeFromSyntax(TypeSyntax syntax, SemanticModel model)
     {
         if (syntax.IsArray)
-            return SemanticType.ArrayOf(FromTypeSyntax(syntax.ElementType!, model), syntax.ArrayLength!.Value);
+            return SemanticType.ArrayOf(StructuralTypeFromSyntax(syntax.ElementType!, model), syntax.ArrayLength!.Value);
         if (syntax.IsPointer)
-            return SemanticType.PointerTo(FromTypeSyntax(syntax.Pointee!, model));
+            return SemanticType.PointerTo(StructuralTypeFromSyntax(syntax.Pointee!, model));
         if (syntax.IsString)
             return SemanticType.String;
         if (syntax.NamedType is not null)
         {
             var arguments = syntax.DeclaredTypeArguments.Count == 0
                 ? null
-                : syntax.DeclaredTypeArguments.Select(argument => FromTypeSyntax(argument, model)).ToArray();
+                : syntax.DeclaredTypeArguments.Select(argument => StructuralTypeFromSyntax(argument, model)).ToArray();
             if (model.Classes.ContainsKey(syntax.NamedType))
-                return NormalizeAggregateType(SemanticType.Class(syntax.NamedType, arguments), model);
+                return SemanticType.Class(syntax.NamedType, arguments);
             if (model.Interfaces.ContainsKey(syntax.NamedType))
-                return NormalizeAggregateType(SemanticType.Interface(syntax.NamedType, arguments), model);
+                return SemanticType.Interface(syntax.NamedType, arguments);
             if (model.Structs.ContainsKey(syntax.NamedType))
-                return NormalizeAggregateType(SemanticType.Struct(syntax.NamedType, arguments), model);
+                return SemanticType.Struct(syntax.NamedType, arguments);
             if (model.Unions.ContainsKey(syntax.NamedType))
-                return NormalizeAggregateType(SemanticType.Union(syntax.NamedType, arguments), model);
+                return SemanticType.Union(syntax.NamedType, arguments);
             return SemanticType.Enum(syntax.NamedType);
         }
         if (syntax.Primitive is null)

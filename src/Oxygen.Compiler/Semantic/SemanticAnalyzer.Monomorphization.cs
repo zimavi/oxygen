@@ -15,6 +15,7 @@ public sealed partial class SemanticAnalyzer
     {
         var concreteTypes = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
         var aggregateNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        var instantiations = new Dictionary<string, ClassInstantiation>(StringComparer.Ordinal);
         var pending = new Queue<SemanticType>();
 
         void AddType(SemanticType? type)
@@ -149,6 +150,15 @@ public sealed partial class SemanticAnalyzer
                     foreach (var parameter in constructor.Parameters)
                         AddType(SubstituteAggregate(parameter.Type, substitutions, aggregateNames));
                 AddType(SubstituteAggregate(cls.DeclaredInterfaceTypes.FirstOrDefault(), substitutions, aggregateNames));
+                // The member bodies are analyzed for these concrete arguments. That types every
+                // expression concretely, specializes the generic functions they call, and
+                // reveals aggregates that only appear inside bodies (e.g. `Iterator(this)`).
+                var instantiation = InstantiateClass(cls, aggregate, substitutions, functionsByName,
+                    expressionTypes, resolvedCalls);
+                instantiations[AggregateKey(aggregate)] = instantiation;
+                foreach (var expression in instantiation.Expressions())
+                    if (expressionTypes.TryGetValue(expression, out var expressionType))
+                        AddType(expressionType);
             }
             else if (aggregate.Kind == SemanticTypeKind.Interface && _interfacesByName.TryGetValue(name, out var iface))
             {
@@ -186,11 +196,12 @@ public sealed partial class SemanticAnalyzer
 
         var specializedMethods = new Dictionary<(FunctionDeclaration Declaration, string Owner), FunctionSymbol>();
         var specializedDeclarations = new Dictionary<FunctionDeclaration, FunctionDeclaration>();
-        var newExpressionTypes = expressionTypes.ToDictionary(
-            pair => pair.Key,
-            pair => NormalizeAggregate(SubstituteAggregate(pair.Value, new Dictionary<string, SemanticType>(),
-                aggregateNames), aggregateNames));
-        var newResolvedCalls = new Dictionary<CallExpression, FunctionSymbol>(resolvedCalls);
+        var newExpressionTypes = new Dictionary<Expression, SemanticType>(ReferenceEqualityComparer.Instance);
+        foreach (var pair in expressionTypes)
+            newExpressionTypes[pair.Key] = NormalizeAggregate(
+                SubstituteAggregate(pair.Value, new Dictionary<string, SemanticType>(), aggregateNames), aggregateNames);
+        var newResolvedCalls = new Dictionary<CallExpression, FunctionSymbol>(resolvedCalls,
+            ReferenceEqualityComparer.Instance);
 
         foreach (var aggregate in concreteTypes.Values)
         {
@@ -204,7 +215,7 @@ public sealed partial class SemanticAnalyzer
             if (aggregate.Kind == SemanticTypeKind.Class && _classesByName.TryGetValue(baseName, out var cls))
             {
                 var specialized = SpecializeClass(
-                    cls, specializedName, substitutions, aggregateNames, specializedMethods,
+                    cls, instantiations[key], specializedName, substitutions, aggregateNames, specializedMethods,
                     specializedDeclarations, newExpressionTypes, newResolvedCalls);
                 _classesByName[specializedName] = specialized;
                 AddSpecializedMethods(functions, functionsByName, specialized.Methods);
@@ -257,15 +268,13 @@ public sealed partial class SemanticAnalyzer
             for (var index = 0; index < overloads.Count; index++)
                 if (normalizedFunctions.TryGetValue(overloads[index], out var replacement))
                     overloads[index] = replacement;
-        foreach (var pair in resolvedCalls.ToArray())
-            if (normalizedFunctions.TryGetValue(pair.Value, out var replacement))
-                resolvedCalls[pair.Key] = replacement;
-
-        foreach (var pair in resolvedCalls)
+        // Covers both the original calls and the calls cloned into specialized bodies; the latter
+        // still point at the generic declaration until they are resolved against their receiver.
+        foreach (var pair in newResolvedCalls.ToArray())
         {
-            var specialized = ResolveSpecializedCall(pair.Key, pair.Value, expressionTypes, aggregateNames,
+            var symbol = normalizedFunctions.TryGetValue(pair.Value, out var replacement) ? replacement : pair.Value;
+            newResolvedCalls[pair.Key] = ResolveSpecializedCall(pair.Key, symbol, expressionTypes, aggregateNames,
                 specializedMethods);
-            newResolvedCalls[pair.Key] = specialized;
         }
 
         expressionTypes.Clear();
@@ -274,6 +283,9 @@ public sealed partial class SemanticAnalyzer
         resolvedCalls.Clear();
         foreach (var pair in newResolvedCalls)
             resolvedCalls[pair.Key] = pair.Value;
+        foreach (var pair in _callReceiverTypes.ToArray())
+            _callReceiverTypes[pair.Key] = NormalizeAggregate(
+                SubstituteAggregate(pair.Value, new Dictionary<string, SemanticType>(), aggregateNames), aggregateNames);
 
         return aggregateNames;
     }
@@ -329,8 +341,12 @@ public sealed partial class SemanticAnalyzer
         return symbol;
     }
 
+    // Lowers an analyzed class instantiation to a concrete class named `name`: member bodies are
+    // copied from the instantiation (whose expressions are already typed for these arguments) and
+    // aggregate type uses are renamed to their specialized names.
     private ClassSymbol SpecializeClass(
         ClassSymbol source,
+        ClassInstantiation instantiation,
         string name,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames,
@@ -340,15 +356,16 @@ public sealed partial class SemanticAnalyzer
         Dictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         var declaration = source.Declaration;
+        Expression? FieldInitializer(ClassFieldDeclaration field) =>
+            instantiation.FieldInitializers.TryGetValue(field, out var initializer)
+                ? CloneExpression(initializer, substitutions, aggregateNames, expressionTypes, source, resolvedCalls)
+                : null;
         var fields = source.Fields.Select(field =>
         {
             var fieldDeclaration = field.Declaration with
             {
                 Type = RewriteTypeSyntax(field.Declaration.Type, substitutions, aggregateNames),
-                Initializer = field.Declaration.Initializer is null
-                    ? null
-                    : CloneExpression(field.Declaration.Initializer, substitutions, aggregateNames,
-                        expressionTypes, source, resolvedCalls)
+                Initializer = FieldInitializer(field.Declaration)
             };
             return field with
             {
@@ -363,12 +380,15 @@ public sealed partial class SemanticAnalyzer
                 source, resolvedCalls)
         }).ToArray();
         var methods = source.Methods.Select(method =>
-            SpecializeMethod(method, $"{source.ModuleName}.{name}", substitutions, aggregateNames,
+            SpecializeMethod(method, instantiation.Methods.GetValueOrDefault(method.Declaration) ?? method.Declaration,
+                $"{source.ModuleName}.{name}", substitutions, aggregateNames,
                 specializedMethods, expressionTypes, resolvedCalls, name)).ToArray();
         var constructors = source.Constructors.Select(constructor =>
         {
-            var body = CloneBlock(constructor.Declaration.Body, substitutions, aggregateNames,
-                expressionTypes, source, resolvedCalls);
+            var body = CloneBlock(
+                instantiation.Constructors.GetValueOrDefault(constructor.Declaration)?.Body
+                    ?? constructor.Declaration.Body,
+                substitutions, aggregateNames, expressionTypes, source, resolvedCalls);
             var constructorDeclaration = constructor.Declaration with
             {
                 ClassName = name,
@@ -395,7 +415,7 @@ public sealed partial class SemanticAnalyzer
             : source.Destructor with
             {
                 ClassName = name,
-                Body = CloneBlock(source.Destructor.Body, substitutions, aggregateNames,
+                Body = CloneBlock((instantiation.Destructor ?? source.Destructor).Body, substitutions, aggregateNames,
                     expressionTypes, source, resolvedCalls)
             };
         var rewrittenBaseType = source.Declaration.BaseTypeSyntax is { Count: > 0 }
@@ -416,8 +436,7 @@ public sealed partial class SemanticAnalyzer
             Fields = declaration.Fields.Select(field => field with
             {
                 Type = RewriteTypeSyntax(field.Type, substitutions, aggregateNames),
-                Initializer = field.Initializer is null ? null :
-                    CloneExpression(field.Initializer, substitutions, aggregateNames, expressionTypes, source, resolvedCalls)
+                Initializer = FieldInitializer(field)
             }).ToArray(),
             Properties = declaration.DeclaredProperties.Select(property =>
                 CloneProperty(property, substitutions, aggregateNames, expressionTypes, source, resolvedCalls)).ToArray(),
@@ -453,7 +472,7 @@ public sealed partial class SemanticAnalyzer
         Dictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         var methods = source.Methods.Select(method =>
-            SpecializeMethod(method, $"{source.ModuleName}.{name}", substitutions, aggregateNames,
+            SpecializeMethod(method, method.Declaration, $"{source.ModuleName}.{name}", substitutions, aggregateNames,
                 specializedMethods, expressionTypes, resolvedCalls, name)).ToArray();
         var properties = source.DeclaredProperties.Select(property => property with
         {
@@ -470,8 +489,11 @@ public sealed partial class SemanticAnalyzer
         };
     }
 
+    // `body` is the declaration to lower: the analyzed instantiation of a class method, or the
+    // generic declaration itself for interface contracts, which have no bodies to analyze.
     private FunctionSymbol SpecializeMethod(
         FunctionSymbol source,
+        FunctionDeclaration body,
         string moduleName,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames,
@@ -480,14 +502,8 @@ public sealed partial class SemanticAnalyzer
         Dictionary<CallExpression, FunctionSymbol> resolvedCalls,
         string owner)
     {
-        var declaration = CloneFunctionAggregate(source.Declaration, substitutions, aggregateNames,
+        var declaration = CloneFunctionAggregate(body, substitutions, aggregateNames,
             expressionTypes, source, resolvedCalls);
-        var originalCalls = FindCalls(source.Declaration.Body).ToArray();
-        var clonedCalls = FindCalls(declaration.Body).ToArray();
-        for (var index = 0; index < Math.Min(originalCalls.Length, clonedCalls.Length); index++)
-            if (_callReceiverTypes.TryGetValue(originalCalls[index], out var receiverType))
-                _callReceiverTypes[clonedCalls[index]] =
-                    SubstituteAggregate(receiverType, substitutions, aggregateNames);
         var parameters = source.Parameters.Select(parameter => parameter with
         {
             Type = NormalizeAggregate(SubstituteAggregate(parameter.Type, substitutions, aggregateNames), aggregateNames),
@@ -506,75 +522,59 @@ public sealed partial class SemanticAnalyzer
         return symbol;
     }
 
-    private static IEnumerable<CallExpression> FindCalls(BlockStatement block) =>
-        block.Statements.SelectMany(FindCalls).Concat([]);
-
-    private static IEnumerable<CallExpression> FindCalls(Statement statement)
-    {
-        switch (statement)
+    private static IEnumerable<Expression> EnumerateExpressions(Statement? statement) =>
+        statement switch
         {
-            case BlockStatement block:
-                return block.Statements.SelectMany(FindCalls);
-            case VariableDeclarationStatement variable:
-                return variable.Initializer is null ? [] : FindCalls(variable.Initializer);
-            case AssignmentStatement assignment:
-                return FindCalls(assignment.Target).Concat(FindCalls(assignment.Value));
-            case ReturnStatement @return:
-                return @return.Value is null ? [] : FindCalls(@return.Value);
-            case ExpressionStatement expression:
-                return FindCalls(expression.Expression);
-            case IfStatement conditional:
-                return FindCalls(conditional.Condition)
-                    .Concat(FindCalls(conditional.Then))
-                    .Concat(conditional.Else is null ? [] : FindCalls(conditional.Else));
-            case WhileStatement loop:
-                return FindCalls(loop.Condition).Concat(FindCalls(loop.Body));
-            case ForStatement loop:
-                return (loop.Initializer is null ? [] : FindCalls(loop.Initializer))
-                    .Concat(loop.Condition is null ? [] : FindCalls(loop.Condition))
-                    .Concat(loop.Increment is null ? [] : FindCalls(loop.Increment))
-                    .Concat(FindCalls(loop.Body));
-            case ForInStatement loop:
-                return FindCalls(loop.Collection).Concat(FindCalls(loop.Body));
-            case ThrowStatement @throw:
-                return FindCalls(@throw.Value);
-            case TryStatement @try:
-                return FindCalls(@try.Body)
-                    .Concat(@try.Catches.SelectMany(item => FindCalls(item.Body)))
-                    .Concat(@try.Finally is null ? [] : FindCalls(@try.Finally));
-            case SwitchStatement @switch:
-                return FindCalls(@switch.Value)
-                    .Concat(@switch.Cases.SelectMany(item =>
-                        FindCalls(item.Body).Concat(item.Value is null ? [] : FindCalls(item.Value))));
-            default:
-                return [];
-        }
-    }
-
-    private static IEnumerable<CallExpression> FindCalls(Expression expression)
-    {
-        var nested = expression switch
-        {
-            CallExpression call => call.Arguments.SelectMany(FindCalls),
-            UnaryExpression unary => FindCalls(unary.Operand),
-            BinaryExpression binary => FindCalls(binary.Left).Concat(FindCalls(binary.Right)),
-            ConditionalExpression conditional => FindCalls(conditional.Condition)
-                .Concat(FindCalls(conditional.WhenTrue)).Concat(FindCalls(conditional.WhenFalse)),
-            IsExpression item => FindCalls(item.Operand),
-            ClassConstructionExpression item => item.Arguments.SelectMany(FindCalls),
-            NewExpression item => item.Arguments.SelectMany(FindCalls),
-            CastExpression item => FindCalls(item.Operand),
-            SizeOfExpression item => item.Operand is null ? [] : FindCalls(item.Operand),
-            MemberAccessExpression item => FindCalls(item.Target),
-            IndexExpression item => FindCalls(item.Target).Concat(FindCalls(item.Index)),
-            ArrayLiteralExpression item => item.Elements.SelectMany(FindCalls),
-            StructLiteralExpression item => item.Fields.SelectMany(item => FindCalls(item.Value)),
-            UnionConstructionExpression item => item.Arguments.SelectMany(FindCalls),
+            BlockStatement block => block.Statements.SelectMany(EnumerateExpressions),
+            VariableDeclarationStatement variable => EnumerateExpressions(variable.Initializer),
+            AssignmentStatement assignment => EnumerateExpressions(assignment.Target)
+                .Concat(EnumerateExpressions(assignment.Value)),
+            ReturnStatement @return => EnumerateExpressions(@return.Value),
+            ExpressionStatement expression => EnumerateExpressions(expression.Expression),
+            IfStatement conditional => EnumerateExpressions(conditional.Condition)
+                .Concat(EnumerateExpressions(conditional.Then))
+                .Concat(EnumerateExpressions(conditional.Else)),
+            WhileStatement loop => EnumerateExpressions(loop.Condition).Concat(EnumerateExpressions(loop.Body)),
+            ForStatement loop => EnumerateExpressions(loop.Initializer)
+                .Concat(EnumerateExpressions(loop.Condition))
+                .Concat(EnumerateExpressions(loop.Increment))
+                .Concat(EnumerateExpressions(loop.Body)),
+            ForInStatement loop => EnumerateExpressions(loop.Collection).Concat(EnumerateExpressions(loop.Body)),
+            ThrowStatement @throw => EnumerateExpressions(@throw.Value),
+            TryStatement @try => EnumerateExpressions(@try.Body)
+                .Concat(@try.Catches.SelectMany(item => EnumerateExpressions(item.Body)))
+                .Concat(EnumerateExpressions(@try.Finally)),
+            SwitchStatement @switch => EnumerateExpressions(@switch.Value)
+                .Concat(@switch.Cases.SelectMany(item =>
+                    EnumerateExpressions(item.Value).Concat(EnumerateExpressions(item.Body)))),
             _ => []
         };
-        return expression is CallExpression callExpression
-            ? new[] { callExpression }.Concat(nested)
-            : nested;
+
+    private static IEnumerable<Expression> EnumerateExpressions(Expression? expression)
+    {
+        if (expression is null)
+            return [];
+        var nested = expression switch
+        {
+            UnaryExpression item => EnumerateExpressions(item.Operand),
+            BinaryExpression item => EnumerateExpressions(item.Left).Concat(EnumerateExpressions(item.Right)),
+            ConditionalExpression item => EnumerateExpressions(item.Condition)
+                .Concat(EnumerateExpressions(item.WhenTrue)).Concat(EnumerateExpressions(item.WhenFalse)),
+            IsExpression item => EnumerateExpressions(item.Operand),
+            CallExpression item => item.Arguments.SelectMany(EnumerateExpressions),
+            ClassConstructionExpression item => item.Arguments.SelectMany(EnumerateExpressions),
+            NewExpression item => item.Arguments.SelectMany(EnumerateExpressions),
+            CastExpression item => EnumerateExpressions(item.Operand),
+            SizeOfExpression item => EnumerateExpressions(item.Operand),
+            LengthExpression item => EnumerateExpressions(item.Target),
+            MemberAccessExpression item => EnumerateExpressions(item.Target),
+            IndexExpression item => EnumerateExpressions(item.Target).Concat(EnumerateExpressions(item.Index)),
+            ArrayLiteralExpression item => item.Elements.SelectMany(EnumerateExpressions),
+            StructLiteralExpression item => item.Fields.SelectMany(field => EnumerateExpressions(field.Value)),
+            UnionConstructionExpression item => item.Arguments.SelectMany(EnumerateExpressions),
+            _ => []
+        };
+        return nested.Prepend(expression);
     }
 
     private static UnionSymbol SpecializeUnion(
@@ -836,9 +836,11 @@ public sealed partial class SemanticAnalyzer
         {
             var arguments = syntax.DeclaredTypeArguments
                 .Select(item => RewriteTypeSyntax(item, substitutions, aggregateNames)).ToArray();
+            // The specialization is keyed by the structural arguments (`Cell<i32>`), not by the
+            // already renamed ones (`Cell__ox_i32`).
             var baseType = new SemanticType(
                 SemanticTypeKind.Struct, null, null, syntax.NamedType,
-                null, null) { TypeArguments = arguments.Select(item =>
+                null, null) { TypeArguments = syntax.DeclaredTypeArguments.Select(item =>
                     SemanticTypeFromSyntax(item, substitutions, aggregateNames)).ToArray() };
             var kinds = new[] { SemanticTypeKind.Class, SemanticTypeKind.Interface, SemanticTypeKind.Union, SemanticTypeKind.Struct };
             foreach (var kind in kinds)
@@ -891,7 +893,7 @@ public sealed partial class SemanticAnalyzer
         return SemanticType.Struct(syntax.NamedType!, arguments);
     }
 
-    private static FunctionDeclaration CloneFunctionAggregate(
+    private FunctionDeclaration CloneFunctionAggregate(
         FunctionDeclaration source,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames,
@@ -913,7 +915,7 @@ public sealed partial class SemanticAnalyzer
         return result;
     }
 
-    private static BlockStatement CloneBlock(
+    private BlockStatement CloneBlock(
         BlockStatement source,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames,
@@ -923,14 +925,15 @@ public sealed partial class SemanticAnalyzer
         source with { Statements = source.Statements.Select(statement =>
             CloneStatement(statement, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)).ToArray() };
 
-    private static Statement CloneStatement(
+    private Statement CloneStatement(
         Statement source,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames,
         Dictionary<Expression, SemanticType> expressionTypes,
         object owner,
-        Dictionary<CallExpression, FunctionSymbol> resolvedCalls) =>
-        source switch
+        Dictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        var result = source switch
         {
             BlockStatement item => CloneBlock(item, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls),
             VariableDeclarationStatement item => item with
@@ -997,10 +1000,29 @@ public sealed partial class SemanticAnalyzer
                     Body = CloneStatement(caseItem.Body, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
                 }).ToArray()
             },
+            TryStatement item => item with
+            {
+                Body = CloneBlock(item.Body, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls),
+                Catches = item.Catches.Select(clause => clause with
+                {
+                    ExceptionType = clause.ExceptionType is null ? null :
+                        RewriteTypeSyntax(clause.ExceptionType, substitutions, aggregateNames),
+                    Body = CloneBlock(clause.Body, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
+                }).ToArray(),
+                Finally = item.Finally is null ? null :
+                    CloneBlock(item.Finally, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
+            },
             _ => source
         };
+        // Facts recorded for the source statement belong to the clone as well.
+        if (source is VariableDeclarationStatement local && _escapingClassLocals.Contains(local))
+            _escapingClassLocals.Add((VariableDeclarationStatement)result);
+        if (source is ForInStatement loop && _iteratorProtocols.TryGetValue(loop, out var protocol))
+            _iteratorProtocols[(ForInStatement)result] = protocol;
+        return result;
+    }
 
-    private static Expression CloneExpression(
+    private Expression CloneExpression(
         Expression source,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames,
@@ -1089,13 +1111,19 @@ public sealed partial class SemanticAnalyzer
         };
         if (expressionTypes.TryGetValue(source, out var type))
             expressionTypes[result] = SubstituteAggregate(type, substitutions, aggregateNames);
-        if (source is CallExpression call && result is CallExpression cloned
-            && resolvedCalls.TryGetValue(call, out var function))
-            resolvedCalls[cloned] = function;
+        if (source is CallExpression call && result is CallExpression cloned)
+        {
+            if (resolvedCalls.TryGetValue(call, out var function))
+                resolvedCalls[cloned] = function;
+            if (_callReceiverTypes.TryGetValue(call, out var receiverType))
+                _callReceiverTypes[cloned] = SubstituteAggregate(receiverType, substitutions, aggregateNames);
+            if (_receiverArgumentCalls.Contains(call))
+                _receiverArgumentCalls.Add(cloned);
+        }
         return result;
     }
 
-    private static PropertyDeclaration CloneProperty(
+    private PropertyDeclaration CloneProperty(
         PropertyDeclaration source,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames,
@@ -1146,16 +1174,29 @@ public sealed partial class SemanticAnalyzer
             _ => null
         };
 
+    // Uses the same separator as SemanticType.ToString so the key reads the same at every nesting
+    // depth; the balanced angle brackets keep distinct argument groupings distinct.
     private static string AggregateKey(SemanticType type) =>
-        $"{type.Kind}:{AggregateBaseName(type)}<{string.Join(",", type.TypeArguments ?? [])}>";
+        $"{type.Kind}:{AggregateBaseName(type)}<{string.Join(", ", type.TypeArguments ?? [])}>";
 
+    // Aggregate arguments are encoded by their own specialized name with a length prefix, so
+    // `Box<Cell<i32>>` and `Box<Cell<i64>>` differ, and `Box<Cell<i32>, i64>` cannot collide with
+    // `Box<Cell<i32, i64>>`.
     private static string EncodeAggregateArguments(IReadOnlyList<SemanticType> arguments) =>
         string.Join("_", arguments.Select(argument =>
-            argument.Kind == SemanticTypeKind.Primitive
-                ? argument.Primitive!.Value.ToString().ToLowerInvariant()
-                : argument.Kind == SemanticTypeKind.Pointer
-                    ? "p" + EncodeAggregateArguments([argument.Pointee!])
-                    : (AggregateBaseName(argument) ?? argument.ToString()!).Replace(" ", string.Empty)));
+        {
+            if (argument.Kind == SemanticTypeKind.Primitive)
+                return argument.Primitive!.Value.ToString().ToLowerInvariant();
+            if (argument.Kind == SemanticTypeKind.Pointer)
+                return "p" + EncodeAggregateArguments([argument.Pointee!]);
+            var baseName = AggregateBaseName(argument);
+            if (baseName is null)
+                return argument.ToString()!.Replace(" ", string.Empty);
+            var name = argument.TypeArguments is { Count: > 0 }
+                ? $"{baseName}__ox_{EncodeAggregateArguments(argument.TypeArguments)}"
+                : baseName;
+            return $"{name.Length}{name}";
+        }));
 
     private static SemanticType SubstituteAggregate(
         SemanticType? type,
@@ -1172,15 +1213,26 @@ public sealed partial class SemanticAnalyzer
             return SemanticType.ArrayOf(SubstituteAggregate(type.ElementType, substitutions, aggregateNames), type.ArrayLength);
         if (type.TypeArguments is not { Count: > 0 })
             return type;
-        var arguments = type.TypeArguments.Select(argument =>
-            SubstituteAggregate(argument, substitutions, aggregateNames)).ToArray();
-        var result = type with { TypeArguments = arguments };
-        if (aggregateNames.TryGetValue(AggregateKey(result), out var specialized))
-            result = result.Kind == SemanticTypeKind.Union
-                ? result with { EnumName = specialized, TypeArguments = null }
-                : result with { StructName = specialized, TypeArguments = null };
-        return result;
+        // Look the specialization up by its structural arguments before inner arguments are
+        // renamed: `Box<Cell<i32>>` is registered under that key, not under `Box<Cell__ox_i32>`.
+        var structural = type with
+        {
+            TypeArguments = type.TypeArguments.Select(argument =>
+                SubstituteAggregate(argument, substitutions, NoAggregateNames)).ToArray()
+        };
+        if (aggregateNames.TryGetValue(AggregateKey(structural), out var specialized))
+            return structural.Kind == SemanticTypeKind.Union
+                ? structural with { EnumName = specialized, TypeArguments = null }
+                : structural with { StructName = specialized, TypeArguments = null };
+        return structural with
+        {
+            TypeArguments = structural.TypeArguments!.Select(argument =>
+                NormalizeAggregate(argument, aggregateNames)).ToArray()
+        };
     }
+
+    private static readonly IReadOnlyDictionary<string, string> NoAggregateNames =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     private static SemanticType NormalizeAggregate(
         SemanticType type, IReadOnlyDictionary<string, string> aggregateNames)

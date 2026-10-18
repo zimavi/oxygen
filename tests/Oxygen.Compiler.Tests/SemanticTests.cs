@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 using Oxygen.Compiler.Ast;
@@ -189,6 +190,207 @@ public sealed class SemanticTests
             call.Name == "get" && call.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I32));
         Assert.Contains(model.ResolvedCalls.Values, call =>
             call.Name == "get" && call.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I64));
+    }
+
+    [Fact]
+    public void SpecializesGenericAggregatesUsedAsTypeArguments()
+    {
+        var model = Analyze(
+            "class Cell<T> { T value; Cell(T value) { this.value = value; } T read() { return value; } } " +
+            "class Box<T> { T item; Box(T item) { this.item = item; } T get() { return item; } } " +
+            "i32 main() { Box<Cell<i32>> small = new Box<Cell<i32>>(new Cell<i32>(40)); " +
+            "Box<Cell<i64>> large = new Box<Cell<i64>>(new Cell<i64>(2)); " +
+            "Cell<i32> first = small.get(); Cell<i64> second = large.get(); " +
+            "return first.read() + cast<i32>(second.read()); }");
+
+        // Each nested argument produces its own specialization, and the outer ones hold the
+        // specialized inner class rather than an unspecialized `Cell<...>`.
+        Assert.Equal(2, model.Classes.Keys.Count(name => name.StartsWith("Box__ox_", StringComparison.Ordinal)));
+        var boxes = model.Classes.Values
+            .Where(cls => cls.Name.StartsWith("Box__ox_", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(
+            [SemanticType.Class("Cell__ox_i32"), SemanticType.Class("Cell__ox_i64")],
+            boxes.Select(cls => cls.Fields.Single().Type).OrderBy(type => type.ToString()).ToArray());
+    }
+
+    [Fact]
+    public void KeepsSpecializationNamesDistinctForDifferentArgumentGroupings()
+    {
+        var model = Analyze(
+            "class Pair<A, B> { A first; B second; Pair(A first, B second) { this.first = first; this.second = second; } } " +
+            "class One<T> { T value; One(T value) { this.value = value; } } " +
+            "i32 main() { " +
+            "Pair<One<i32>, i64> split = new Pair<One<i32>, i64>(new One<i32>(1), 2); " +
+            "One<Pair<i32, i64>> nested = new One<Pair<i32, i64>>(new Pair<i32, i64>(1, 2)); " +
+            "return 0; }");
+
+        // Length-prefixed argument encoding keeps `Pair<One<i32>, i64>` and `One<Pair<i32, i64>>`
+        // from mangling to the same specialization name.
+        var names = model.AggregateSpecializations.Values.ToArray();
+        Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains("Class:Pair<One<i32>, i64>", model.AggregateSpecializations.Keys);
+        Assert.Contains("Class:One<Pair<i32, i64>>", model.AggregateSpecializations.Keys);
+    }
+
+    [Fact]
+    public void ChecksTypeArgumentsAgainstTheirConstraints()
+    {
+        var printable = "module std.io; public interface Printable { void write(); } " +
+            "public void show<T : Printable>(T value) { }";
+
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse(printable),
+            Parse("import std.io; class Point : Printable { void write() { } } " +
+                "i32 main() { show(1); show(\"text\"); show(true); show(new Point()); return 0; }")
+        ]);
+        Assert.NotNull(model.MainFunction);
+
+        var exception = Assert.Throws<SemanticException>(() => new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse(printable),
+            Parse("import std.io; class Plain { } i32 main() { show(new Plain()); return 0; }")
+        ]));
+        Assert.Contains("does not satisfy the constraint 'Printable'", exception.Message);
+    }
+
+    [Fact]
+    public void KeepsPrimitiveWriteFunctionsOutOfOrdinaryCalls()
+    {
+        var exception = Assert.Throws<SemanticException>(() => new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse("module std.io; void write(i32 value) { }"),
+            Parse("import std.io; i32 main() { io.write(1); return 0; }")
+        ]));
+
+        Assert.Contains("Function 'io.write' is not declared", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsConstraintsOnUndeclaredInterfaces()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "void show<T : Missing>(T value) { } i32 main() { show(1); return 0; }"));
+        Assert.Contains("Interface 'Missing' is not declared", exception.Message);
+    }
+
+    [Fact]
+    public void ResolvesMethodCallsOnPrimitiveReceiversByExactType()
+    {
+        var model = Analyze(
+            "void write(i64 value) { } void write(i32 value) { } " +
+            "i32 main() { i32 value = 1; value.write(); return 0; }");
+
+        var call = Assert.Single(model.ReceiverArgumentCalls);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32),
+            Assert.Single(model.ResolvedCalls[call].Parameters).Type);
+    }
+
+    [Fact]
+    public void ReusesAnInferredSpecializationAcrossCallsAndIgnoresOthers()
+    {
+        var model = Analyze(
+            "T identity<T>(T value) { return value; } " +
+            "i32 main() { i32 a = identity(1); i32 b = identity(2); i64 c = identity<i64>(3); " +
+            "f64 d = identity(2.5); return a + b + cast<i32>(c) + cast<i32>(d); }");
+
+        Assert.Equal(3, model.Modules["program"].Count(function => function.IsSpecialized && function.Name == "identity"));
+    }
+
+    [Fact]
+    public void KeepsIntegerLiteralsInTheirOwnRange()
+    {
+        Analyze("i32 main() { i64 big = 9223372036854775807; u64 max = 18446744073709551615; return 0; }");
+
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 main() { u64 value = 18446744073709551616; return 0; }"));
+        Assert.Contains("does not fit any supported integer type", exception.Message);
+    }
+
+    [Fact]
+    public void AcceptsBooleanEqualityButNotBooleanOrdering()
+    {
+        Analyze("i32 main() { bool done = false; if (done == false) { return 1; } if (done != true) { return 2; } return 0; }");
+
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { bool done = false; if (done < true) { return 1; } return 0; }"));
+        Assert.Contains("requires numeric operands", exception.Message);
+    }
+
+    [Fact]
+    public void InstantiatesGenericClassesThatOnlyAppearInsideGenericBodies()
+    {
+        var model = Analyze(
+            "class Cell<T> { T value; Cell(T value) { this.value = value; } T read() { return value; } } " +
+            "class Holder<T> { T value; Holder(T value) { this.value = value; } " +
+            "T roundTrip() { var cell = Cell(value); return cell.read(); } } " +
+            "i32 main() { Holder<i32> holder = new Holder<i32>(42); return holder.roundTrip(); }");
+
+        Assert.Contains("Cell__ox_i32", model.Classes.Keys);
+        var roundTrip = model.Classes["Holder__ox_i32"].Methods.Single(method => method.Name == "roundTrip");
+        var read = Assert.Single(model.ResolvedCalls, pair =>
+            ReferenceEquals(pair.Key, FindCall(roundTrip.Declaration.Body, "cell.read"))).Value;
+        Assert.Equal("program.Cell__ox_i32", read.ModuleName);
+        Assert.Equal(SemanticType.Class("Cell__ox_i32"),
+            model.CallReceiverTypes[FindCall(roundTrip.Declaration.Body, "cell.read")]);
+    }
+
+    [Fact]
+    public void SpecializesGenericFunctionCallsInsideGenericClassInstantiations()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse("module util; public T first<T>(T value) { return value; }"),
+            Parse("import util; " +
+                "class Box<T> { T value; Box(T value) { this.value = util.first<T>(value); } T get() { return value; } } " +
+                "i32 main() { Box<i64> box = new Box<i64>(5); return cast<i32>(box.get()); }")
+        ]);
+
+        // Checking the generic constructor sees `first<T>` with T unresolved; that open
+        // specialization must not become a function of its own.
+        var specializations = model.Modules["util"].Where(function => function.Name == "first").ToArray();
+        var concrete = Assert.Single(specializations, function => function.IsSpecialized);
+        Assert.Equal([SemanticType.FromPrimitive(PrimitiveType.I64)], concrete.SpecializationArguments);
+        var constructor = model.Classes["Box__ox_i64"].Constructors.Single();
+        Assert.Same(concrete, model.ResolvedCalls[FindCall(constructor.Declaration.Body, "util.first")]);
+    }
+
+    [Fact]
+    public void KeepsExpressionTypesOfEachSpecializationSeparate()
+    {
+        var model = Analyze(
+            "T identity<T>(T value) { return value; } " +
+            "i32 main() { i32 small = identity<i32>(40); i64 large = identity<i64>(2); " +
+            "return small + cast<i32>(large); }");
+
+        var specializations = model.Modules["program"]
+            .Where(function => function.Name == "identity" && function.IsSpecialized).ToArray();
+        Assert.Equal(2, specializations.Length);
+        foreach (var specialization in specializations)
+        {
+            var returned = ((ReturnStatement)specialization.Declaration.Body.Statements.Single()).Value!;
+            Assert.Equal(specialization.ReturnType, model.ExpressionTypes[returned]);
+        }
+    }
+
+    [Fact]
+    public void ReportsErrorsThatOnlyOccurForAConcreteInstantiation()
+    {
+        var result = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics(
+            [
+                Parse("module util; public T negate<T>(T value) { return -value; }"),
+                Parse("import util; " +
+                    "class Wrapper<T> { T value; Wrapper(T value) { this.value = util.negate<T>(value); } } " +
+                    "i32 main() { Wrapper<bool> wrapper = new Wrapper<bool>(true); return 0; }")
+            ],
+            ["util.oxy", "main.oxy"]);
+
+        // The generic declarations are valid; only `negate<bool>` is not, and the error points at
+        // the generic's body in util.oxy rather than at the use in main.oxy.
+        var error = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("in instantiation 'util.negate<", error.Message);
+        Assert.Equal("util.oxy", error.SourceName);
     }
 
     [Fact]
@@ -1056,6 +1258,36 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RejectsImportsThatDoNotMatchAnyKnownModule()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            new SemanticAnalyzer(Log.Logger).Analyze(
+            [
+                Parse("import missing.pkg; i32 main() { return 0; }")
+            ]));
+
+        Assert.Contains("Imported module 'missing.pkg' could not be found", exception.Message);
+    }
+
+    [Fact]
+    public void AcceptsImportsResolvedByNativeModuleMetadataEvenWhenUnused()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+            [Parse("import foo.bar; i32 main() { return 0; }")],
+            [
+                new ExternalModuleDeclaration(
+                    "foo.bar",
+                    [new ExternalFunctionDeclaration(
+                        "value",
+                        SemanticType.FromPrimitive(PrimitiveType.I32),
+                        [],
+                        "_Ox_native_value")])
+            ]);
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
     public void ResolvesAliasedImportsAndRejectsUnqualifiedCollisions()
     {
         var aliased = new SemanticAnalyzer(Log.Logger).Analyze(
@@ -1314,6 +1546,22 @@ public sealed class SemanticTests
         Assert.True(bag.HasBlockingDiagnostics(warningsAsErrors: true));
     }
 
+    [Fact]
+    public void AttributesDuplicateTypeDiagnosticsToTheDeclaringSourceFile()
+    {
+        var result = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics(
+            [
+                Parse("import std.collection; i32 main() { return 0; }"),
+                Parse("module std.collection; public union Option<T> { Some(T); None; }"),
+                Parse("module std.collection; public union Option<T> { Some(T); None; }")
+            ],
+            ["main.oxy", "first/collection.oxy", "second/collection.oxy"]);
+
+        var error = Assert.Single(result.Diagnostics, diagnostic =>
+            diagnostic.Message == "A type named 'Option' is already declared");
+        Assert.Equal("second/collection.oxy", error.SourceName);
+    }
+
     private SemanticModel Analyze(string source)
     {
         var unit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
@@ -1322,6 +1570,27 @@ public sealed class SemanticTests
 
     private CompilationUnit Parse(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
+
+    private static CallExpression FindCall(Statement statement, string name) =>
+        FindCalls(statement).Single(call => call.Name == name);
+
+    private static IEnumerable<CallExpression> FindCalls(Statement statement) => statement switch
+    {
+        BlockStatement block => block.Statements.SelectMany(FindCalls),
+        VariableDeclarationStatement { Initializer: not null } variable => FindCalls(variable.Initializer),
+        AssignmentStatement assignment => FindCalls(assignment.Value),
+        ReturnStatement { Value: not null } @return => FindCalls(@return.Value),
+        ExpressionStatement expression => FindCalls(expression.Expression),
+        _ => []
+    };
+
+    private static IEnumerable<CallExpression> FindCalls(Expression expression) => expression switch
+    {
+        CallExpression call => call.Arguments.SelectMany(FindCalls).Prepend(call),
+        CastExpression cast => FindCalls(cast.Operand),
+        BinaryExpression binary => FindCalls(binary.Left).Concat(FindCalls(binary.Right)),
+        _ => []
+    };
 
     private SemanticResult AnalyzeWithDiagnostics(string source)
     {

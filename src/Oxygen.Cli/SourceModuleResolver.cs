@@ -34,7 +34,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                 foreach (var path in Directory.EnumerateFiles(sourceDirectory, "*.oxy", SearchOption.AllDirectories)
                              .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
                 {
-                    if (visitedFiles.Contains(Path.GetFullPath(path)))
+                    if (visitedFiles.Contains(GetCanonicalPath(path)))
                         continue;
 
                     try
@@ -66,8 +66,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
         while (queued.Count > 0)
         {
             var source = queued.Dequeue();
-            var fullPath = Path.GetFullPath(source.Name);
-            if (!visitedFiles.Add(fullPath))
+            if (!visitedFiles.Add(GetCanonicalPath(source.Name)))
                 continue;
 
             var tokenization = tokenizer.TokenizeWithDiagnostics(source.Text, source.Name);
@@ -90,23 +89,14 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
             var aliases = new HashSet<string>(StringComparer.Ordinal);
             foreach (var import in pair.Second.Imports)
             {
-                if (!units.Any(unit => string.Equals(unit.ModuleName, import.Name, StringComparison.Ordinal)))
-                {
-                    diagnostics.Add(
-                        DiagnosticPhase.Semantic,
-                        $"Imported module '{import.Name}' could not be found",
-                        import.Location,
-                        import.Name.Length,
-                        pair.First.Name);
-                }
-                else if (import.Alias is not null && !aliases.Add(import.Alias))
+                if (import.Alias is not null && !aliases.Add(import.Alias))
                 {
                     diagnostics.Add(
                         DiagnosticPhase.Semantic,
                         $"Import alias '{import.Alias}' is declared more than once",
                         import.Location,
                         import.Alias.Length,
-                        pair.First.Name);
+                        pair.First.Name); 
                 }
             }
         }
@@ -117,6 +107,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
     private static IEnumerable<string> DiscoverSourceDirectories(IReadOnlyList<string> rootDirectories)
     {
         var directories = new HashSet<string>(rootDirectories, StringComparer.OrdinalIgnoreCase);
+        var projectStdlibFound = false;
 
         foreach (var rootDirectory in rootDirectories)
         {
@@ -125,14 +116,18 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
             {
                 var standardLibraryDirectory = Path.Combine(directory.FullName, "stdlib");
                 if (Directory.Exists(standardLibraryDirectory))
+                {
                     directories.Add(Path.GetFullPath(standardLibraryDirectory));
+                    projectStdlibFound = true;
+                    break;
+                }
 
                 directory = directory.Parent;
             }
         }
 
         var oxygenPath = Environment.GetEnvironmentVariable("OXYGEN_PATH");
-        if (!string.IsNullOrWhiteSpace(oxygenPath))
+        if (!projectStdlibFound && !string.IsNullOrWhiteSpace(oxygenPath))
         {
             var oxygenDirectory = new DirectoryInfo(Path.GetFullPath(oxygenPath));
             var standardLibraryDirectory = oxygenDirectory.Name.Equals("stdlib", StringComparison.OrdinalIgnoreCase)
@@ -145,4 +140,53 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
         return directories;
     }
 
+    // Returns the path with symbolic links and junctions resolved in every component, so the same
+    // file reached through different directories (for example, a linked stdlib inside a source
+    // directory) is compiled only once.
+    private static string GetCanonicalPath(string path)
+    {
+        const int maxLinkExpansions = 40;
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath) ?? string.Empty;
+        var pending = new Stack<string>(fullPath[root.Length..]
+            .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+            .Reverse());
+        var current = root;
+        var expansions = 0;
+
+        while (pending.Count > 0)
+        {
+            current = Path.Combine(current, pending.Pop());
+            FileSystemInfo entry = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
+            if (entry.LinkTarget is null)
+                continue;
+
+            if (++expansions > maxLinkExpansions)
+                return fullPath;
+
+            FileSystemInfo? target;
+            try
+            {
+                target = entry.ResolveLinkTarget(returnFinalTarget: true);
+            }
+            catch (IOException)
+            {
+                return fullPath;
+            }
+
+            if (target is null)
+                return fullPath;
+
+            // The link target can itself contain linked components, so resolve it from its root again.
+            var targetPath = Path.GetFullPath(target.FullName);
+            var targetRoot = Path.GetPathRoot(targetPath) ?? string.Empty;
+            foreach (var component in targetPath[targetRoot.Length..]
+                         .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+                         .Reverse())
+                pending.Push(component);
+            current = targetRoot;
+        }
+
+        return Path.TrimEndingDirectorySeparator(current);
+    }
 }

@@ -12,7 +12,10 @@ continue to LLVM generation when an error diagnostic exists.
 
 Warnings are reported alongside errors and do not block compilation by
 default. `--warnings-as-errors` makes warnings blocking diagnostics. Current
-warnings include unused declarations and unreachable statements.
+warnings include unused declarations and unreachable statements. Private
+functions of the standard library (modules named `std` or `std.*`) are not
+reported as unused, since a program uses only some of the overloads they
+provide.
 
 Exceptions remain reserved for invalid compiler API arguments, internal
 invariants, and unrecoverable resource failures. They are not the normal

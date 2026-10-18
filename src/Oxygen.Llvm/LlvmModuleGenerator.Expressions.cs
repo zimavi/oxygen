@@ -109,6 +109,20 @@ public sealed partial class LlvmModuleGenerator
         return builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, selector, label, "switch.equal");
     }
 
+    // The class declaring the property accessed as `this.<member>`: the class of `this` or its
+    // nearest base class that declares it. Null when the member is a field.
+    private static ClassSymbol? ThisPropertyOwner(MemberAccessExpression member, SemanticModel model)
+    {
+        var thisType = NormalizeAggregateType(model.ExpressionTypes[member.Target], model);
+        for (var cls = model.Classes.GetValueOrDefault(thisType.StructName!); cls is not null;
+             cls = cls.BaseTypeName is null ? null : model.Classes.GetValueOrDefault(cls.BaseTypeName))
+        {
+            if (cls.DeclaredProperties.Any(property => property.Name == member.MemberName))
+                return cls;
+        }
+        return null;
+    }
+
     private static LLVMValueRef EmitNewExpression(
         LLVMContextRef context, LLVMBuilderRef builder, NewExpression expression,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
@@ -142,9 +156,10 @@ public sealed partial class LlvmModuleGenerator
         LLVMValueRef instance;
         if (heapAllocated)
         {
+            // The object's own layout (header and fields), not SizeOf(class), which is the size of
+            // a class reference.
             var raw = builder.BuildCall2(_oxygenAlloc.FunctionType, _oxygenAlloc,
-                new[] { LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, SizeOf(SemanticType.Class(className), model), false) },
-                "object");
+                new[] { _classTypes[className].SizeOf }, "object");
             instance = builder.BuildBitCast(raw, ClassPointerType(className), "object.cast");
         }
         else
@@ -299,8 +314,7 @@ public sealed partial class LlvmModuleGenerator
         }
         if (member.Target is ThisExpression)
         {
-            var owner = model.Classes.Values.FirstOrDefault(cls =>
-                cls.DeclaredProperties.Any(property => property.Name == member.MemberName));
+            var owner = ThisPropertyOwner(member, model);
             if (owner is not null)
             {
                 var property = owner.DeclaredProperties.First(property => property.Name == member.MemberName);
@@ -325,10 +339,8 @@ public sealed partial class LlvmModuleGenerator
                 [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)slot, false)],
                 (ReadOnlySpan<char>)"interface.property.slot");
             var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                tableEntry, "interface.property.target");
-            var targetFunction = builder.BuildBitCast(rawTarget, ToLlvmFunctionType(getter, model),
-                "interface.property.call");
-            return EmitCallOrInvoke(builder, ToLlvmFunctionType(getter, model), targetFunction,
+                tableEntry, "interface.property.call");
+            return EmitCallOrInvoke(builder, ToLlvmFunctionType(getter, model), rawTarget,
                 [objectValue], "interface.property");
         }
         if (targetType.IsClass)
@@ -346,9 +358,8 @@ public sealed partial class LlvmModuleGenerator
                         .First(pair => pair.candidate == getter).index;
                     var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
                         (uint)slot + 1, "property.vtable.slot");
-                    var raw = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), slotAddress,
+                    targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), slotAddress,
                         "property.vtable.target");
-                    targetFunction = builder.BuildBitCast(raw, getterType(getter, model), "property.vtable.call");
                 }
                 return EmitCallOrInvoke(builder, getterType(getter, model), targetFunction, [receiver], "property.get");
             }

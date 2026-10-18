@@ -107,10 +107,9 @@ public sealed partial class LlvmModuleGenerator
                             [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)slot, false)],
                             (ReadOnlySpan<char>)"interface.property.slot");
                         var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                            tableEntry, "interface.property.target");
+                            tableEntry, "interface.property.call");
                         var setterType = ToLlvmFunctionType(setter, model);
-                        var setterTarget = builder.BuildBitCast(rawTarget, setterType, "interface.property.call");
-                        EmitCallOrInvoke(builder, setterType, setterTarget,
+                        EmitCallOrInvoke(builder, setterType, rawTarget,
                             [objectValue, CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                                 setter.Parameters[0].Type, model)], string.Empty);
                         return false;
@@ -133,9 +132,8 @@ public sealed partial class LlvmModuleGenerator
                                     .First(pair => pair.candidate == setter).index;
                                 var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
                                     (uint)slot + 1, "property.vtable.slot");
-                                var raw = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                                targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
                                     slotAddress, "property.vtable.target");
-                                targetFunction = builder.BuildBitCast(raw, setterType, "property.vtable.call");
                             }
                             EmitCallOrInvoke(builder, setterType, targetFunction,
                                 [receiver, CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
@@ -179,13 +177,9 @@ public sealed partial class LlvmModuleGenerator
                 }
                 else if (assignment.Target is MemberAccessExpression { Target: ThisExpression } thisMember)
                 {
-                    var owner = model.Classes.Values.FirstOrDefault(cls =>
-                        cls.DeclaredProperties.Any(property => property.Name == thisMember.MemberName)
-                        || cls.Fields.Any(field => field.Name == thisMember.MemberName))
-                        ?? throw new InvalidOperationException(
-                            $"Class member '{thisMember.MemberName}' could not be resolved for this assignment.");
-                    var thisProperty = owner.DeclaredProperties.FirstOrDefault(property => property.Name == thisMember.MemberName);
-                    if (thisProperty is not null)
+                    var owner = ThisPropertyOwner(thisMember, model);
+                    var thisProperty = owner?.DeclaredProperties.First(property => property.Name == thisMember.MemberName);
+                    if (owner is not null && thisProperty is not null)
                     {
                         var setter = _propertyAccessors[(owner.Name, thisProperty.Name, PropertyAccessorKind.Set)];
                         var setterType = ToLlvmFunctionType(setter, model);
@@ -196,9 +190,8 @@ public sealed partial class LlvmModuleGenerator
                                 .First(pair => pair.candidate == setter).index;
                             var slotAddress = builder.BuildStructGEP2(_classTypes[owner.Name], values["this"],
                                 (uint)slot + 1, "property.vtable.slot");
-                            var raw = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                            setterTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
                                 slotAddress, "property.vtable.target");
-                            setterTarget = builder.BuildBitCast(raw, setterType, "property.vtable.call");
                         }
                         EmitCallOrInvoke(builder, setterType, setterTarget,
                             [values["this"], CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
@@ -210,9 +203,15 @@ public sealed partial class LlvmModuleGenerator
                         model.ExpressionTypes[assignment.Target], model), address);
                 }
                 else if (assignment.Target is UnaryExpression { Operator: TokenKind.Star, Operand: var operand })
-                    builder.BuildStore(assigned, EmitExpression(context, builder, operand, values, storage, model, llvmFunctions));
+                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                        model.ExpressionTypes[assignment.Target], model),
+                        EmitExpression(context, builder, operand, values, storage, model, llvmFunctions));
                 else if (assignment.Target is IndexExpression index)
-                    builder.BuildStore(assigned, EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions));
+                    // The value is converted to the element type: a literal keeps its i32 type otherwise, and storing
+                    // that into an i8 element would write past it.
+                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                            model.ExpressionTypes[assignment.Target], model),
+                        EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions));
                 else
                     throw new InvalidOperationException("Unsupported assignment target.");
                 return false;

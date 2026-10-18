@@ -32,7 +32,7 @@ keyword may be used with or without a binding:
 if (value is Child child) { return child.get(); }
 switch (value) {
     case is Child child: return child.get();
-    case is Printable: return 1;
+    case is Labeled: return 1;
     default: return 0;
 }
 ```

@@ -111,7 +111,11 @@ public sealed partial class LlvmModuleGenerator
             foreach (var symbol in symbols)
             {
                 var functionType = ToLlvmFunctionType(symbol, model);
-                llvmFunctions[symbol] = module.AddFunction(OxygenNameMangler.Mangle(symbol.ModuleName, symbol), functionType);
+                var name = OxygenNameMangler.Mangle(symbol.ModuleName, symbol);
+                // Externals that name the same C symbol (for example from_c_string in two stdlib modules) share one
+                // declaration; LLVM would otherwise rename the second one and leave the call unresolved.
+                var existing = symbol.IsExternal ? module.GetNamedFunction(name) : default;
+                llvmFunctions[symbol] = existing.Handle != IntPtr.Zero ? existing : module.AddFunction(name, functionType);
             }
             foreach (var iface in concreteInterfaces)
             {

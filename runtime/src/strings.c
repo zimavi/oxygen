@@ -20,10 +20,9 @@ const char *oxygen_string_to_c_string(oxygen_string value)
     return result;
 }
 
-oxygen_string oxygen_c_string_to_string(const char *value)
+/* The result is written through an out-pointer, as Oxygen passes string results of external functions. */
+void oxygen_c_string_to_string(const char *value, oxygen_string *result)
 {
-    oxygen_string result = { value, 0 };
-    if (value != NULL)
-        result.length = (uint64_t)strlen((const char *)value);
-    return result;
+    result->data = value;
+    result->length = value != NULL ? (uint64_t)strlen((const char *)value) : 0;
 }

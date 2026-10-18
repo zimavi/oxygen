@@ -29,15 +29,17 @@ public sealed partial class LlvmModuleGenerator
             return result;
         }
         var function = model.ResolvedCalls[expression];
+        if (model.ReceiverArgumentCalls.Contains(expression))
+            return EmitReceiverArgumentCall(context, builder, expression, function, values, storage, model, llvmFunctions);
         var method = IsClassMethod(function, model);
         var arguments = new List<LLVMValueRef>();
         if (method)
         {
             var separator = expression.Name.LastIndexOf('.');
             var receiver = expression.Name[..separator];
+            var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
             if (!values.TryGetValue(receiver, out var receiverValue))
-                receiverValue = builder.BuildLoad2(ToLlvmType(model.ExpressionTypes.First(pair => pair.Key is IdentifierExpression id && id.Name == receiver).Value, model),
-                    storage[receiver], receiver);
+                receiverValue = builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiver], receiver);
             else if (receiver == "this"
                 && model.Classes[function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..]].IsValue)
             {
@@ -45,8 +47,6 @@ public sealed partial class LlvmModuleGenerator
                 receiverValue = builder.BuildLoad2(
                     _classTypes[receiverClassName], receiverValue, "this.value");
             }
-            var receiverType = model.ExpressionTypes.First(pair =>
-                pair.Key is IdentifierExpression id && id.Name == receiver).Value;
             if (receiverType.IsInterface)
             {
                 var table = builder.BuildExtractValue(receiverValue, 1, "interface.table");
@@ -63,8 +63,8 @@ public sealed partial class LlvmModuleGenerator
                     (ReadOnlySpan<char>)"interface.slot");
                 var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
                     tableEntry, "interface.target");
-                var interfaceTarget = builder.BuildBitCast(rawTarget, llvmFunctions[function].FunctionType,
-                    "interface.call");
+                // Opaque pointers: the loaded pointer is called with the function type directly.
+                var interfaceTarget = rawTarget;
                 arguments.Add(receiverValue);
                 for (var index = 0; index < expression.Arguments.Count; index++)
                 {
@@ -95,12 +95,19 @@ public sealed partial class LlvmModuleGenerator
             arguments.Add(value);
         }
 
+        if (ReturnsStringThroughPointer(function))
+        {
+            var result = builder.BuildAlloca(ToLlvmStringType(), "cabi.result");
+            arguments.Add(result);
+            EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function],
+                arguments.ToArray(), string.Empty);
+            return builder.BuildLoad2(ToLlvmStringType(), result, "string.result");
+        }
+
         var resultName = function.ReturnType.IsVoid ? string.Empty : "call";
         if (method && (function.Declaration.IsVirtual || function.Declaration.IsOverride))
         {
-            var receiverName = expression.Name[..expression.Name.LastIndexOf('.')];
-            var receiverType = model.ExpressionTypes.First(pair =>
-                pair.Key is IdentifierExpression id && id.Name == receiverName).Value;
+            var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
             var receiverClass = model.Classes[receiverType.StructName!];
             var slotPair = GetVirtualMethods(receiverClass, model).Select((candidate, index) => (candidate, index))
                 .FirstOrDefault(pair => pair.candidate.Name == function.Name
@@ -113,13 +120,40 @@ public sealed partial class LlvmModuleGenerator
                     (uint)slot + 1, "vtable.slot");
                 var rawTarget = builder.BuildLoad2(
                     LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), tableSlot, "vtable.target");
-                var target = builder.BuildBitCast(rawTarget, llvmFunctions[function].FunctionType, "vtable.call");
-                return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, target,
+                return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, rawTarget,
                     arguments.ToArray(), resultName);
             }
         }
         return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function],
             arguments.ToArray(), resultName);
+    }
+
+    // `receiver.name(args)` on a primitive, string, or struct receiver: the receiver is the first argument.
+    private static LLVMValueRef EmitReceiverArgumentCall(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        CallExpression expression,
+        FunctionSymbol function,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var receiverName = expression.Name[..expression.Name.LastIndexOf('.')];
+        var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
+        var receiverValue = values.TryGetValue(receiverName, out var direct)
+            ? direct
+            : builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiverName], receiverName);
+        var arguments = new List<LLVMValueRef> { receiverValue };
+        for (var index = 0; index < expression.Arguments.Count; index++)
+        {
+            var argument = expression.Arguments[index];
+            var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
+            arguments.Add(CoerceValue(builder, value, model.ExpressionTypes[argument],
+                function.Parameters[index + 1].Type, model));
+        }
+        return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function],
+            arguments.ToArray(), function.ReturnType.IsVoid ? string.Empty : "call");
     }
 
     private static LLVMValueRef EmitCallOrInvoke(

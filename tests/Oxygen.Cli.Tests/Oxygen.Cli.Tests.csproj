@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Selects the native LLVM runtime packages, as src/Oxygen.Llvm does. -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Oxygen.Cli\Oxygen.Cli.csproj" />
+  </ItemGroup>
+
+  <!-- The tests run the compiler's apphost, as users do: launching oxygenc.dll with `dotnet` cannot
+       load the LLVM native library, while the apphost can. -->
+  <ItemGroup>
+    <None Include="..\..\src\Oxygen.Cli\bin\$(Configuration)\$(TargetFramework)\oxygenc.exe"
+          Link="oxygenc.exe" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Native LLVM libraries used by the compiler. They are not copied into a project's output folder
+       through a project reference to an executable, so the test project references the package directly. -->
+  <ItemGroup>
+    <PackageReference Include="libLLVM" Version="23.1.0" />
+  </ItemGroup>
+
+</Project>

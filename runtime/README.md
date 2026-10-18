@@ -24,12 +24,15 @@ Runtime implementation files are organized by responsibility:
   throw-site trace capture, and unhandled-exception termination.
 - `src/types.c` handles runtime type registration and relationship checks.
 - `src/memory.c` provides allocation primitives.
-- `src/io.c` provides byte output and primitive formatting.
+- `src/io.c` provides byte output. Formatting of primitive values is done by the
+  standard library, not the runtime.
 - `src/strings.c` provides string/ C-string marshaling.
 
 The output and marshaling helpers use the compiler's `{ ptr, i64 length }`
 string layout. The output functions receive a pointer to this structure to
-keep the C ABI explicit across platforms. Output writes exactly the supplied number of bytes, so embedded
+keep the C ABI explicit across platforms. A string result of an external
+function is written through a trailing out-pointer parameter, which
+`oxygen_c_string_to_string` uses. Output writes exactly the supplied number of bytes, so embedded
 NUL bytes are supported.
 The Oxygen-to-C conversion allocates a NUL-terminated copy. Generic
 `stdlib.memory` allocation uses `oxygen_alloc` and `oxygen_free`; ownership of
@@ -111,9 +114,9 @@ The output is a static archive, not a complete executable. The CLI native
 build passes this archive after the LLVM-generated object file and then links
 any optional `--stdlib` paths as dynamic dependencies. The source standard
 library includes `stdlib.io`, which provides `write_stdout`, `write_stderr`,
-and overloaded `print`/`println` functions for strings and all primitive
-numeric and boolean types. Primitive values use decimal formatting; booleans
-are written as `true` or `false`. Use `--debug` to generate debug symbols for
+and the generic `print`/`println` functions. Values of primitive types, strings,
+and classes implementing `Printable` can be printed. Formatting is written in
+Oxygen. Use `--debug` to generate debug symbols for
 the generated program and select
 another optimization level with `--optimization O0`, `--optimization O1`, or
 `--optimization O2`. The runtime archive always includes debug symbols.

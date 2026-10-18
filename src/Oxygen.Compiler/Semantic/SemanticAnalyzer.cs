@@ -13,9 +13,13 @@ public sealed partial class SemanticAnalyzer
     private readonly HashSet<VariableSymbol> _definitelyNullVariables = [];
     private readonly HashSet<FunctionSymbol> _usedFunctions = [];
     private readonly List<VariableSymbol> _declaredVariables = [];
-    private readonly HashSet<VariableDeclarationStatement> _escapingClassLocals = [];
-    private readonly Dictionary<ForInStatement, IteratorProtocol> _iteratorProtocols = [];
-    private readonly Dictionary<CallExpression, SemanticType> _callReceiverTypes = [];
+    private readonly HashSet<VariableDeclarationStatement> _escapingClassLocals = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<ForInStatement, IteratorProtocol> _iteratorProtocols =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<CallExpression, SemanticType> _callReceiverTypes =
+        new(ReferenceEqualityComparer.Instance);
+    // Calls written as `receiver.name(...)` that resolve to a free function with the receiver as its first argument.
+    private readonly HashSet<CallExpression> _receiverArgumentCalls = new(ReferenceEqualityComparer.Instance);
     private string? _sourceName;
     private readonly Dictionary<string, StructSymbol> _structsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
@@ -123,18 +127,29 @@ public sealed partial class SemanticAnalyzer
         _escapingClassLocals.Clear();
         _iteratorProtocols.Clear();
         _callReceiverTypes.Clear();
+        _receiverArgumentCalls.Clear();
         _structsByName.Clear();
         _enumsByName.Clear();
         _unionsByName.Clear();
         _classesByName.Clear();
         _interfacesByName.Clear();
+        _functionContexts.Clear();
+        _classContexts.Clear();
+        _analyzedSpecializations.Clear();
+        _fieldInitializerOverrides = null;
         _loopDepth = 0;
         _breakableDepth = 0;
+        _sourceName = null;
+
+        string? SourceNameAt(int unitIndex) =>
+            sourceNames is not null && unitIndex < sourceNames.Count ? sourceNames[unitIndex] : null;
 
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
         _functionSymbols = functions;
-        foreach (var unit in compilationUnits)
+        for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
         {
+            var unit = compilationUnits[unitIndex];
+            _sourceName = SourceNameAt(unitIndex);
             var moduleName = unit.ModuleName ?? "program";
             foreach (var declaration in unit.Enums)
             {
@@ -222,8 +237,10 @@ public sealed partial class SemanticAnalyzer
                             property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray()));
             }
         }
-        foreach (var unit in compilationUnits)
+        for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
         {
+            var unit = compilationUnits[unitIndex];
+            _sourceName = SourceNameAt(unitIndex);
             foreach (var declaration in unit.Interfaces)
             {
                 var methods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
@@ -279,32 +296,40 @@ public sealed partial class SemanticAnalyzer
                             Visibility.Public, declaration.Location), Visibility.Public, true)];
                 if (declaration.Destructor is not null && declaration.Destructor.ClassName != declaration.Name)
                     throw Error($"Destructor name must be '{declaration.Name}'", declaration.Destructor.Location);
+                // The parser cannot tell a base class from an interface written after ':', so when the
+                // first name is an interface it is an implemented interface too. Both lists are built here
+                // so that every consumer sees the same implemented interfaces.
+                var interfaceTypes = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
+                {
+                    var types = declaration.InterfaceTypeSyntaxes is { Count: > 0 }
+                        ? declaration.InterfaceTypeSyntaxes.Select(ResolveType).ToList()
+                        : declaration.Interfaces.Select(name => SemanticType.Interface(name)).ToList();
+                    if (declaration.BaseTypeSyntax is { Count: > 0 }
+                        && _interfacesByName.ContainsKey(declaration.BaseTypeSyntax[0].NamedType!))
+                        types.Insert(0, ResolveType(declaration.BaseTypeSyntax[0]));
+                    return types;
+                });
                 _classesByName[declaration.Name] = _classesByName[declaration.Name] with
                 {
                     Fields = fields,
                     Methods = methods,
                     Constructors = constructors,
-                    InterfaceTypes = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
-                    {
-                        var types = declaration.InterfaceTypeSyntaxes is { Count: > 0 }
-                            ? declaration.InterfaceTypeSyntaxes.Select(ResolveType).ToList()
-                            : declaration.Interfaces.Select(name => SemanticType.Interface(name)).ToList();
-                        if (declaration.BaseTypeSyntax is { Count: > 0 }
-                            && _interfacesByName.ContainsKey(declaration.BaseTypeSyntax[0].NamedType!))
-                            types.Insert(0, ResolveType(declaration.BaseTypeSyntax[0]));
-                        return types;
-                    })
+                    InterfaceNames = interfaceTypes.Select(type => type.StructName!).ToArray(),
+                    InterfaceTypes = interfaceTypes
                 };
             }
         }
+        _sourceName = null;
         ValidateClassHierarchy();
         foreach (var className in _classesByName.Keys.ToArray())
             _classesByName[className] = _classesByName[className] with
             {
                 Fields = GetClassFields(className, [])
             };
-        foreach (var unit in compilationUnits)
+        for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
         {
+            var unit = compilationUnits[unitIndex];
+            _sourceName = SourceNameAt(unitIndex);
             foreach (var declaration in unit.Structs)
             {
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () => declaration.Fields
@@ -316,26 +341,40 @@ public sealed partial class SemanticAnalyzer
                 _structsByName[declaration.Name] = _structsByName[declaration.Name] with { Fields = fields };
             }
         }
+        _sourceName = null;
         foreach (var structure in _structsByName.Values)
             ValidateStructLayout(structure, []);
         var functionsByName = new Dictionary<string, List<FunctionSymbol>>(StringComparer.Ordinal);
         var functionSources = new Dictionary<FunctionSymbol, string?>();
         var functionModules = new Dictionary<FunctionSymbol, (string Name, IReadOnlyList<ImportDeclaration> Imports)>();
-        var resolvedCalls = new Dictionary<CallExpression, FunctionSymbol>();
+        // Semantic facts belong to syntax node instances, not to structurally equal nodes: two
+        // identical expressions in different files or different instantiations can differ in type.
+        var resolvedCalls = new Dictionary<CallExpression, FunctionSymbol>(ReferenceEqualityComparer.Instance);
+        var availableModules = compilationUnits
+            .Select(unit => unit.ModuleName ?? "program")
+            .Concat((externalModules ?? []).Select(module => module.ModuleName))
+            .ToHashSet(StringComparer.Ordinal);
         for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
         {
             var unit = compilationUnits[unitIndex];
             var moduleName = unit.ModuleName ?? "program";
+            var sourceName = diagnostics is null || sourceNames is null || unitIndex >= sourceNames.Count
+                ? null
+                : sourceNames[unitIndex];
+            _sourceName = sourceName;
             var importAliases = new HashSet<string>(StringComparer.Ordinal);
             foreach (var import in unit.Imports)
             {
+                if (!availableModules.Contains(import.Name))
+                {
+                    throw Error($"Imported module '{import.Name}' could not be found", import.Location,
+                        import.Name.Length);
+                }
+
                 if (import.Alias is not null && !importAliases.Add(import.Alias))
                     throw Error($"Import alias '{import.Alias}' is declared more than once", import.Location,
                         import.Alias.Length);
             }
-            var sourceName = diagnostics is null || sourceNames is null || unitIndex >= sourceNames.Count
-                ? null
-                : sourceNames[unitIndex];
             foreach (var externalModule in externalModules ?? [])
             {
                 foreach (var external in externalModule.Functions)
@@ -416,9 +455,11 @@ public sealed partial class SemanticAnalyzer
                 functions[declaration] = symbol;
                 functionSources[symbol] = sourceName;
                 functionModules[symbol] = (moduleName, unit.Imports);
+                _functionContexts[declaration] = new DeclarationContext(moduleName, unit.Imports, sourceName);
             }
             foreach (var classDeclaration in unit.Classes)
             {
+                _classContexts[classDeclaration.Name] = new DeclarationContext(moduleName, unit.Imports, sourceName);
                 foreach (var method in _classesByName[classDeclaration.Name].Methods)
                 {
                     var key = method.QualifiedName;
@@ -448,7 +489,7 @@ public sealed partial class SemanticAnalyzer
             ValidateMainFunction(mainFunction, diagnostics, functionSources[mainFunction]);
         }
 
-        var expressionTypes = new Dictionary<Expression, SemanticType>();
+        var expressionTypes = new Dictionary<Expression, SemanticType>(ReferenceEqualityComparer.Instance);
         foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads).ToList())
         {
             if (symbol.IsExternal)
@@ -475,7 +516,9 @@ public sealed partial class SemanticAnalyzer
                     exception.Message,
                     exception.Location,
                     exception.Length,
-                    sourceName: functionSources.GetValueOrDefault(symbol));
+                    sourceName: exception.IsSourceAttributed
+                        ? exception.SourceName
+                        : functionSources.GetValueOrDefault(symbol));
             }
             finally
             {
@@ -517,9 +560,11 @@ public sealed partial class SemanticAnalyzer
                             exception.Message,
                             exception.Location,
                             exception.Length,
-                            sourceName: sourceNames is not null && unitIndex < sourceNames.Count
-                                ? sourceNames[unitIndex]
-                                : null);
+                            sourceName: exception.IsSourceAttributed
+                                ? exception.SourceName
+                                : sourceNames is not null && unitIndex < sourceNames.Count
+                                    ? sourceNames[unitIndex]
+                                    : null);
                     }
                     finally
                     {
@@ -546,9 +591,11 @@ public sealed partial class SemanticAnalyzer
                             exception.Message,
                             exception.Location,
                             exception.Length,
-                            sourceName: sourceNames is not null && unitIndex < sourceNames.Count
-                                ? sourceNames[unitIndex]
-                                : null);
+                            sourceName: exception.IsSourceAttributed
+                                ? exception.SourceName
+                                : sourceNames is not null && unitIndex < sourceNames.Count
+                                    ? sourceNames[unitIndex]
+                                    : null);
                     }
                 }
             }
@@ -561,9 +608,11 @@ public sealed partial class SemanticAnalyzer
         {
             foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads))
             {
+                // The standard library's private helpers are not reported: a program needs only the overloads it uses.
                 if (symbol.QualifiedName != "program.main"
                     && symbol.Visibility != Visibility.Public
                     && !symbol.IsExternal
+                    && !IsStandardLibraryModule(symbol.ModuleName)
                     && !_usedFunctions.Contains(symbol))
                 {
                     ReportWarning(
@@ -586,7 +635,9 @@ public sealed partial class SemanticAnalyzer
                 StringComparer.Ordinal);
         return new SemanticModel(functions, expressionTypes, mainFunction, modules, resolvedCalls, _structsByName, _enumsByName, _unionsByName,
             _classesByName, _interfacesByName, _escapingClassLocals, _iteratorProtocols,
-            aggregateSpecializations);
+            aggregateSpecializations,
+            new Dictionary<CallExpression, SemanticType>(_callReceiverTypes, ReferenceEqualityComparer.Instance),
+            new HashSet<CallExpression>(_receiverArgumentCalls, ReferenceEqualityComparer.Instance));
     }
 
     private static FunctionSymbol CreateConstructorFunctionSymbol(string moduleName, ConstructorSymbol constructor)
@@ -681,14 +732,12 @@ public sealed partial class SemanticAnalyzer
                     throw Error($"Value class '{classSymbol.Name}' cannot declare virtual or override properties",
                         classSymbol.Declaration.Location);
             }
-            var interfaceNames = classSymbol.InterfaceNames.ToList();
+            // A base name that is an interface is already part of InterfaceNames.
             if (classSymbol.BaseTypeName is not null
                 && !_classesByName.ContainsKey(classSymbol.BaseTypeName)
-                && _interfacesByName.ContainsKey(classSymbol.BaseTypeName))
-                interfaceNames.Insert(0, classSymbol.BaseTypeName);
-            else if (classSymbol.BaseTypeName is not null && !_classesByName.ContainsKey(classSymbol.BaseTypeName))
+                && !_interfacesByName.ContainsKey(classSymbol.BaseTypeName))
                 throw Error($"Base class '{classSymbol.BaseTypeName}' is not declared", classSymbol.Declaration.Location);
-            foreach (var interfaceName in interfaceNames)
+            foreach (var interfaceName in classSymbol.InterfaceNames)
                 if (!_interfacesByName.ContainsKey(interfaceName))
                     throw Error($"Interface '{interfaceName}' is not declared", classSymbol.Declaration.Location);
             var inherited = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
@@ -733,7 +782,7 @@ public sealed partial class SemanticAnalyzer
                         property.Declaration.Location, property.Name.Length);
                 }
             }
-            foreach (var contract in GetInterfaceContracts(classSymbol, interfaceNames))
+            foreach (var contract in GetInterfaceContracts(classSymbol, classSymbol.InterfaceNames))
             {
                 if (!classSymbol.Methods.Concat(inherited).Any(method =>
                         method.Name == contract.Name && method.Parameters.Select(parameter => parameter.Type)
@@ -742,7 +791,7 @@ public sealed partial class SemanticAnalyzer
                     throw Error($"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
                         classSymbol.Declaration.Location);
             }
-            foreach (var contract in interfaceNames.SelectMany(name => _interfacesByName[name].DeclaredProperties))
+            foreach (var contract in classSymbol.InterfaceNames.SelectMany(name => _interfacesByName[name].DeclaredProperties))
             {
                 var implementation = classSymbol.Fields.FirstOrDefault(field => field.Name == contract.Name);
                 if (implementation is null || !SemanticTypeComparer.Instance.Equals(implementation.Type, contract.Type))
@@ -934,7 +983,9 @@ public sealed partial class SemanticAnalyzer
                 exception.Message,
                 exception.Location,
                 exception.Length,
-                _sourceName ?? (sourceNames is { Count: > 0 } ? sourceNames[0] : null));
+                exception.IsSourceAttributed
+                    ? exception.SourceName
+                    : _sourceName ?? (sourceNames is { Count: > 0 } ? sourceNames[0] : null));
             return new SemanticResult(null, diagnostics.Diagnostics);
         }
     }
@@ -1139,6 +1190,9 @@ public sealed partial class SemanticAnalyzer
             {
                 ValidateTypeArgumentCount(syntax, _classesByName[syntax.NamedType].DeclaredTypeParameters.Count);
                 var namedClass = SemanticType.Class(syntax.NamedType, ResolveTypeArguments(syntax));
+                if (namedClass.TypeArguments is not null)
+                    ValidateTypeArgumentConstraints(_classesByName[syntax.NamedType].Declaration.DeclaredTypeParameters,
+                        namedClass.TypeArguments, syntax.Location);
                 return syntax.IsPointer ? SemanticType.PointerTo(namedClass) : namedClass;
             }
             if (_interfacesByName.ContainsKey(syntax.NamedType))
@@ -1261,7 +1315,8 @@ public sealed partial class SemanticAnalyzer
             scope = new Scope(null, MarkVariableUsed,
                 SemanticType.Class(ownerClass.Name, ownerTypeArguments.Length == 0 ? null : ownerTypeArguments));
             foreach (var field in ownerClass.Fields)
-                scope.Declare(field.Name, new VariableSymbol(field.Type, field.IsConst, field.Declaration, false));
+                scope.Declare(field.Name, new VariableSymbol(SubstituteGenericType(field.Type, _genericTypes),
+                    field.IsConst, field.Declaration, false));
         }
         _currentOwnerClass = _classesByName.GetValueOrDefault(className);
         _currentIsConstructor = isConstructor;
@@ -1319,13 +1374,15 @@ public sealed partial class SemanticAnalyzer
     {
         foreach (var field in ownerClass.Fields)
         {
-            var initializer = field.Declaration.Initializer;
+            var initializer = _fieldInitializerOverrides?.GetValueOrDefault(field.Declaration)
+                ?? field.Declaration.Initializer;
             if (initializer is null)
                 continue;
+            var fieldType = SubstituteGenericType(field.Type, _genericTypes);
             var valueType = AnalyzeExpression(initializer, scope, functions, moduleName, imports,
-                expressionTypes, resolvedCalls, expectedType: field.Type);
-            if (!CanAssign(field.Type, initializer, valueType))
-                throw Error($"Cannot initialize field '{field.Name}' with {valueType}; expected {field.Type}",
+                expressionTypes, resolvedCalls, expectedType: fieldType);
+            if (!CanAssign(fieldType, initializer, valueType))
+                throw Error($"Cannot initialize field '{field.Name}' with {valueType}; expected {fieldType}",
                     initializer.Location);
         }
     }
@@ -1936,7 +1993,7 @@ public sealed partial class SemanticAnalyzer
         {
             IdentifierExpression identifier => scope.Lookup(identifier.Name, identifier.Location).Type,
             ThisExpression thisExpression => scope.LookupThis(thisExpression.Location),
-            IntegerLiteralExpression integer => SemanticType.FromPrimitive(ParseNumericLiteralType(integer.Lexeme, false)),
+            IntegerLiteralExpression integer => IntegerLiteralType(integer),
             FloatingPointLiteralExpression floating => SemanticType.FromPrimitive(ParseNumericLiteralType(floating.Lexeme, true)),
             StringLiteralExpression => SemanticType.String,
             BooleanLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.Bool),
@@ -2221,8 +2278,10 @@ public sealed partial class SemanticAnalyzer
         if (substitutions.Count != cls.DeclaredTypeParameters.Count)
             throw Error($"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
                 expression.Location);
+        var inferredArguments = cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray();
+        ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, inferredArguments, expression.Location);
         return SemanticType.Class(cls.Name,
-            cls.DeclaredTypeParameters.Count == 0 ? null : cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray());
+            cls.DeclaredTypeParameters.Count == 0 ? null : inferredArguments);
     }
 
     private SemanticType AnalyzeClassConstructionExpression(
@@ -2263,9 +2322,11 @@ public sealed partial class SemanticAnalyzer
         if (substitutions.Count != cls.DeclaredTypeParameters.Count)
             throw Error($"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
                 expression.Location);
+        var inferredArguments = cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray();
+        ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, inferredArguments, expression.Location);
         return SemanticType.Class(
             expression.TypeName,
-            cls.DeclaredTypeParameters.Count == 0 ? null : cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray());
+            cls.DeclaredTypeParameters.Count == 0 ? null : inferredArguments);
     }
 
     private static void InferClassTypeArguments(
@@ -2403,6 +2464,12 @@ public sealed partial class SemanticAnalyzer
                 return SemanticType.FromPrimitive(PrimitiveType.Bool);
             throw Error($"Operator '{expression.Operator}' is not valid for pointer operands", expression.Location);
         }
+
+        // Booleans compare for equality only; ordering and arithmetic on bool are not defined.
+        var boolean = SemanticType.FromPrimitive(PrimitiveType.Bool);
+        if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals
+            && left == boolean && right == boolean)
+            return boolean;
 
         var requiresInteger = expression.Operator is TokenKind.Ampersand or TokenKind.Pipe or TokenKind.Caret
             or TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan or TokenKind.Percent;
@@ -2574,6 +2641,37 @@ public sealed partial class SemanticAnalyzer
                     if (methodCandidates.Length > 0)
                         throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
                 }
+                else if (!receiverType.IsClass && !receiverType.IsInterface)
+                {
+                    // A method call on a primitive, string, or struct receiver names a free function whose first
+                    // parameter has exactly the receiver's type: `value.write()` calls `write(value)`. The receiver
+                    // must match exactly, so an i32 receiver never selects an i64 overload through widening.
+                    var receiverArguments = call.Arguments.Select(argument =>
+                        AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
+                    var receiverCandidates = ResolveFunctions(methodName, moduleName, imports, functions);
+                    // Primitive and string receivers implement Printable through the private functions of std.io,
+                    // which ordinary calls cannot name. The receiver syntax reaches them directly.
+                    if (receiverType.Kind is SemanticTypeKind.Primitive or SemanticTypeKind.String
+                        && functions.TryGetValue($"{PrintableModule}.{methodName}", out var builtin))
+                        receiverCandidates = receiverCandidates.Concat(builtin).Distinct().ToList();
+                    var functionMatches = receiverCandidates
+                        .Where(function => function.Parameters.Count == receiverArguments.Length + 1
+                            && function.Parameters[0].Type == receiverType)
+                        .Where(function => function.Parameters.Skip(1).Select((parameter, index) =>
+                            CanAssign(parameter.Type, call.Arguments[index], receiverArguments[index])).All(match => match))
+                        .ToArray();
+                    if (functionMatches.Length == 1)
+                    {
+                        resolvedCalls[call] = functionMatches[0];
+                        _usedFunctions.Add(functionMatches[0]);
+                        _receiverArgumentCalls.Add(call);
+                        return functionMatches[0].ReturnType;
+                    }
+                    if (functionMatches.Length > 1)
+                        throw Error($"Method call '{methodName}' is ambiguous for a receiver of type {receiverType}",
+                            call.Location);
+                    throw Error($"No function '{methodName}' accepts a receiver of type {receiverType}", call.Location);
+                }
             }
         }
         var overloads = ResolveFunctions(call.Name, moduleName, imports, functions);
@@ -2607,10 +2705,8 @@ public sealed partial class SemanticAnalyzer
             var substitutions = genericFunction.DeclaredGenericParameters
                 .Select((name, index) => (name, type: ResolveType(call.ExplicitTypeArguments[index])))
                 .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
-            var specialized = SpecializeFunction(genericFunction, substitutions, functions);
-            // Analyze the cloned body in the generic declaration's module so
-            // private helpers used by the generic remain visible.
-            AnalyzeFunction(specialized, functions, genericFunction.ModuleName, imports, expressionTypes, resolvedCalls);
+            var specialized = SpecializeFunction(genericFunction, substitutions, functions, call.Location);
+            AnalyzeSpecialization(specialized, genericFunction, functions, imports, expressionTypes, resolvedCalls);
             overloads = [specialized];
         }
         else
@@ -2627,10 +2723,16 @@ public sealed partial class SemanticAnalyzer
                     return returnType == expectedType;
                 }).ToList()
                 : inferred;
+            // Specializations made by other calls are not candidates: the type arguments inferred here select the
+            // one specialization this call uses. Otherwise an argument such as a float literal, which fits both f32
+            // and f64, would match two specializations of the same generic.
+            overloads = overloads.Where(overload => !overload.IsSpecialized).ToList();
             if (inferredMatches.Count == 1)
             {
-                var specialized = SpecializeFunction(inferredMatches[0].candidate, inferredMatches[0].substitutions!, functions);
-                AnalyzeFunction(specialized, functions, inferredMatches[0].candidate.ModuleName, imports, expressionTypes, resolvedCalls);
+                var specialized = SpecializeFunction(inferredMatches[0].candidate, inferredMatches[0].substitutions!, functions,
+                    call.Location);
+                AnalyzeSpecialization(specialized, inferredMatches[0].candidate, functions, imports, expressionTypes,
+                    resolvedCalls);
                 overloads = overloads.Append(specialized).ToList();
             }
         }
@@ -2854,6 +2956,22 @@ public sealed partial class SemanticAnalyzer
         : type is PrimitiveType.I32 or PrimitiveType.U32 ? 32
         : 64;
 
+    // A suffixed literal has its suffix's type. An unsuffixed one is i32 when its value fits, otherwise the
+    // narrowest of i64 and u64 that holds it. A value that fits none of them is an error, not a truncation.
+    private static SemanticType IntegerLiteralType(IntegerLiteralExpression literal)
+    {
+        var lexeme = literal.Lexeme;
+        if (lexeme.TrimStart('0', '1', '2', '3', '4', '5', '6', '7', '8', '9').Length != 0)
+            return SemanticType.FromPrimitive(ParseNumericLiteralType(lexeme, false));
+        if (!ulong.TryParse(lexeme, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var value))
+            throw Error($"Integer literal '{lexeme}' does not fit any supported integer type", literal.Location,
+                lexeme.Length);
+        if (value <= int.MaxValue)
+            return SemanticType.FromPrimitive(PrimitiveType.I32);
+        return SemanticType.FromPrimitive(value <= long.MaxValue ? PrimitiveType.I64 : PrimitiveType.U64);
+    }
+
     private static PrimitiveType ParseNumericLiteralType(string lexeme, bool floating)
     {
         var suffix = lexeme.TrimStart('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.');
@@ -3029,6 +3147,8 @@ public sealed partial class SemanticAnalyzer
             ? replacement
             : type.IsPointer && type.Pointee is not null
                 ? SemanticType.PointerTo(SubstituteGenericType(type.Pointee, substitutions))
+            : type.IsArray && type.ElementType is not null
+                ? SemanticType.ArrayOf(SubstituteGenericType(type.ElementType, substitutions), type.ArrayLength)
             : type.TypeArguments is { Count: > 0 }
                 ? type with
                 {
@@ -3041,8 +3161,11 @@ public sealed partial class SemanticAnalyzer
     private FunctionSymbol SpecializeFunction(
         FunctionSymbol generic,
         IReadOnlyDictionary<string, SemanticType> substitutions,
-        IReadOnlyDictionary<string, List<FunctionSymbol>> functions)
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        SourceLocation location)
     {
+        ValidateTypeArgumentConstraints(generic.Declaration.DeclaredTypeParameters,
+            generic.DeclaredGenericParameters.Select(name => substitutions[name]).ToArray(), location);
         var declaration = CloneFunction(generic.Declaration, substitutions);
         var previous = _genericTypes;
         _genericTypes = substitutions;
@@ -3057,6 +3180,12 @@ public sealed partial class SemanticAnalyzer
             declaration, generic.ModuleName, generic.Visibility, generic.NativeName, false, generic.CInterop, [],
             specializationArguments);
         _genericTypes = previous;
+        _usedFunctions.Add(generic);
+        // Inside a generic body (e.g. `alloc<T>` in `List<T>`) the arguments are still type
+        // parameters. The signature is enough to type-check that body; the concrete
+        // specialization is created when the enclosing generic is instantiated.
+        if (IsOpenSpecialization(symbol))
+            return symbol;
         var mutable = (Dictionary<string, List<FunctionSymbol>>)functions;
         var list = mutable[generic.QualifiedName];
         var existing = list.FirstOrDefault(candidate =>
@@ -3067,83 +3196,12 @@ public sealed partial class SemanticAnalyzer
             return existing;
         list.Add(symbol);
         _functionSymbols?.Add(symbol.Declaration, symbol);
-        _usedFunctions.Add(generic);
         return symbol;
     }
 
     private static FunctionDeclaration CloneFunction(
-        FunctionDeclaration source, IReadOnlyDictionary<string, SemanticType> substitutions)
-    {
-        var types = substitutions;
-        TypeSyntax FromSemantic(SemanticType value, SourceLocation location) =>
-            value.IsPointer
-                ? new TypeSyntax(null, false, location, Pointee: FromSemantic(value.Pointee!, location))
-                : value.Kind == SemanticTypeKind.Primitive
-                    ? new TypeSyntax(value.Primitive, false, location)
-                    : value.Kind == SemanticTypeKind.String
-                        ? new TypeSyntax(null, false, location, IsString: true)
-                        : new TypeSyntax(null, false, location,
-                            NamedType: value.StructName ?? value.EnumName ?? value.GenericParameterName,
-                            TypeArguments: value.TypeArguments?.Select(argument => FromSemantic(argument, location)).ToArray());
-        TypeSyntax Type(TypeSyntax syntax) =>
-            syntax.NamedType is not null && types.TryGetValue(syntax.NamedType, out var substituted)
-                ? FromSemantic(substituted, syntax.Location)
-                : syntax with
-                {
-                    Pointee = syntax.Pointee is null ? null : Type(syntax.Pointee),
-                    ElementType = syntax.ElementType is null ? null : Type(syntax.ElementType),
-                    TypeArguments = syntax.TypeArguments?.Select(Type).ToArray()
-                };
-        Expression Expr(Expression expression) => expression switch
-        {
-            UnaryExpression e => e with { Operand = Expr(e.Operand) },
-            BinaryExpression e => e with { Left = Expr(e.Left), Right = Expr(e.Right) },
-            IsExpression e => e with { Operand = Expr(e.Operand) },
-            ConditionalExpression e => e with
-            {
-                Condition = Expr(e.Condition),
-                WhenTrue = Expr(e.WhenTrue),
-                WhenFalse = Expr(e.WhenFalse)
-            },
-            CallExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray(), TypeArguments = e.TypeArguments?.Select(Type).ToArray() },
-            ClassConstructionExpression e => e with
-            {
-                Arguments = e.Arguments.Select(Expr).ToArray(),
-                TypeArguments = e.TypeArguments?.Select(Type).ToArray()
-            },
-            NewExpression e => e with { Type = Type(e.Type), Arguments = e.Arguments.Select(Expr).ToArray() },
-            CastExpression e => e with { TargetType = Type(e.TargetType), Operand = Expr(e.Operand) },
-            SizeOfExpression e => e with { TargetType = e.TargetType is null ? null : Type(e.TargetType), Operand = e.Operand is null ? null : Expr(e.Operand) },
-            LengthExpression e => e with { Target = Expr(e.Target) },
-            MemberAccessExpression e => e with { Target = Expr(e.Target) },
-            IndexExpression e => e with { Target = Expr(e.Target), Index = Expr(e.Index) },
-            ArrayLiteralExpression e => e with { Elements = e.Elements.Select(Expr).ToArray() },
-            StructLiteralExpression e => e with { Fields = e.Fields.Select(f => f with { Value = Expr(f.Value) }).ToArray() },
-            UnionConstructionExpression e => e with { Arguments = e.Arguments.Select(Expr).ToArray() },
-            _ => expression
-        };
-        Statement Stmt(Statement statement) => statement switch
-        {
-            BlockStatement s => s with { Statements = s.Statements.Select(Stmt).ToArray() },
-            VariableDeclarationStatement s => s with { Type = Type(s.Type), Initializer = s.Initializer is null ? null : Expr(s.Initializer) },
-            AssignmentStatement s => s with { Target = Expr(s.Target), Value = Expr(s.Value) },
-            ReturnStatement s => s with { Value = s.Value is null ? null : Expr(s.Value) },
-            ExpressionStatement s => s with { Expression = Expr(s.Expression) },
-            IfStatement s => s with { Condition = Expr(s.Condition), Then = Stmt(s.Then), Else = s.Else is null ? null : Stmt(s.Else) },
-            WhileStatement s => s with { Condition = Expr(s.Condition), Body = Stmt(s.Body) },
-            ForStatement s => s with { Initializer = s.Initializer is null ? null : Stmt(s.Initializer), Condition = s.Condition is null ? null : Expr(s.Condition), Increment = s.Increment is null ? null : Stmt(s.Increment), Body = Stmt(s.Body) },
-            ForInStatement s => s with { VariableType = Type(s.VariableType), Collection = Expr(s.Collection), Body = Stmt(s.Body) },
-            SwitchStatement s => s with { Value = Expr(s.Value), Cases = s.Cases.Select(c => c with { Body = Stmt(c.Body) }).ToArray() },
-            _ => statement
-        };
-        return source with
-        {
-            ReturnType = Type(source.ReturnType),
-            Parameters = source.Parameters.Select(p => p with { Type = Type(p.Type) }).ToArray(),
-            Body = (BlockStatement)Stmt(source.Body),
-            TypeParameters = []
-        };
-    }
+        FunctionDeclaration source, IReadOnlyDictionary<string, SemanticType> substitutions) =>
+        new InstantiationCloner(substitutions).Function(source, substitutesOwnTypeParameters: true);
 
     private static bool IsAddressable(Expression expression, Scope scope) =>
         expression switch

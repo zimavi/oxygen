@@ -6,3 +6,8 @@ public union Option<T> {
     Some(T);
     None;
 }
+
+public union Result<T, E> {
+    Ok(T);
+    Err(E);
+}

@@ -23,12 +23,12 @@ class Counter {
 Classes may specify one base class and implemented interfaces:
 
 ```oxygen
-interface Printable {
-    void print();
+interface Labeled {
+    void label();
 }
 
-class Counter : Printable {
-    void print() {
+class Counter : Labeled {
+    void label() {
     }
 }
 ```
@@ -200,11 +200,11 @@ function arguments and return values:
 
 ```oxygen
 class Animal { }
-interface Printable { }
-class Cat : Animal, Printable { }
+interface Labeled { }
+class Cat : Animal, Labeled { }
 
 Animal animal = new Cat();
-Printable printable = new Cat();
+Labeled printable = new Cat();
 ```
 
 The reverse conversion is a checked explicit cast:

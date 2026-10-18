@@ -199,12 +199,16 @@ public sealed partial class LlvmModuleGenerator
             or TokenKind.LessThan or TokenKind.LessThanOrEquals
             or TokenKind.GreaterThan or TokenKind.GreaterThanOrEquals)
         {
-            if (isFloatingPoint)
+            // A comparison yields bool, so its operands decide between float and integer predicates.
+            var operandsAreFloatingPoint = leftType.Primitive is PrimitiveType.F32 or PrimitiveType.F64
+                || rightType.Primitive is PrimitiveType.F32 or PrimitiveType.F64;
+            if (operandsAreFloatingPoint)
             {
                 var predicate = expression.Operator switch
                 {
                     TokenKind.EqualsEquals => LLVMRealPredicate.LLVMRealOEQ,
-                    TokenKind.BangEquals => LLVMRealPredicate.LLVMRealONE,
+                    // Unordered: NaN is not equal to anything, including itself.
+                    TokenKind.BangEquals => LLVMRealPredicate.LLVMRealUNE,
                     TokenKind.LessThan => LLVMRealPredicate.LLVMRealOLT,
                     TokenKind.LessThanOrEquals => LLVMRealPredicate.LLVMRealOLE,
                     TokenKind.GreaterThan => LLVMRealPredicate.LLVMRealOGT,
@@ -212,14 +216,15 @@ public sealed partial class LlvmModuleGenerator
                 };
                 return builder.BuildFCmp(predicate, left, right, "fcmp");
             }
+            var unsignedOperands = IsUnsignedInteger(leftType) || IsUnsignedInteger(rightType);
             var intPredicate = expression.Operator switch
             {
                 TokenKind.EqualsEquals => LLVMIntPredicate.LLVMIntEQ,
                 TokenKind.BangEquals => LLVMIntPredicate.LLVMIntNE,
-                TokenKind.LessThan => LLVMIntPredicate.LLVMIntSLT,
-                TokenKind.LessThanOrEquals => LLVMIntPredicate.LLVMIntSLE,
-                TokenKind.GreaterThan => LLVMIntPredicate.LLVMIntSGT,
-                _ => LLVMIntPredicate.LLVMIntSGE
+                TokenKind.LessThan => unsignedOperands ? LLVMIntPredicate.LLVMIntULT : LLVMIntPredicate.LLVMIntSLT,
+                TokenKind.LessThanOrEquals => unsignedOperands ? LLVMIntPredicate.LLVMIntULE : LLVMIntPredicate.LLVMIntSLE,
+                TokenKind.GreaterThan => unsignedOperands ? LLVMIntPredicate.LLVMIntUGT : LLVMIntPredicate.LLVMIntSGT,
+                _ => unsignedOperands ? LLVMIntPredicate.LLVMIntUGE : LLVMIntPredicate.LLVMIntSGE
             };
             return builder.BuildICmp(intPredicate, left, right, "icmp");
         }
@@ -236,16 +241,26 @@ public sealed partial class LlvmModuleGenerator
             TokenKind.Plus => builder.BuildAdd(left, right, "add"),
             TokenKind.Minus => builder.BuildSub(left, right, "sub"),
             TokenKind.Star => builder.BuildMul(left, right, "mul"),
-            TokenKind.Slash => builder.BuildSDiv(left, right, "div"),
-            TokenKind.Percent => builder.BuildSRem(left, right, "rem"),
+            TokenKind.Slash => IsUnsignedInteger(leftType)
+                ? builder.BuildUDiv(left, right, "div")
+                : builder.BuildSDiv(left, right, "div"),
+            TokenKind.Percent => IsUnsignedInteger(leftType)
+                ? builder.BuildURem(left, right, "rem")
+                : builder.BuildSRem(left, right, "rem"),
             TokenKind.Ampersand => builder.BuildAnd(left, right, "and"),
             TokenKind.Pipe => builder.BuildOr(left, right, "or"),
             TokenKind.Caret => builder.BuildXor(left, right, "xor"),
             TokenKind.LessThanLessThan => builder.BuildShl(left, right, "shl"),
-            TokenKind.GreaterThanGreaterThan => builder.BuildAShr(left, right, "ashr"),
+            TokenKind.GreaterThanGreaterThan => IsUnsignedInteger(leftType)
+                ? builder.BuildLShr(left, right, "lshr")
+                : builder.BuildAShr(left, right, "ashr"),
             _ => throw new InvalidOperationException($"Unsupported binary operator '{expression.Operator}'.")
         };
     }
+
+    private static bool IsUnsignedInteger(SemanticType type) =>
+        type.Primitive is PrimitiveType.U8 or PrimitiveType.U16 or PrimitiveType.U32 or PrimitiveType.U64
+            or PrimitiveType.USize;
 
     private static SemanticType CommonNumericType(SemanticType left, SemanticType right)
     {
@@ -302,6 +317,8 @@ public sealed partial class LlvmModuleGenerator
         if (expression.Operator == TokenKind.Star)
             return builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[expression], model), operand, "deref");
         var isFloatingPoint = model.ExpressionTypes[expression].Primitive is PrimitiveType.F32 or PrimitiveType.F64;
+        if (expression.Operator == TokenKind.Bang)
+            return builder.BuildNot(operand, "not");
         return expression.Operator == TokenKind.Minus
             ? isFloatingPoint
                 ? builder.BuildFNeg(operand, "fneg")

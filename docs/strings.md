@@ -32,9 +32,43 @@ does not perform IO.
 
 ## I/O
 
-The `stdlib.io` module provides `write_stdout(string)`,
-`write_stderr(string)`, `print(string)`, and `println(string)`. The first two
-functions call the runtime's `oxygen_write_stdout` and
-`oxygen_write_stderr` primitives. They write the string's exact byte length,
-including embedded zero bytes; `println` appends a newline after the supplied
-value.
+The `stdlib.io` module provides `write_stdout(string)`, `write_stderr(string)`,
+and the generic `print<T : Printable>(T)` and `println<T : Printable>(T)`. The
+first two functions call the runtime's `oxygen_write_stdout` and
+`oxygen_write_stderr` primitives, which are the only output primitives in the
+runtime. They write the string's exact byte length, including embedded zero
+bytes. `println` appends a newline after the supplied value.
+
+`print` and `println` accept any type that implements `Printable`. Strings and
+the primitive types implement it by a built-in rule; each one is written by a
+`write` function in `stdlib.io`, so formatting is ordinary Oxygen code:
+
+- Integers are written in decimal, with a leading `-` when negative.
+- `bool` is written as `true` or `false`.
+- Floating-point values are written with six digits after the decimal point,
+  rounded half up, with trailing zeros removed (`0.1 + 0.2` is `0.3`, `3.0` is
+  `3`). NaN is written as `nan`, and infinities as `inf` or `-inf`. A finite
+  value of 2^64 or more is written as its exact integer value, so `2^96` prints
+  all 29 digits.
+
+A class prints by implementing `Printable` with a `void write()` method:
+
+```oxygen
+import std.io;
+
+class Point : Printable {
+    i32 x;
+    i32 y;
+    Point(i32 x, i32 y) { this.x = x; this.y = y; }
+    void write() {
+        io.print(x);
+        io.print(",");
+        io.print(y);
+    }
+}
+
+i32 main() {
+    io.println(new Point(3, -4)); // 3,-4
+    return 0;
+}
+```

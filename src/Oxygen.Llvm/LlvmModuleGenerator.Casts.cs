@@ -203,7 +203,7 @@ public sealed partial class LlvmModuleGenerator
             var sourceName = source.IsClass
                 ? GetTypeName(builder, source.StructName!)
                 : builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                    objectValue, "cast.source.type");
+                    objectValue, "interface.type");
             builder.BuildCall2(_invalidCast.FunctionType, _invalidCast,
                 [sourceName, GetTypeName(builder, target.StructName!)]);
             builder.BuildUnreachable();

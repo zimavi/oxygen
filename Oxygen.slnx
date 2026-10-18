@@ -3,6 +3,7 @@
     <Project Path="src/Oxygen.Cli/Oxygen.Cli.csproj" />
     <Project Path="src/Oxygen.Compiler/Oxygen.Compiler.csproj" />
     <Project Path="src/Oxygen.Llvm/Oxygen.Llvm.csproj" />
+    <Project Path="tests/Oxygen.Cli.Tests/Oxygen.Cli.Tests.csproj" />
     <Project Path="tests/Oxygen.Compiler.Tests/Oxygen.Compiler.Tests.csproj" />
   </Folder>
 </Solution>

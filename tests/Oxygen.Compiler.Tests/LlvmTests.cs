@@ -244,7 +244,7 @@ public sealed class LlvmTests
         Assert.Contains("Unsupported native metadata format version", exception.Message);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsImmutableStringAsPointerAndLengthAggregate()
     {
         var model = Analyze(
@@ -257,7 +257,7 @@ public sealed class LlvmTests
         Assert.Contains("hello", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsSynthesizedConstructorAggregateZeroInitialization()
     {
         var model = Analyze(
@@ -272,7 +272,7 @@ public sealed class LlvmTests
         Assert.Contains("zeroinitializer", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsMutuallyRecursiveClassFields()
     {
         var model = Analyze(
@@ -287,13 +287,13 @@ public sealed class LlvmTests
         Assert.Contains("%class.Exception", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsSizeOfForMutuallyRecursiveReferenceClasses()
     {
         var model = Analyze(
             "class StackTrace { Exception exception_object; } " +
             "class Exception { StackTrace stack_trace; } " +
-            "u64 size_of_exception() { return sizeof(Exception); } " +
+            "u64 size_of_exception() { return sizeof<Exception>(); } " +
             "i32 main() { return 0; }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
@@ -302,7 +302,7 @@ public sealed class LlvmTests
         Assert.Contains("ret i64 8", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsVirtualClassCallThroughVtableSlot()
     {
         var model = Analyze(
@@ -318,7 +318,7 @@ public sealed class LlvmTests
         Assert.Contains("bitcast", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsArrayElementPassedToAFunction()
     {
         var model = Analyze(
@@ -371,7 +371,7 @@ public sealed class LlvmTests
         }
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsVoidMainAsVoidAndNativeMainReturnsZero()
     {
         var model = Analyze("void main() { return; }");
@@ -386,7 +386,7 @@ public sealed class LlvmTests
         Assert.Contains("ret i32 0", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsVoidCallsWithoutAnAssignedResult()
     {
         var model = Analyze(
@@ -399,7 +399,7 @@ public sealed class LlvmTests
         Assert.DoesNotContain("%call = call void @_Ox_v0_m7program_f6notify()", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsClassAndInterfaceReferenceCasts()
     {
         var model = Analyze(
@@ -423,12 +423,14 @@ public sealed class LlvmTests
         Assert.Contains("__oxygen_runtime_invalid_cast", ir);
         Assert.Contains("oxygen.type.info.Item", ir);
         Assert.Contains("oxygen.type.info.Printable", ir);
-        Assert.Contains("type.kind", ir);
+        // The kind field is written through a constant address, which LLVM does not name, so the
+        // assertion checks the stored value: 2 is the interface kind.
+        Assert.Contains("store i32 2, ptr getelementptr", ir);
         Assert.Contains("interface.type", ir);
         Assert.Contains("cast.failure", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsCallableInterfaceMethodTableAndIndirectCall()
     {
         var model = Analyze(
@@ -445,7 +447,79 @@ public sealed class LlvmTests
         Assert.Contains("load ptr", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
+    public void EmitsUnsignedDivisionComparisonAndFloatingPointOrdering()
+    {
+        var model = Analyze(
+            "i32 unsignedTest(u64 value) { if (value < 10) { return 1; } return cast<i32>(value / 10 % 3); } " +
+            "i32 floatTest(f64 value) { if (value < 0.0) { return 1; } return 0; } " +
+            "i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("icmp ult i64", ir);
+        Assert.Contains("udiv i64", ir);
+        Assert.Contains("urem i64", ir);
+        Assert.Contains("fcmp olt double", ir);
+    }
+
+    [Fact]
+    public void EmitsUnorderedFloatingPointInequality()
+    {
+        // NaN is not equal to itself, so inequality must be the unordered predicate.
+        var model = Analyze("i32 check(f64 value) { if (value != value) { return 1; } return 0; } i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("fcmp une double", ir);
+    }
+
+    [Fact]
+    public void StoresIndexedValuesAsTheElementType()
+    {
+        var model = Analyze(
+            "void clear(i8* bytes) { bytes[0] = 0; } i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("store i8 0", ir);
+    }
+
+    [Fact]
+    public void PassesExternalStringResultsThroughAnOutPointer()
+    {
+        var model = Analyze(
+            "@extern(\"oxygen_c_string_to_string\") extern string convert(i8* value); " +
+            "i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("declare void @oxygen_c_string_to_string(ptr, ptr)", ir);
+    }
+
+    [Fact]
+    public void EmitsBooleanNegationAndEquality()
+    {
+        // A parameter is not a compile-time constant, so the operations stay in the IR.
+        var model = Analyze(
+            "i32 check(bool value) { if (!value) { return 1; } " +
+            "if (value == false) { return 2; } if (value != true) { return 3; } return 0; } " +
+            "i32 main() { return check(true); }");
+
+        // Generation verifies the module, so these checks only cover the operations themselves.
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("xor i1", ir);
+        Assert.Contains("icmp eq i1", ir);
+        Assert.Contains("icmp ne i1", ir);
+    }
+
+    [Fact]
     public void EmitsCallableInterfacePropertyTableAndIndirectAccessors()
     {
         var model = Analyze(
@@ -461,7 +535,7 @@ public sealed class LlvmTests
         Assert.Contains("interface.property.call", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsOneDestructorForAnInnerClassTransferredToAnOuterLocal()
     {
         var model = Analyze(
@@ -474,7 +548,7 @@ public sealed class LlvmTests
         Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsNestedDestructorsInReverseScopeOrder()
     {
         var model = Analyze(
@@ -490,7 +564,7 @@ public sealed class LlvmTests
         Assert.True(first >= 0 && second > first);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsDestructorAfterReturnedClassOwnershipIsReceived()
     {
         var model = Analyze(
@@ -504,7 +578,7 @@ public sealed class LlvmTests
         Assert.Contains("@_Ox_v0_m7program_f4make", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void TransfersClassArgumentOwnershipToTheCallee()
     {
         var model = Analyze(
@@ -518,7 +592,7 @@ public sealed class LlvmTests
         Assert.Contains("define void @_Ox_v0_m7program_f7consume_p1", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsExplicitThisFieldAccessWhenParameterShadowsField()
     {
         var model = Analyze(
@@ -531,7 +605,7 @@ public sealed class LlvmTests
         Assert.Contains("field.value", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void ReusesExternalRuntimeAllocationDeclarations()
     {
         var model = Analyze(
@@ -550,7 +624,7 @@ public sealed class LlvmTests
         Assert.DoesNotContain("@oxygen_free.2", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsFloatingPointArithmeticAndNativeMainStub()
     {
         var model = Analyze(
@@ -570,7 +644,7 @@ public sealed class LlvmTests
         Assert.Contains("call i32 @_Ox_v0_m7program_f4main()", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsOverloadedCallsToTheMangledFunction()
     {
         var model = Analyze(
@@ -587,7 +661,7 @@ public sealed class LlvmTests
         Assert.Contains("@_Ox_v0_m7program_f3add_p1_f64", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsControlFlowBlocksAndLoopBranches()
     {
         var model = Analyze(
@@ -621,7 +695,7 @@ public sealed class LlvmTests
         Assert.Contains("br i1", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsIntegerSwitchInstructionAndFallthrough()
     {
         var model = Analyze(
@@ -634,7 +708,7 @@ public sealed class LlvmTests
         Assert.Contains("switch.body", ir);
     }
 
-    [Fact(Skip = "LLVMSharp native library is not installed in this test environment.")]
+    [Fact]
     public void EmitsConditionalExpressionControlFlow()
     {
         var model = Analyze("i32 main() { return true ? 1 : 2; }");

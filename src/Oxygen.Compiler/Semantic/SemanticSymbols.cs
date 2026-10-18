@@ -144,7 +144,9 @@ public sealed class SemanticModel
         IReadOnlyDictionary<string, InterfaceSymbol>? interfaces = null,
         IReadOnlySet<VariableDeclarationStatement>? escapingClassLocals = null,
         IReadOnlyDictionary<ForInStatement, IteratorProtocol>? iteratorProtocols = null,
-        IReadOnlyDictionary<string, string>? aggregateSpecializations = null)
+        IReadOnlyDictionary<string, string>? aggregateSpecializations = null,
+        IReadOnlyDictionary<CallExpression, SemanticType>? callReceiverTypes = null,
+        IReadOnlySet<CallExpression>? receiverArgumentCalls = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -159,6 +161,8 @@ public sealed class SemanticModel
         EscapingClassLocals = escapingClassLocals ?? new HashSet<VariableDeclarationStatement>();
         IteratorProtocols = iteratorProtocols ?? new Dictionary<ForInStatement, IteratorProtocol>();
         AggregateSpecializations = aggregateSpecializations ?? new Dictionary<string, string>();
+        CallReceiverTypes = callReceiverTypes ?? new Dictionary<CallExpression, SemanticType>();
+        ReceiverArgumentCalls = receiverArgumentCalls ?? new HashSet<CallExpression>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -179,4 +183,12 @@ public sealed class SemanticModel
     public IReadOnlySet<VariableDeclarationStatement> EscapingClassLocals { get; }
     public IReadOnlyDictionary<ForInStatement, IteratorProtocol> IteratorProtocols { get; }
     public IReadOnlyDictionary<string, string> AggregateSpecializations { get; }
+
+    // The type of the variable a method call is made on (`receiver.method(...)`), keyed by the
+    // call, so the backend never has to resolve receiver names itself.
+    public IReadOnlyDictionary<CallExpression, SemanticType> CallReceiverTypes { get; }
+
+    // Calls such as `value.write()` on a primitive or struct receiver. The receiver is passed as the first
+    // argument of the resolved function.
+    public IReadOnlySet<CallExpression> ReceiverArgumentCalls { get; }
 }
