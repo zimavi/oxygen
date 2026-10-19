@@ -22,6 +22,9 @@ public sealed partial class SemanticAnalyzer
     private readonly HashSet<VariableDeclarationStatement> _deletedLocals = new(ReferenceEqualityComparer.Instance);
     // Locals deleted on some path to the current point but not on every path.
     private readonly HashSet<VariableDeclarationStatement> _maybeDeletedLocals = new(ReferenceEqualityComparer.Instance);
+    // Every local that is deleted somewhere, and the deletes that may run after the object was already deleted.
+    private readonly HashSet<VariableDeclarationStatement> _deletedAnywhere = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<DeleteStatement> _runtimeCheckedDeletes = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VariableDeclarationStatement> _valueUses = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VariableDeclarationStatement> _autoFreedLocals = new(ReferenceEqualityComparer.Instance);
     private bool _receiverUse;
@@ -145,6 +148,8 @@ public sealed partial class SemanticAnalyzer
         _escapingClassLocals.Clear();
         _deletedLocals.Clear();
         _maybeDeletedLocals.Clear();
+        _deletedAnywhere.Clear();
+        _runtimeCheckedDeletes.Clear();
         _autoFreedLocals.Clear();
         _valueUses.Clear();
         _iteratorProtocols.Clear();
@@ -667,7 +672,9 @@ public sealed partial class SemanticAnalyzer
             new HashSet<CallExpression>(_receiverArgumentCalls, ReferenceEqualityComparer.Instance),
             new Dictionary<SyntaxNode, int>(_constructorSelections, ReferenceEqualityComparer.Instance),
             new Dictionary<ConstructorDeclaration, int>(_constructorChainTargets, ReferenceEqualityComparer.Instance),
-            new HashSet<VariableDeclarationStatement>(_autoFreedLocals, ReferenceEqualityComparer.Instance));
+            new HashSet<VariableDeclarationStatement>(_autoFreedLocals, ReferenceEqualityComparer.Instance),
+            new HashSet<VariableDeclarationStatement>(_deletedAnywhere, ReferenceEqualityComparer.Instance),
+            new HashSet<DeleteStatement>(_runtimeCheckedDeletes, ReferenceEqualityComparer.Instance));
     }
 
     private static FunctionSymbol CreateConstructorFunctionSymbol(string moduleName, ConstructorSymbol constructor)
@@ -2271,6 +2278,10 @@ public sealed partial class SemanticAnalyzer
             {
                 if (_deletedLocals.Contains(declaration))
                     throw Error($"'{identifier.Name}' is already deleted", identifier.Location, identifier.Name.Length);
+                // Deleting a local that may already have been deleted needs a runtime check, not a compile error.
+                if (_maybeDeletedLocals.Contains(declaration))
+                    _runtimeCheckedDeletes.Add(statement);
+                _deletedAnywhere.Add(declaration);
                 _deletedLocals.Add(declaration);
                 _maybeDeletedLocals.Add(declaration);
             }
@@ -2304,13 +2315,31 @@ public sealed partial class SemanticAnalyzer
         return false;
     }
 
+    // A `new` object that the function frees at scope end: never read as a value, and not definitely deleted by the end of
+    // the function. A local that may already be deleted at that point gets a runtime flag in the backend.
+    private bool IsAutomaticallyFreedAllocation(VariableSymbol variable, out VariableDeclarationStatement declaration)
+    {
+        if (variable.Declaration is VariableDeclarationStatement { Initializer: NewExpression } found
+            && IsOwnedClass(variable.Type)
+            && !_deletedLocals.Contains(found)
+            && !_escapingClassLocals.Contains(found)
+            && !_valueUses.Contains(found))
+        {
+            declaration = found;
+            return true;
+        }
+
+        declaration = null!;
+        return false;
+    }
+
     // In an automatic function, an unfreed allocation is freed when its scope ends. This is recorded for the backend.
     private void CollectAutomaticFrees(FunctionSymbol function)
     {
         if (function.Memory != MemoryMode.Automatic)
             return;
         foreach (var variable in _declaredVariables)
-            if (IsUnfreedAllocation(variable, out var declaration))
+            if (IsAutomaticallyFreedAllocation(variable, out var declaration))
                 _autoFreedLocals.Add(declaration);
     }
 

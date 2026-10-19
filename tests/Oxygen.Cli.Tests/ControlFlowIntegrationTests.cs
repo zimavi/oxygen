@@ -402,6 +402,76 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void RuntimeCheckedDeleteReleasesAnObjectOnlyOnce()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            class Box {
+                i32 value = 1;
+
+                ~Box() {
+                    io.print("d");
+                }
+            }
+
+            i32 main() {
+                Box b = new Box();
+                i32 c = 1;
+                if (c == 1) {
+                    delete b;
+                }
+                delete b;
+                io.print("end");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("dend", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void ScopeEndFreeSkipsAnObjectDeletedOnThatPath()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            class Box {
+                i32 value = 1;
+
+                ~Box() {
+                    io.print("d");
+                }
+            }
+
+            void f(i32 c) {
+                Box b = new Box();
+                if (c == 1) {
+                    delete b;
+                }
+            }
+
+            i32 main() {
+                f(1);
+                io.print("a");
+                f(0);
+                io.print("b");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("dadb", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
     public void SizeOfIncludesPadding()
     {
         NativeProgram.RequireNativeToolchain();

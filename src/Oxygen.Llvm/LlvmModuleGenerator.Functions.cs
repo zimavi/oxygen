@@ -493,7 +493,22 @@ public sealed partial class LlvmModuleGenerator
                 var allocated = values.TryGetValue(owned.Name, out var directAllocated)
                     ? directAllocated
                     : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
-                EmitDestroyAndFree(builder, allocated);
+                if (storage.TryGetValue(owned.Name, out var ownedSlot) && _dropFlags.ContainsKey(ownedSlot))
+                {
+                    // A local that may have been deleted already releases its object only while the object is alive.
+                    var scopeRelease = builder.InsertBlock.Parent.AppendBasicBlock("scope.release");
+                    var scopeSkip = builder.InsertBlock.Parent.AppendBasicBlock("scope.skip");
+                    builder.BuildCondBr(builder.BuildLoad2(_context.Int1Type, _dropFlags[ownedSlot], "scope.alive"),
+                        scopeRelease, scopeSkip);
+                    builder.PositionAtEnd(scopeRelease);
+                    EmitDestroyAndFree(builder, allocated);
+                    builder.BuildBr(scopeSkip);
+                    builder.PositionAtEnd(scopeSkip);
+                }
+                else
+                {
+                    EmitDestroyAndFree(builder, allocated);
+                }
                 continue;
             }
             if (!owned.Type.IsClass || !_destructors.TryGetValue(owned.Type.StructName!, out var destructor))

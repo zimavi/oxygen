@@ -45,6 +45,8 @@ public sealed partial class LlvmModuleGenerator
     private static Stack<ExceptionContext> _exceptionContexts = new();
     private static bool _usesExceptions;
     private static bool _usesWindowsSeh;
+    // The runtime "alive" flag of each local that some `delete` releases, keyed by the local's stack slot.
+    private static readonly Dictionary<LLVMValueRef, LLVMValueRef> _dropFlags = new();
     // Context that owns every type and value created during Generate. Type factories must come from this context,
     // not from LLVMTypeRef's static (global-context) properties, or the module fails verification.
     private static LLVMContextRef _context;
@@ -93,6 +95,7 @@ public sealed partial class LlvmModuleGenerator
             _usesWindowsSeh = _usesExceptions && IsWindowsNativeSehTarget();
 
             _classTypes.Clear();
+            _dropFlags.Clear();
             _runtimeTypeInfos.Clear();
             _runtimeTypeInfoType = _context.GetStructType(
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type,

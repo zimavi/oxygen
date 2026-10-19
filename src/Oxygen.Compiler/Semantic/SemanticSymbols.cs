@@ -163,7 +163,9 @@ public sealed class SemanticModel
         IReadOnlySet<CallExpression>? receiverArgumentCalls = null,
         IReadOnlyDictionary<SyntaxNode, int>? constructorSelections = null,
         IReadOnlyDictionary<ConstructorDeclaration, int>? constructorChainTargets = null,
-        IReadOnlySet<VariableDeclarationStatement>? automaticallyFreedLocals = null)
+        IReadOnlySet<VariableDeclarationStatement>? automaticallyFreedLocals = null,
+        IReadOnlySet<VariableDeclarationStatement>? deletedLocals = null,
+        IReadOnlySet<DeleteStatement>? runtimeCheckedDeletes = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -183,6 +185,8 @@ public sealed class SemanticModel
         ConstructorSelections = constructorSelections ?? new Dictionary<SyntaxNode, int>();
         ConstructorChainTargets = constructorChainTargets ?? new Dictionary<ConstructorDeclaration, int>();
         AutomaticallyFreedLocals = automaticallyFreedLocals ?? new HashSet<VariableDeclarationStatement>();
+        DeletedLocals = deletedLocals ?? new HashSet<VariableDeclarationStatement>();
+        RuntimeCheckedDeletes = runtimeCheckedDeletes ?? new HashSet<DeleteStatement>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -205,6 +209,12 @@ public sealed class SemanticModel
     // Locals holding a `new` object in an automatic function that is never deleted and never escapes: the compiler frees
     // the object when the local's scope ends.
     public IReadOnlySet<VariableDeclarationStatement> AutomaticallyFreedLocals { get; }
+
+    // Locals that some `delete` releases. Each gets a runtime flag that says whether its object is still alive.
+    public IReadOnlySet<VariableDeclarationStatement> DeletedLocals { get; }
+
+    // Deletes that may run after their object was already deleted, so they test the runtime flag first.
+    public IReadOnlySet<DeleteStatement> RuntimeCheckedDeletes { get; }
     public IReadOnlyDictionary<ForInStatement, IteratorProtocol> IteratorProtocols { get; }
     public IReadOnlyDictionary<string, string> AggregateSpecializations { get; }
 

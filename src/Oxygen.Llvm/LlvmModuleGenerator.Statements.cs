@@ -23,7 +23,10 @@ public sealed partial class LlvmModuleGenerator
         return _exceptionPointer;
     }
 
-    // Allocas go at the top of the function's entry block. A declaration inside a loop then reuses one slot instead of
+    // Sets the runtime flag of a local that some `delete` releases: true while its object is alive.
+    private static void SetDropFlag(LLVMBuilderRef builder, LLVMValueRef slot, bool alive) =>
+        builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int1Type, alive ? 1UL : 0UL, false), _dropFlags[slot]);
+
     // growing the stack on every iteration, and mem2reg can promote the slot.
     private static LLVMValueRef BuildEntryAlloca(LLVMBuilderRef builder, LLVMTypeRef type, string name)
     {
@@ -119,7 +122,12 @@ public sealed partial class LlvmModuleGenerator
                     declaredValue = CoerceValue(builder, initializer,
                         model.ExpressionTypes[declaration.Initializer], declaredType, model);
                 }
-                DeclareLocalSlot(builder, values, storage, declaration.Name, ToLlvmType(declaredType, model), declaredValue);
+                var declaredSlot = DeclareLocalSlot(builder, values, storage, declaration.Name, ToLlvmType(declaredType, model), declaredValue);
+                if (model.DeletedLocals.Contains(declaration))
+                {
+                    _dropFlags[declaredSlot] = BuildEntryAlloca(builder, _context.Int1Type, declaration.Name + ".alive");
+                    SetDropFlag(builder, declaredSlot, declaration.Initializer is NewExpression);
+                }
                 // A stack object (or a value class) is destroyed at scope end. An object from `new` is not: its owner
                 // releases it with `delete`.
                 if (declaredType.IsClass && (IsValueClass(declaredType, model) || declaration.Initializer is ClassConstructionExpression
@@ -136,8 +144,13 @@ public sealed partial class LlvmModuleGenerator
                     && sourceIdentifier.Name != assignmentIdentifier.Name)
                     TransferOwnership(sourceIdentifier.Name, assignmentIdentifier.Name);
                 if (assignment.Target is IdentifierExpression identifier)
+                {
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                         model.ExpressionTypes[assignment.Target], model), storage[identifier.Name]);
+                    // Assigning a new object makes the local alive again; any other value leaves it not owning an object.
+                    if (_dropFlags.ContainsKey(storage[identifier.Name]))
+                        SetDropFlag(builder, storage[identifier.Name], assignment.Value is NewExpression);
+                }
                 else if (assignment.Target is MemberAccessExpression member
                     && member.Target is IdentifierExpression targetIdentifier)
                 {
@@ -654,11 +667,36 @@ public sealed partial class LlvmModuleGenerator
             case DeleteStatement deleteStatement:
                 {
                     var target = EmitExpression(context, builder, deleteStatement.Target, values, storage, model, llvmFunctions);
-                    var targetType = model.ExpressionTypes[deleteStatement.Target];
-                    // The object is released through its runtime type, so the destructor of its most derived class runs.
-                    EmitDestroyAndFree(builder, target);
-                    if (deleteStatement.Target is IdentifierExpression deleted)
-                        RemoveOwned(deleted.Name);
+                    if (deleteStatement.Target is IdentifierExpression deleted && storage.TryGetValue(deleted.Name, out var deletedSlot)
+                        && _dropFlags.ContainsKey(deletedSlot))
+                    {
+                        // A delete that may run after the object was already deleted only releases a live object.
+                        if (model.RuntimeCheckedDeletes.Contains(deleteStatement))
+                        {
+                            var deleteRelease = function.AppendBasicBlock("delete.release");
+                            var deleteSkip = function.AppendBasicBlock("delete.skip");
+                            builder.BuildCondBr(builder.BuildLoad2(_context.Int1Type, _dropFlags[deletedSlot], "delete.alive"),
+                                deleteRelease, deleteSkip);
+                            builder.PositionAtEnd(deleteRelease);
+                            EmitDestroyAndFree(builder, target);
+                            builder.BuildBr(deleteSkip);
+                            builder.PositionAtEnd(deleteSkip);
+                        }
+                        else
+                        {
+                            EmitDestroyAndFree(builder, target);
+                        }
+                        // The flag, not the owned list, tracks whether the object is still alive: a delete on one path
+                        // must not stop the scope end from freeing it on the other.
+                        SetDropFlag(builder, deletedSlot, false);
+                    }
+                    else
+                    {
+                        // The object is released through its runtime type, so the destructor of its most derived class runs.
+                        EmitDestroyAndFree(builder, target);
+                        if (deleteStatement.Target is IdentifierExpression released)
+                            RemoveOwned(released.Name);
+                    }
                     return false;
                 }
             case ThrowStatement throwStatement:
