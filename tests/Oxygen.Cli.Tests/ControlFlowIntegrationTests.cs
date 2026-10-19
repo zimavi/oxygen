@@ -745,6 +745,112 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void VirtualCallThroughANullClassReferenceThrowsNullReferenceException()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Base {
+                virtual i32 value() { return 1; }
+            }
+
+            class Holder {
+                Base inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                Base item = holder.inner;
+                try {
+                    io.print(item.value());
+                } catch (NullReferenceException error) {
+                    io.print(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("The member 'value' was called through a null class reference.", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void InterfaceCallThroughANullReferenceThrowsNullReferenceException()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            interface Numbered {
+                i32 value();
+            }
+
+            class Item : Numbered {
+                i32 value() { return 7; }
+            }
+
+            class Holder {
+                Numbered inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                Numbered item = holder.inner;
+                try {
+                    io.print(item.value());
+                } catch (NullReferenceException error) {
+                    io.print(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("The member 'value' was called through a null class reference.", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void NonVirtualMethodCallThroughANullClassReferenceThrowsNullReferenceException()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                i32 get() { return 3; }
+            }
+
+            class Holder {
+                Box inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                Box box = holder.inner;
+                try {
+                    io.print(box.get());
+                } catch (NullReferenceException error) {
+                    io.print(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("The member 'get' was called through a null class reference.", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
     public void BreakInsideACatchBodyLeavesTheLoop()
     {
         NativeProgram.RequireNativeToolchain();

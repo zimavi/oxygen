@@ -51,6 +51,7 @@ public sealed partial class LlvmModuleGenerator
             {
                 var table = builder.BuildExtractValue(receiverValue, 1, "interface.table");
                 receiverValue = builder.BuildExtractValue(receiverValue, 0, "interface.data");
+                EmitNullReferenceCheck(builder, receiverValue, function.Name, "called", model, llvmFunctions);
                 var iface = model.Interfaces[receiverType.StructName!];
                 var contract = function;
                 var slot = _interfaceSlots[iface.Name].ToList().IndexOf(contract);
@@ -76,6 +77,11 @@ public sealed partial class LlvmModuleGenerator
                 return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, interfaceTarget,
                     arguments.ToArray(), function.ReturnType.IsVoid ? string.Empty : "interface.call");
             }
+            // A method call through a null class reference raises NullReferenceException, even when the method body
+            // never touches the receiver. `this` inside a method is never null.
+            var callee = model.Classes[receiverType.StructName!];
+            if (receiver != "this" && !callee.IsValue)
+                EmitNullReferenceCheck(builder, receiverValue, function.Name, "called", model, llvmFunctions);
             arguments.Add(receiverValue);
         }
         for (var index = 0; index < expression.Arguments.Count; index++)

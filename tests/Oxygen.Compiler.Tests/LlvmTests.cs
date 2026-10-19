@@ -342,7 +342,7 @@ public sealed class LlvmTests
     public void EmitsVirtualClassCallThroughVtableSlot()
     {
         var model = Analyze(
-            "class Base { virtual i32 value() { return 1; } } " +
+            NullReferenceClasses + "class Base { virtual i32 value() { return 1; } } " +
             "class Child : Base { override i32 value() { return 2; } } " +
             "i32 main() { Base value = new Child(); return value.value(); }");
 
@@ -471,7 +471,7 @@ public sealed class LlvmTests
     public void EmitsCallableInterfaceMethodTableAndIndirectCall()
     {
         var model = Analyze(
-            "interface Printable { i32 value(); } " +
+            NullReferenceClasses + "interface Printable { i32 value(); } " +
             "class Item : Printable { i32 value() { return 7; } } " +
             "i32 main() { Printable printable = new Item(); return printable.value(); }");
 
@@ -1045,6 +1045,13 @@ public sealed class LlvmTests
         var exception = Assert.Throws<LlvmVerificationException>(() => LlvmModuleVerifier.Verify(broken));
         Assert.Contains("does not have terminator", exception.Message);
     }
+
+    // The generator needs std.exception's NullReferenceException for checks on method calls and member access. Unit
+    // tests do not load the standard library, so these tests declare the part of it that the checks use.
+    private const string NullReferenceClasses =
+        "class Exception { public string message; public Exception(string message) { this.message = message; } } " +
+        "class RuntimeException : Exception { public RuntimeException(string message) : base(message) {} } " +
+        "class NullReferenceException : RuntimeException { public NullReferenceException(string message) : base(message) {} } ";
 
     private static SemanticModel Analyze(string source)
     {
