@@ -2119,6 +2119,20 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void StructLayoutErrorsInAnotherFileAreAttributedToThatFile()
+    {
+        var library = new Parser(_tokenizer.Tokenize("struct Node { Node next; }"), Log.Logger).Parse();
+        var main = new Parser(_tokenizer.Tokenize("i32 main() { return 0; }"), Log.Logger).Parse();
+
+        var result = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics(
+            [main, library], ["main.oxy", "stdlib/memory.oxy"]);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Contains("recursive by-value field", diagnostic.Message);
+        Assert.Equal("stdlib/memory.oxy", diagnostic.SourceName);
+    }
+
+    [Fact]
     public void MemberAccessOnTheNullLiteralIsRejectedAsNullHavingNoMembers()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze(
