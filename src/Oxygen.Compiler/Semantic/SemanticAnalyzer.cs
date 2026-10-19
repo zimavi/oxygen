@@ -2751,17 +2751,18 @@ public sealed partial class SemanticAnalyzer
                         .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
                     var methodArgumentTypes = call.Arguments.Select(argument =>
                         AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
-                    var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
-                        .Where(method => method.Parameters.Select((parameter, index) =>
-                            CanAssign(SubstituteGenericType(parameter.Type, substitutions),
-                                call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
-                    if (expectedType is not null)
-                    {
-                        var exactExpected = methodMatches.Where(method =>
-                            SubstituteGenericType(method.ReturnType, substitutions) == expectedType).ToArray();
-                        if (exactExpected.Length == 1)
-                            methodMatches = exactExpected;
-                    }
+                    // Same ranking as free functions: the closest candidates win, and the return type never selects one.
+                    var methodRanked = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
+                        .Select(method => (method, cost: CandidateCost(method, call, methodArgumentTypes, substitutions)))
+                        .Where(item => item.cost is not null)
+                        .Select(item => (item.method, cost: item.cost!.Value))
+                        .ToList();
+                    var methodMatches = methodRanked.Count == 0
+                        ? Array.Empty<FunctionSymbol>()
+                        : methodRanked
+                            .Where(item => item.cost.CompareTo(methodRanked.Min(other => other.cost)) == 0)
+                            .Select(item => item.method)
+                            .ToArray();
                     if (methodMatches.Length == 1)
                     {
                         resolvedCalls[call] = methodMatches[0];
@@ -2769,7 +2770,7 @@ public sealed partial class SemanticAnalyzer
                         return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
                     }
                     if (methodMatches.Length > 1)
-                        throw Error($"Method call '{methodName}' is ambiguous; provide an expected return type", call.Location);
+                        throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
                     if (methodCandidates.Length > 0)
                         throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
                 }
@@ -2792,7 +2793,7 @@ public sealed partial class SemanticAnalyzer
                         return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
                     }
                     if (methodMatches.Length > 1)
-                        throw Error($"Method call '{methodName}' is ambiguous; provide an expected return type", call.Location);
+                        throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
                     if (methodCandidates.Length > 0)
                         throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
                 }
@@ -2994,10 +2995,13 @@ public sealed partial class SemanticAnalyzer
         var crossKind = IsFloatingPointType(actual) != IsFloatingPointType(target) ? 1 : 0;
         if (IsImplicitlySafeNumericConversion(actual, target))
             return new ConversionCost(1, crossKind, 0, 0);
-        // A float value never becomes an integer implicitly, not even when it is a constant.
-        if (IsFloatingPointType(actual) && !IsFloatingPointType(target))
+        // Only an integer constant that fits may narrow implicitly. A float never converts implicitly unless widening.
+        if (IsFloatingPointType(actual))
             return null;
         if (!TryGetConstantNumber(value, out var constant) || !IsRepresentable(constant, target))
+            return null;
+        // An integer constant reaches f32 only when f32 holds its exact value.
+        if (target.Primitive == PrimitiveType.F32 && (double)(float)constant != constant)
             return null;
         return new ConversionCost(1, crossKind, NumericBitWidth(target) < NumericBitWidth(actual) ? 1 : 0, 0);
     }
@@ -3045,12 +3049,19 @@ public sealed partial class SemanticAnalyzer
 
     // The cost of the whole call for one candidate: its worst argument, so a candidate is only as close as its furthest
     // argument. Returns null when some argument has no implicit conversion to its parameter.
-    private ConversionCost? CandidateCost(FunctionSymbol function, CallExpression call, IReadOnlyList<SemanticType> argumentTypes)
+    private ConversionCost? CandidateCost(
+        FunctionSymbol function,
+        CallExpression call,
+        IReadOnlyList<SemanticType> argumentTypes,
+        IReadOnlyDictionary<string, SemanticType>? substitutions = null)
     {
         var worst = ConversionCost.Exact;
         for (var index = 0; index < argumentTypes.Count; index++)
         {
-            var cost = ConversionCostOf(function.Parameters[index].Type, call.Arguments[index], argumentTypes[index]);
+            var parameterType = substitutions is null
+                ? function.Parameters[index].Type
+                : SubstituteGenericType(function.Parameters[index].Type, substitutions);
+            var cost = ConversionCostOf(parameterType, call.Arguments[index], argumentTypes[index]);
             if (cost is null)
                 return null;
             if (cost.Value.CompareTo(worst) > 0)

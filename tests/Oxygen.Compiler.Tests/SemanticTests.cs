@@ -882,12 +882,62 @@ public sealed class SemanticTests
     public void ExactMatchBeatsAWideningOverloadWhicheverArgumentIsGiven()
     {
         var model = Analyze(
-            "i32 pick(i32 value) { return value; } i64 pick(i64 value) { return value + 100; } " +
-            "i32 main() { i32 small = pick(5); i64 large = pick(cast<i64>(5)); return small; }");
+            "i64 pick(i64 value) { return value + 100; } i32 pick(i32 value) { return value; } " +
+            "i32 main() { i32 small = pick(5); return small; }");
 
-        var calls = model.ResolvedCalls.Values.Where(function => function.Name == "pick").ToList();
-        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), calls[0].Parameters[0].Type);
-        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I64), calls[1].Parameters[0].Type);
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), model.ResolvedCalls.Values.Single().Parameters[0].Type);
+    }
+
+    [Fact]
+    public void WideningIsChosenWhenNoOverloadMatchesExactly()
+    {
+        var model = Analyze(
+            "i32 pick(i32 value) { return value; } i64 pick(i64 value) { return value + 100; } " +
+            "i32 main() { i64 large = pick(cast<i64>(5)); return 0; }");
+
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I64), model.ResolvedCalls.Values.Single().Parameters[0].Type);
+    }
+
+    [Fact]
+    public void ExactMatchBeatsWideningForMethodCalls()
+    {
+        var model = Analyze(
+            "class Box { i32 pick(i32 value) { return value; } i64 pick(i64 value) { return value; } } " +
+            "i32 main() { Box box = new Box(); i32 result = box.pick(5); return result; }");
+
+        var call = model.ResolvedCalls.Values.Single(function => function.Name == "pick");
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), call.Parameters[0].Type);
+    }
+
+    [Fact]
+    public void IntegerConstantReachesF32OnlyWhenF32HoldsItsExactValue()
+    {
+        var accepted = Analyze(
+            "f32 take(f32 value) { return value; } i32 main() { f32 result = take(5); return 0; }");
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.F32), accepted.ResolvedCalls.Values.Single().Parameters[0].Type);
+
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "f32 take(f32 value) { return value; } i32 main() { f32 result = take(16777217); return 0; }"));
+        Assert.Contains("expected f32", exception.Message);
+    }
+
+    [Fact]
+    public void IntegerConvertsToFloatOnlyWhenTheFloatHoldsEveryValue()
+    {
+        var model = Analyze(
+            "f64 pick(f64 value) { return value; } i32 main() { f64 result = pick(7); return 0; }");
+
+        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.F64),
+            model.ResolvedCalls.Values.Single().Parameters[0].Type);
+    }
+
+    [Fact]
+    public void RejectsAnI64ArgumentForAnF64ParameterBecauseF64CannotHoldEveryValue()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "f64 take(f64 value) { return value; } i32 main() { i64 big = 1; take(big); return 0; }"));
+
+        Assert.Contains("expected f64", exception.Message);
     }
 
     [Fact]
@@ -898,16 +948,6 @@ public sealed class SemanticTests
             "i32 main() { i64 result = pick(7); return 0; }");
 
         Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I64),
-            model.ResolvedCalls.Values.Single().Parameters[0].Type);
-    }
-
-    [Fact]
-    public void IntegerConvertsToFloatOnlyWhenTheFloatHoldsEveryValue()
-    {
-        var model = Analyze(
-            "f64 pick(f64 value) { return value; } i32 main() { f64 result = pick(7); return 0; }");
-
-        Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.F64),
             model.ResolvedCalls.Values.Single().Parameters[0].Type);
     }
 
@@ -932,13 +972,23 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void InterfaceAndBaseClassOneStepAwayAreAmbiguous()
+    public void AcceptsASwitchWhoseCasesAllReturnThroughFallThrough()
+    {
+        // Analysis succeeds only when every path returns, so the absence of an exception is the assertion.
+        var model = Analyze(
+            "i32 pick(i32 x) { i32 y = 0; switch (x) { case 1: y = 1; case 2: return 2; default: return 3; } } i32 main() { return pick(1); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsAnAmbiguousInterfaceAndBaseClassOverload()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze(
             "interface B { i32 name(); } class A { i32 name() { return 1; } } class C : A, B { i32 name() { return 2; } } " +
             "i32 f(A value) { return 1; } i32 f(B value) { return 2; } i32 main() { C item = new C(); return f(item); }"));
 
-        Assert.Contains("ambiguous", exception.Message);
+        Assert.Contains("is ambiguous: no overload is closer than the others", exception.Message);
     }
 
     [Fact]
@@ -959,15 +1009,6 @@ public sealed class SemanticTests
             "i32 pick(i32 x) { switch (x) { case 1: break; case 2: return 2; default: return 3; } } i32 main() { return 0; }"));
 
         Assert.Contains("must return a value", exception.Message);
-    }
-
-    [Fact]
-    public void AcceptsASwitchWhoseCasesAllReturnThroughFallThrough()
-    {
-        var model = Analyze(
-            "i32 pick(i32 x) { i32 y = 0; switch (x) { case 1: y = 1; case 2: return 2; default: return 3; } } i32 main() { return pick(1); }");
-
-        Assert.Contains(model.Functions.Values, function => function.Name == "pick");
     }
 
     [Fact]
