@@ -239,6 +239,11 @@ public sealed partial class LlvmModuleGenerator
             return builder.BuildIntToPtr(value, ToLlvmType(target, model), "int.to.ptr");
         if (source.IsNumeric && target.IsNumeric)
             return EmitNumericConversion(builder, value, source, target, model);
+        // Semantic analysis admits only the coercions above. A value that already has the target's LLVM type needs
+        // none; any other pair is a compiler bug and is reported instead of producing mistyped IR.
+        if (value.TypeOf != ToLlvmType(target, model))
+            throw new InvalidOperationException(
+                $"Internal compiler error: no coercion from '{source}' to '{target}'.");
         return value;
     }
 

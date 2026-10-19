@@ -946,6 +946,45 @@ public sealed class LlvmTests
     }
 
     [Fact]
+    public void ArgumentCoercionWithNoLoweringIsReportedInsteadOfPassingTheValueThrough()
+    {
+        // Semantic analysis admits only the coercions the backend lowers. This forces an impossible one (bool to i32)
+        // on an argument to check that the backend reports it instead of passing the value through.
+        var tokenizer = new Tokenizer(Log.Logger);
+        var unit = new Parser(tokenizer.Tokenize(
+            "i32 f(i32 x) { return x; } i32 main() { i32 v = 1; return f(v); }"), Log.Logger).Parse();
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([unit]);
+        var call = (CallExpression)((ReturnStatement)unit.Functions[1].Body.Statements[1]).Value!;
+        var argument = call.Arguments[0];
+        ((Dictionary<Expression, SemanticType>)model.ExpressionTypes)[argument] = SemanticType.FromPrimitive(PrimitiveType.Bool);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => new LlvmModuleGenerator().Generate("program", model));
+        Assert.Contains("no coercion from 'bool' to 'i32'", exception.Message);
+    }
+
+    [Fact]
+    public void AFailedGenerationDoesNotChangeTheNextOne()
+    {
+        const string valid = "class Box { i32 value; } i32 main() { Box box = new Box(); return box.value; }";
+        var expected = new LlvmModuleGenerator().Generate("program", Analyze(valid)).ToString();
+
+        // The forced cast fails inside a try, while main owns a local, which leaves the generator partway through both.
+        var tokenizer = new Tokenizer(Log.Logger);
+        var unit = new Parser(tokenizer.Tokenize(
+            "class Box { i32 value; } i32 main() { Box box = new Box(); try { return cast<i32>(1); } finally { } }"),
+            Log.Logger).Parse();
+        var broken = new SemanticAnalyzer(Log.Logger).Analyze([unit]);
+        var tryStatement = (TryStatement)unit.Functions[0].Body.Statements[1];
+        var cast = (CastExpression)((ReturnStatement)tryStatement.Body.Statements[0]).Value!;
+        ((Dictionary<Expression, SemanticType>)broken.ExpressionTypes)[cast] = SemanticType.FromPrimitive(PrimitiveType.Bool);
+        Assert.Throws<InvalidOperationException>(() => new LlvmModuleGenerator().Generate("program", broken));
+
+        var actual = new LlvmModuleGenerator().Generate("program", Analyze(valid)).ToString();
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
     public void ExternWithTheSameSignatureAsARuntimeFunctionSharesItsDeclaration()
     {
         var model = Analyze(
