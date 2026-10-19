@@ -41,7 +41,7 @@ public sealed partial class LlvmModuleGenerator
     {
         var condition = EmitExpression(context, builder, expression.Condition, values, storage, model, llvmFunctions);
         var resultType = model.ExpressionTypes[expression];
-        var resultStorage = builder.BuildAlloca(ToLlvmType(resultType, model), "conditional.result");
+        var resultStorage = BuildEntryAlloca(builder, ToLlvmType(resultType, model), "conditional.result");
         var trueBlock = _currentFunction.AppendBasicBlock("conditional.true");
         var falseBlock = _currentFunction.AppendBasicBlock("conditional.false");
         var mergeBlock = _currentFunction.AppendBasicBlock("conditional.end");

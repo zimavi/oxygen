@@ -526,7 +526,7 @@ public sealed partial class LlvmModuleGenerator
                 address = existingAddress;
             else if (values.TryGetValue(owned.Name, out var direct))
             {
-                address = builder.BuildAlloca(ToLlvmType(owned.Type, model), owned.Name + ".cleanup");
+                address = BuildEntryAlloca(builder, ToLlvmType(owned.Type, model), owned.Name + ".cleanup");
                 builder.BuildStore(direct, address);
             }
             else

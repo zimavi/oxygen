@@ -172,7 +172,7 @@ public sealed partial class LlvmModuleGenerator
         }
         else
         {
-            instance = builder.BuildAlloca(_classTypes[className], "object.addr");
+            instance = BuildEntryAlloca(builder, _classTypes[className], "object.addr");
         }
         if (!cls.IsValue)
         {

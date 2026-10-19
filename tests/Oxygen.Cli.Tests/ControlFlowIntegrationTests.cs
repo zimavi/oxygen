@@ -619,6 +619,34 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("10", run.Output.Replace("\r\n", "\n"));
     }
 
-    private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
-        NativeProgram.BuildAndRun(_directory, source);
+    [SkippableFact]
+    public void TemporariesInsideALoopDoNotGrowTheStackWithoutOptimization()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        // Each iteration evaluates a conditional expression, which needs a temporary. A temporary allocated in the loop
+        // body would take a new stack slot on every iteration, and a million iterations overflow the 1 MB main stack.
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32 total = 0;
+                i32 index = 0;
+                while (index < 1000000) {
+                    total = total + (index == 3 ? 1 : 2);
+                    index = index + 1;
+                }
+                io.print(total);
+                return 0;
+            }
+            """,
+            optimization: "0");
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("1999999", run.Output.Replace("\r\n", "\n"));
+    }
+
+    private (int ExitCode, string Output, string Error) BuildAndRun(string source, string? optimization = null) =>
+        NativeProgram.BuildAndRun(_directory, source, optimization);
 }

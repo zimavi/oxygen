@@ -85,7 +85,7 @@ public sealed partial class LlvmModuleGenerator
             value = CoerceValue(builder, value, model.ExpressionTypes[argument], function.Parameters[index].Type, model);
             if (UsesPointerStringAbi(function) && function.Parameters[index].Type.Kind == SemanticTypeKind.String)
             {
-                var storagePointer = builder.BuildAlloca(ToLlvmStringType(), "cabi.string");
+                var storagePointer = BuildEntryAlloca(builder, ToLlvmStringType(), "cabi.string");
                 builder.BuildStore(value, storagePointer);
                 value = storagePointer;
             }
@@ -97,7 +97,7 @@ public sealed partial class LlvmModuleGenerator
 
         if (ReturnsStringThroughPointer(function))
         {
-            var result = builder.BuildAlloca(ToLlvmStringType(), "cabi.result");
+            var result = BuildEntryAlloca(builder, ToLlvmStringType(), "cabi.result");
             arguments.Add(result);
             EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function],
                 arguments.ToArray(), string.Empty);

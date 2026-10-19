@@ -871,6 +871,64 @@ public sealed class LlvmTests
     }
 
     [Fact]
+    public void StackSlotsAreAllocatedInTheEntryBlockNotInsideLoops()
+    {
+        var model = Analyze(
+            """
+            class Pair {
+                i32 first;
+            }
+
+            i32 main() {
+                i32 total = 0;
+                i32 index = 0;
+                while (index < 4) {
+                    total = total + (index == 1 ? 1 : 2);
+                    Pair pair = new Pair();
+                    index = index + 1;
+                }
+                for (i32 step = 0; step < 2; step = step + 1) {
+                    total = total + step;
+                }
+                while (index < 6) {
+                    i32[2] values = { 1, 2 };
+                    for (var value in values) {
+                        total = total + value;
+                    }
+                    index = index + 1;
+                }
+                return total;
+            }
+            """);
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("alloca", ir);
+        Assert.Contains("for.in.index", ir);
+        Assert.Empty(AllocasOutsideEntryBlock(ir));
+    }
+
+    // Returns the alloca lines that appear after a block label in the same function. The first block of a function is
+    // its entry block, so an alloca is allowed only before the second label.
+    private static List<string> AllocasOutsideEntryBlock(string ir)
+    {
+        var violations = new List<string>();
+        var blockIndex = -1;
+        foreach (var rawLine in ir.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith("define ", StringComparison.Ordinal))
+                blockIndex = -1;
+            else if (System.Text.RegularExpressions.Regex.IsMatch(rawLine, @"^[\w.$-]+:"))
+                blockIndex++;
+            else if (line.Contains("= alloca ") && blockIndex > 0)
+                violations.Add(line);
+        }
+        return violations;
+    }
+
+    [Fact]
     public void VerifierAcceptsAWellFormedModuleAndRejectsABlockWithoutATerminator()
     {
         using var context = LLVMContextRef.Create();

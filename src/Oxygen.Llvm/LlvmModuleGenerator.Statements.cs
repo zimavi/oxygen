@@ -529,7 +529,7 @@ public sealed partial class LlvmModuleGenerator
                             llvmFunctions[protocol.Iter], (ReadOnlySpan<LLVMValueRef>)new[] { protocolCollectionValue },
                             (ReadOnlySpan<char>)"for.in.iter");
                         values[iteratorName] = iteratorValue;
-                        var protocolValueStorage = builder.BuildAlloca(ToLlvmType(protocol.ElementType, model),
+                        var protocolValueStorage = BuildEntryAlloca(builder, ToLlvmType(protocol.ElementType, model),
                             forInStatement.VariableName + ".addr");
                         storage[forInStatement.VariableName] = protocolValueStorage;
                         var protocolConditionBlock = function.AppendBasicBlock("for.in.protocol.cond");
@@ -567,12 +567,12 @@ public sealed partial class LlvmModuleGenerator
                     }
                     var collectionType = model.ExpressionTypes[forInStatement.Collection];
                     var elementType = collectionType.ElementType!;
-                    var collectionStorage = builder.BuildAlloca(ToLlvmType(collectionType, model), "for.in.collection");
+                    var collectionStorage = BuildEntryAlloca(builder, ToLlvmType(collectionType, model), "for.in.collection");
                     var collectionValue = EmitExpression(context, builder, forInStatement.Collection, values, storage, model, llvmFunctions);
                     builder.BuildStore(collectionValue, collectionStorage);
-                    var counter = builder.BuildAlloca(_context.Int64Type, "for.in.index");
+                    var counter = BuildEntryAlloca(builder, _context.Int64Type, "for.in.index");
                     builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), counter);
-                    var valueStorage = builder.BuildAlloca(ToLlvmType(elementType, model), forInStatement.VariableName + ".addr");
+                    var valueStorage = BuildEntryAlloca(builder, ToLlvmType(elementType, model), forInStatement.VariableName + ".addr");
                     var hadPreviousStorage = storage.TryGetValue(forInStatement.VariableName, out var previousStorage);
                     storage[forInStatement.VariableName] = valueStorage;
                     var conditionBlock = function.AppendBasicBlock("for.in.cond");

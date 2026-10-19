@@ -73,15 +73,18 @@ internal static class NativeProgram
         return null;
     }
 
-    // Compiles `source` as main.oxy in `directory` against the runtime, then runs the executable.
-    public static (int ExitCode, string Output, string Error) BuildAndRun(string directory, string source)
+    // Compiles `source` as main.oxy in `directory` against the runtime, then runs the executable. `optimization` is
+    // passed to clang as -O<level>; the default build uses -O2, which can hide stack growth that -O0 exposes.
+    public static (int ExitCode, string Output, string Error) BuildAndRun(string directory, string source, string? optimization = null)
     {
         var sourcePath = Path.Combine(directory, "main.oxy");
         var executable = Path.Combine(directory, "main.exe");
         File.WriteAllText(sourcePath, source);
 
-        var build = RunProcess(CompilerExecutable,
-            ["build", sourcePath, "-o", executable, "-r", RuntimeLibrary]);
+        var arguments = new List<string> { "build", sourcePath, "-o", executable, "-r", RuntimeLibrary };
+        if (optimization is not null)
+            arguments.Add($"-O{optimization}");
+        var build = RunProcess(CompilerExecutable, arguments);
         Assert.True(build.ExitCode == 0, $"Build failed with exit code {build.ExitCode}:\n{build.Error}");
 
         return RunProcess(executable, []);
