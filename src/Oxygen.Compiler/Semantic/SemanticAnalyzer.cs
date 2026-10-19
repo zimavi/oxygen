@@ -1619,12 +1619,17 @@ public sealed partial class SemanticAnalyzer
     {
         var scope = new Scope(parent, MarkVariableUsed);
         var hasReturn = false;
+        // A statement after one that returns, throws, breaks or continues, or after a loop that never ends, is never run.
+        // It is reported once, and not again inside a block that the enclosing code already found unreachable.
+        var entryReachable = _reachable;
+        var reportedUnreachable = false;
 
         foreach (var statement in block.Statements)
         {
-            if (hasReturn)
+            if (!_reachable && entryReachable && !reportedUnreachable)
             {
                 ReportWarning("Unreachable statement", statement.Location);
+                reportedUnreachable = true;
             }
 
             hasReturn |= AnalyzeStatement(statement, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);

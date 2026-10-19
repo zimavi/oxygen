@@ -1497,6 +1497,41 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void StatementAfterBreakIsReportedAsUnreachable()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 main() { i32 i = 0; while (i < 3) { break; i = 5; } return 0; }");
+
+        Assert.Single(result.Diagnostics, diagnostic => diagnostic.Message == "Unreachable statement");
+    }
+
+    [Fact]
+    public void StatementAfterContinueIsReportedAsUnreachable()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 main() { i32 i = 0; while (i < 3) { i = i + 1; continue; i = 5; } return 0; }");
+
+        Assert.Single(result.Diagnostics, diagnostic => diagnostic.Message == "Unreachable statement");
+    }
+
+    [Fact]
+    public void StatementAfterAWhileTrueWithoutBreakIsReportedAsUnreachable()
+    {
+        var result = AnalyzeWithDiagnostics("i32 main() { while (true) { } return 0; }");
+
+        Assert.Single(result.Diagnostics, diagnostic => diagnostic.Message == "Unreachable statement");
+    }
+
+    [Fact]
+    public void AConditionalBreakMakesNoStatementUnreachable()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 main() { i32 i = 0; while (i < 3) { i = i + 1; if (i == 2) { break; } } return 0; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Message == "Unreachable statement");
+    }
+
+    [Fact]
     public void ReportsUnusedNonMainFunctions()
     {
         var result = AnalyzeWithDiagnostics(
