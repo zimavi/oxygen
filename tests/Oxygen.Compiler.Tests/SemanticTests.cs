@@ -1122,6 +1122,16 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RejectsProtectedAccessThroughAReceiverOfTheBaseType()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class A { protected i32 level = 1; } class B : A { i32 read(A other) { return other.level; } } " +
+            "i32 main() { return 0; }"));
+
+        Assert.Contains("'level' of class 'A' is protected", exception.Message);
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));
