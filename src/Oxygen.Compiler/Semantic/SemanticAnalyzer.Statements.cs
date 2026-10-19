@@ -591,20 +591,46 @@ public sealed partial class SemanticAnalyzer
             .Zip(use.TypeArguments ?? [], (name, argument) => (name, argument))
             .ToDictionary(pair => pair.name, pair => pair.argument, StringComparer.Ordinal);
 
-    // A const variable is immutable in every part that an assignment reaches through members and elements. The walk stops at a
-    // pointer, which is the explicit way to mutate through another object.
+    // A const variable is immutable where an assignment reaches it through members and elements. Its value parts (struct and
+    // value-class fields, array elements) are part of it, so none of them change. Its reference objects change only through
+    // their own class: a field of such an object is assigned only inside that class. A pointer is the explicit way to mutate.
     private void RequireMutableChain(Expression target, Scope scope, IDictionary<Expression, SemanticType> expressionTypes)
     {
         var current = target;
         while (current is MemberAccessExpression or IndexExpression)
         {
             var inner = current is MemberAccessExpression member ? member.Target : ((IndexExpression)current).Target;
-            if (expressionTypes.TryGetValue(inner, out var innerType) && innerType.IsPointer)
+            SemanticType? innerType = expressionTypes.TryGetValue(inner, out var found) ? found : null;
+            if (innerType is { IsPointer: true })
                 return;
+            if (current is MemberAccessExpression && innerType is not null && IsOwnedClass(innerType)
+                && ConstRootName(inner, scope, expressionTypes) is { } root)
+            {
+                if (_currentOwnerClass?.Name != innerType.StructName)
+                    throw Error(
+                        $"Cannot assign to a field of const variable '{root}' outside class '{innerType.StructName}'",
+                        target.Location, root.Length);
+                return;
+            }
             if (inner is IdentifierExpression identifier && scope.Lookup(identifier.Name, identifier.Location).IsConst)
                 throw Error($"Cannot assign to a part of const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
             current = inner;
         }
+    }
+
+    // The name of the const variable that an expression reaches through members and elements, or null. A pointer ends the walk.
+    private string? ConstRootName(Expression expression, Scope scope, IDictionary<Expression, SemanticType> expressionTypes)
+    {
+        var current = expression;
+        while (current is MemberAccessExpression or IndexExpression)
+        {
+            current = current is MemberAccessExpression member ? member.Target : ((IndexExpression)current).Target;
+            if (expressionTypes.TryGetValue(current, out var currentType) && currentType.IsPointer)
+                return null;
+        }
+        return current is IdentifierExpression identifier && scope.Lookup(identifier.Name, identifier.Location).IsConst
+            ? identifier.Name
+            : null;
     }
 
     private void ValidateWritableTarget(Expression target, Scope scope, IDictionary<Expression, SemanticType> expressionTypes)
@@ -617,10 +643,6 @@ public sealed partial class SemanticAnalyzer
         }
         else if (target is MemberAccessExpression member)
         {
-            if (member.Target is IdentifierExpression memberIdentifier
-                && scope.Lookup(memberIdentifier.Name, memberIdentifier.Location).IsConst)
-                throw Error($"Cannot assign to a field of const variable '{memberIdentifier.Name}'", target.Location,
-                    memberIdentifier.Name.Length);
             var targetClass = member.Target is ThisExpression && _currentOwnerClass is not null
                 ? _currentOwnerClass
                 : member.Target is IdentifierExpression classIdentifier

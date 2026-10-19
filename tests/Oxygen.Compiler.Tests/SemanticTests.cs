@@ -1773,6 +1773,36 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void FieldOfConstReferenceCannotBeAssignedOutsideItsClass()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Inner { i32 x; } class Outer { Inner inner; } " +
+            "i32 main() { const Outer o = new Outer(); o.inner = new Inner(); return 0; }"));
+
+        Assert.Contains("Cannot assign to a field of const variable 'o' outside class 'Outer'", exception.Message);
+    }
+
+    [Fact]
+    public void FieldOfAnObjectReachedThroughConstReferenceCannotBeAssignedOutsideItsClass()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Inner { i32 x; } class Outer { Inner inner; } " +
+            "i32 main() { const Outer o = new Outer(); o.inner.x = 5; return 0; }"));
+
+        Assert.Contains("outside class 'Inner'", exception.Message);
+    }
+
+    [Fact]
+    public void ConstReferenceCanBeChangedInsideItsClass()
+    {
+        var model = Analyze(
+            "class Counter { i32 count; void bump() { const Counter self = this; self.count = self.count + 1; } } " +
+            "i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void ConstLocalNeedsAnInitializer()
     {
         var exception = Assert.Throws<SemanticException>(() =>
