@@ -169,10 +169,10 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var runtimeInitializeType = LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [], false);
+        var runtimeInitializeType = LLVMTypeRef.CreateFunction(_context.VoidType, [], false);
         var runtimeInitialize = module.AddFunction("__oxygen_runtime_initialize", runtimeInitializeType);
-        var argvType = LLVMTypeRef.CreatePointer(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), 0);
-        var nativeMainType = LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32, [LLVMTypeRef.Int32, argvType], false);
+        var argvType = LLVMTypeRef.CreatePointer(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), 0);
+        var nativeMainType = LLVMTypeRef.CreateFunction(_context.Int32Type, [_context.Int32Type, argvType], false);
         var nativeMain = module.AddFunction("main", nativeMainType);
         if (_usesExceptions)
             nativeMain.PersonalityFn = _personality;
@@ -184,9 +184,9 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildCall2(runtimeInitializeType, runtimeInitialize, []);
         var registerType = module.AddFunction(
             "__oxygen_runtime_register_type",
-            LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
-                [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
+            LLVMTypeRef.CreateFunction(_context.VoidType,
+                [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+                    LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
         foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
         {
             InitializeRuntimeTypeInfo(builder, cls.Name, cls.BaseTypeName, 1, model);
@@ -224,8 +224,8 @@ public sealed partial class LlvmModuleGenerator
                 var catchPad = builder.BuildCatchPad(catchSwitch,
                     new LLVMValueRef[]
                     {
-                        LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)),
-                        LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0))
+                        LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
+                        LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0))
                     },
                     "main.catchpad");
                 using var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad });
@@ -251,10 +251,10 @@ public sealed partial class LlvmModuleGenerator
                     unwind,
                     oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
                 builder.PositionAtEnd(unwind);
-                var landingType = LLVMTypeRef.CreateStruct(
-                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32], false);
+                var landingType = _context.GetStructType(
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type], false);
                 var landingPad = builder.BuildLandingPad(landingType, _personality, 1, "main.landingpad");
-                landingPad.AddClause(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)));
+                landingPad.AddClause(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)));
                 var exception = builder.BuildExtractValue(landingPad, 0, "main.exception");
                 builder.BuildCall2(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
                     new[] { exception }, (ReadOnlySpan<char>)string.Empty);
@@ -269,7 +269,7 @@ public sealed partial class LlvmModuleGenerator
                 oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
         }
         if (oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind)
-            builder.BuildRet(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false));
+            builder.BuildRet(LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false));
         else
             builder.BuildRet(result);
     }
@@ -409,8 +409,8 @@ public sealed partial class LlvmModuleGenerator
         var fileNameValue = builder.BuildGlobalStringPtr(fileName, "oxygen.trace.file");
         builder.BuildCall2(_tracePush.FunctionType, _tracePush,
             [functionNameValue, fileNameValue,
-                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)Math.Max(0, location.Line), false),
-                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)Math.Max(0, location.Column), false)]);
+                LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)Math.Max(0, location.Line), false),
+                LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)Math.Max(0, location.Column), false)]);
     }
 
     private static void EmitTracePop(LLVMBuilderRef builder)

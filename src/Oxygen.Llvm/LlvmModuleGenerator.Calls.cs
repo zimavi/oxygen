@@ -19,7 +19,7 @@ public sealed partial class LlvmModuleGenerator
             if (unionType.EnumName is not null && model.Unions.TryGetValue(unionType.EnumName, out var specializedUnion))
                 union = specializedUnion;
             var result = LLVMValueRef.CreateConstNull(ToLlvmType(unionType, model));
-            result = builder.BuildInsertValue(result, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)index, false), 0, "union.tag");
+            result = builder.BuildInsertValue(result, LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)index, false), 0, "union.tag");
             if (expression.Arguments.Count == 1)
                 result = builder.BuildInsertValue(result,
                     CoerceValue(builder,
@@ -58,10 +58,10 @@ public sealed partial class LlvmModuleGenerator
                     slot = _interfaceSlots[iface.Name].ToList().FindIndex(candidate =>
                         candidate.Name == function.Name && candidate.Parameters.Select(p => p.Type)
                             .SequenceEqual(function.Parameters.Select(p => p.Type)));
-                var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                    table, [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)slot, false)],
+                var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+                    table, [LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)slot, false)],
                     (ReadOnlySpan<char>)"interface.slot");
-                var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                     tableEntry, "interface.target");
                 // Opaque pointers: the loaded pointer is called with the function type directly.
                 var interfaceTarget = rawTarget;
@@ -119,7 +119,7 @@ public sealed partial class LlvmModuleGenerator
                 var tableSlot = builder.BuildStructGEP2(_classTypes[receiverClass.Name], arguments[0],
                     (uint)slot + 1, "vtable.slot");
                 var rawTarget = builder.BuildLoad2(
-                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), tableSlot, "vtable.target");
+                    LLVMTypeRef.CreatePointer(_context.Int8Type, 0), tableSlot, "vtable.target");
                 return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, rawTarget,
                     arguments.ToArray(), resultName);
             }

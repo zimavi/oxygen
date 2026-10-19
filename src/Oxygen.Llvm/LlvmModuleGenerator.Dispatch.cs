@@ -117,12 +117,12 @@ public sealed partial class LlvmModuleGenerator
     {
         var entries = slots.Select(slot => ResolveInterfaceImplementation(cls, iface, slot, model))
             .Select(implementation => LLVMValueRef.CreateConstBitCast(
-                llvmFunctions[implementation], LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)))
+                llvmFunctions[implementation], LLVMTypeRef.CreatePointer(_context.Int8Type, 0)))
             .ToArray();
-        var tableType = LLVMTypeRef.CreateArray(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), (uint)Math.Max(1, entries.Length));
+        var tableType = LLVMTypeRef.CreateArray(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), (uint)Math.Max(1, entries.Length));
         var initializer = entries.Length == 0
             ? LLVMValueRef.CreateConstNull(tableType)
-            : LLVMValueRef.CreateConstArray(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), entries);
+            : LLVMValueRef.CreateConstArray(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), entries);
         var table = module.AddGlobal(tableType, $"oxygen.interface.table.{cls.Name}.{iface.Name}");
         table.Linkage = LLVMLinkage.LLVMInternalLinkage;
         table.Initializer = initializer;

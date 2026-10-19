@@ -122,7 +122,7 @@ public sealed partial class LlvmModuleGenerator
         result = builder.BuildInsertValue(result, pointer, 0, "string.pointer");
         return builder.BuildInsertValue(
             result,
-            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)System.Text.Encoding.UTF8.GetByteCount(value), false),
+            LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)System.Text.Encoding.UTF8.GetByteCount(value), false),
             1,
             "string.length");
     }
@@ -187,7 +187,7 @@ public sealed partial class LlvmModuleGenerator
         {
             var index = right;
             if (model.ExpressionTypes[expression.Right].Primitive != PrimitiveType.I64)
-                index = builder.BuildSExt(right, LLVMTypeRef.Int64, "ptr.index");
+                index = builder.BuildSExt(right, _context.Int64Type, "ptr.index");
             var pointee = ToLlvmType(model.ExpressionTypes[expression].Pointee!, model);
             return expression.Operator == TokenKind.Plus
                 ? builder.BuildGEP2(pointee, left, new LLVMValueRef[] { index }, (ReadOnlySpan<char>)"ptr.add")
@@ -287,7 +287,7 @@ public sealed partial class LlvmModuleGenerator
             LLVMValueRef updated;
             if (type.IsPointer)
             {
-                var index = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 1, false);
+                var index = LLVMValueRef.CreateConstInt(_context.Int64Type, 1, false);
                 if (expression.Operator == TokenKind.MinusMinus)
                     index = builder.BuildNeg(index, "decrement.index");
                 updated = builder.BuildGEP2(ToLlvmType(type.Pointee!, model), oldValue,

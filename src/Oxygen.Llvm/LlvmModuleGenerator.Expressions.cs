@@ -33,7 +33,7 @@ public sealed partial class LlvmModuleGenerator
                 ToLlvmType(model.ExpressionTypes[floating], model), NumericValue(floating.Lexeme)),
             StringLiteralExpression literal => EmitStringLiteral(builder, literal),
             BooleanLiteralExpression boolean => LLVMValueRef.CreateConstInt(
-                LLVMTypeRef.Int1, boolean.Value ? 1UL : 0UL, false),
+                _context.Int1Type, boolean.Value ? 1UL : 0UL, false),
             StructLiteralExpression literal => EmitStructLiteral(
                 context, builder, literal, values, storage, model, llvmFunctions),
             ArrayLiteralExpression literal => EmitArrayLiteral(
@@ -47,7 +47,7 @@ public sealed partial class LlvmModuleGenerator
             IndexExpression index => builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[index], model),
                 EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions), "array.element"),
             CallExpression { Name: "length", Arguments: [var target] } => LLVMValueRef.CreateConstInt(
-                LLVMTypeRef.Int32, (ulong)model.ExpressionTypes[target].ArrayLength, false),
+                _context.Int32Type, (ulong)model.ExpressionTypes[target].ArrayLength, false),
             MemberAccessExpression member => EmitMemberAccess(
                 context, builder, member, values, storage, model, llvmFunctions),
             CastExpression cast => EmitCast(
@@ -100,7 +100,7 @@ public sealed partial class LlvmModuleGenerator
             var contents = builder.BuildCall2(_memcmp.FunctionType, _memcmp,
                 new LLVMValueRef[] { selectorPointer, labelPointer, selectorLength }, "switch.string.compare");
             var sameContents = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, contents,
-                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false), "switch.string.match");
+                LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false), "switch.string.match");
             return builder.BuildAnd(sameLength, sameContents, "switch.string.equal");
         }
 
@@ -175,7 +175,7 @@ public sealed partial class LlvmModuleGenerator
             {
                 var slotAddress = builder.BuildStructGEP2(_classTypes[className], instance, (uint)slot + 1,
                     "object.vtable.slot");
-                builder.BuildStore(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)),
+                builder.BuildStore(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
                     slotAddress);
             }
             for (var slot = 0; slot < virtualMethods.Count; slot++)
@@ -184,7 +184,7 @@ public sealed partial class LlvmModuleGenerator
                     "object.vtable.slot");
                 var target = llvmFunctions[virtualMethods[slot]];
                 builder.BuildStore(builder.BuildBitCast(target,
-                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "vtable.method"), slotAddress);
+                    LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "vtable.method"), slotAddress);
             }
         }
         var ctor = cls.Constructors[constructorIndex];
@@ -207,7 +207,7 @@ public sealed partial class LlvmModuleGenerator
         var index = union.Cases.Select((item, i) => (item, i)).First(pair => pair.item.Name == construction.CaseName).i;
         var result = LLVMValueRef.CreateConstNull(ToLlvmType(unionType, model));
         result = builder.BuildInsertValue(result,
-            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)index, false), 0, "union.tag");
+            LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)index, false), 0, "union.tag");
         if (construction.Arguments.Count == 1)
             result = builder.BuildInsertValue(result,
                 CoerceValue(builder,
@@ -237,7 +237,7 @@ public sealed partial class LlvmModuleGenerator
             var pointerValue = EmitExpression(context, builder, index.Target, values, storage, model, llvmFunctions);
             var pointerIndex = EmitExpression(context, builder, index.Index, values, storage, model, llvmFunctions);
             if (model.ExpressionTypes[index.Index].Primitive != PrimitiveType.I64)
-                pointerIndex = builder.BuildSExt(pointerIndex, LLVMTypeRef.Int64, "pointer.index");
+                pointerIndex = builder.BuildSExt(pointerIndex, _context.Int64Type, "pointer.index");
             return builder.BuildGEP2(ToLlvmType(targetType.Pointee!, model), pointerValue,
                 [pointerIndex], (ReadOnlySpan<char>)"pointer.address");
         }
@@ -252,10 +252,10 @@ public sealed partial class LlvmModuleGenerator
             throw new InvalidOperationException("Array indexing requires addressable storage.");
         var llvmIndex = EmitExpression(context, builder, index.Index, values, storage, model, llvmFunctions);
         if (model.ExpressionTypes[index.Index].Primitive != PrimitiveType.I64)
-            llvmIndex = builder.BuildSExt(llvmIndex, LLVMTypeRef.Int64, "array.index");
-        var length = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)arrayType.ArrayLength, false);
+            llvmIndex = builder.BuildSExt(llvmIndex, _context.Int64Type, "array.index");
+        var length = LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)arrayType.ArrayLength, false);
         var negative = builder.BuildICmp(LLVMIntPredicate.LLVMIntSLT, llvmIndex,
-            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false), "array.negative");
+            LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), "array.negative");
         var tooLarge = builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, llvmIndex, length, "array.too.large");
         var invalid = builder.BuildOr(negative, tooLarge, "array.invalid");
         var failureBlock = _currentFunction.AppendBasicBlock("array.bounds.failure");
@@ -266,7 +266,7 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
         return builder.BuildGEP2(ToLlvmType(arrayType, model), pointer,
-            new LLVMValueRef[] { LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false), llvmIndex }, (ReadOnlySpan<char>)"array.address");
+            new LLVMValueRef[] { LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), llvmIndex }, (ReadOnlySpan<char>)"array.address");
     }
 
     private static LLVMValueRef EmitStructLiteral(
@@ -335,10 +335,10 @@ public sealed partial class LlvmModuleGenerator
             var slot = _interfaceSlots[iface.Name].ToList().IndexOf(getter);
             var table = builder.BuildExtractValue(target, 1, "interface.table");
             var objectValue = builder.BuildExtractValue(target, 0, "interface.data");
-            var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), table,
-                [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)slot, false)],
+            var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), table,
+                [LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)slot, false)],
                 (ReadOnlySpan<char>)"interface.property.slot");
-            var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+            var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                 tableEntry, "interface.property.call");
             return EmitCallOrInvoke(builder, ToLlvmFunctionType(getter, model), rawTarget,
                 [objectValue], "interface.property");
@@ -358,7 +358,7 @@ public sealed partial class LlvmModuleGenerator
                         .First(pair => pair.candidate == getter).index;
                     var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
                         (uint)slot + 1, "property.vtable.slot");
-                    targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), slotAddress,
+                    targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), slotAddress,
                         "property.vtable.target");
                 }
                 return EmitCallOrInvoke(builder, getterType(getter, model), targetFunction, [receiver], "property.get");

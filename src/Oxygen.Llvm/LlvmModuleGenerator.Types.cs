@@ -59,7 +59,7 @@ public sealed partial class LlvmModuleGenerator
             try
             {
                 parameterTypes.Insert(0, model.Interfaces.ContainsKey(owner)
-                    ? LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)
+                    ? LLVMTypeRef.CreatePointer(_context.Int8Type, 0)
                     : ToLlvmType(SemanticType.Class(owner), model));
             }
             catch (KeyNotFoundException exception)
@@ -82,7 +82,7 @@ public sealed partial class LlvmModuleGenerator
         {
             // An external string result is written through a trailing out-pointer, not returned by value.
             parameterTypes.Add(LLVMTypeRef.CreatePointer(ToLlvmStringType(), 0));
-            returnType = LLVMTypeRef.Void;
+            returnType = _context.VoidType;
         }
         return LLVMTypeRef.CreateFunction(returnType, parameterTypes.ToArray(), false);
     }
@@ -106,30 +106,30 @@ public sealed partial class LlvmModuleGenerator
         type = NormalizeAggregateType(type, model);
         return type.Primitive switch
     {
-        PrimitiveType.I8 or PrimitiveType.U8 => LLVMTypeRef.Int8,
-        PrimitiveType.I16 or PrimitiveType.U16 => LLVMTypeRef.Int16,
-        PrimitiveType.I32 or PrimitiveType.U32 => LLVMTypeRef.Int32,
-        PrimitiveType.I64 or PrimitiveType.U64 or PrimitiveType.USize or PrimitiveType.ISize => LLVMTypeRef.Int64,
-        PrimitiveType.Bool => LLVMTypeRef.Int1,
-        PrimitiveType.F32 => LLVMTypeRef.Float,
-        PrimitiveType.F64 => LLVMTypeRef.Double,
-        PrimitiveType.Void => LLVMTypeRef.Void,
-        _ when type.Kind == SemanticTypeKind.Pointer && type.IsOpaquePointer => LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+        PrimitiveType.I8 or PrimitiveType.U8 => _context.Int8Type,
+        PrimitiveType.I16 or PrimitiveType.U16 => _context.Int16Type,
+        PrimitiveType.I32 or PrimitiveType.U32 => _context.Int32Type,
+        PrimitiveType.I64 or PrimitiveType.U64 or PrimitiveType.USize or PrimitiveType.ISize => _context.Int64Type,
+        PrimitiveType.Bool => _context.Int1Type,
+        PrimitiveType.F32 => _context.FloatType,
+        PrimitiveType.F64 => _context.DoubleType,
+        PrimitiveType.Void => _context.VoidType,
+        _ when type.Kind == SemanticTypeKind.Pointer && type.IsOpaquePointer => LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
         _ when type.Kind == SemanticTypeKind.Pointer => LLVMTypeRef.CreatePointer(ToLlvmType(type.Pointee!, model), 0),
         _ when type.Kind == SemanticTypeKind.Class && !IsValueClass(type, model) =>
             ClassPointerType(type.StructName!),
         _ when type.Kind == SemanticTypeKind.Class => _classTypes[type.StructName!],
-        _ when type.Kind == SemanticTypeKind.Interface => LLVMTypeRef.CreateStruct(
-            [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false),
-        _ when type.Kind == SemanticTypeKind.Struct => LLVMTypeRef.CreateStruct(
+        _ when type.Kind == SemanticTypeKind.Interface => _context.GetStructType(
+            [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false),
+        _ when type.Kind == SemanticTypeKind.Struct => _context.GetStructType(
             model.Structs[type.StructName!].Fields.Select(field => ToLlvmType(field.Type, model)).ToArray(),
             model.Structs[type.StructName!].IsPacked),
         _ when type.Kind == SemanticTypeKind.String => ToLlvmStringType(),
         _ when type.Kind == SemanticTypeKind.Array => LLVMTypeRef.CreateArray(ToLlvmType(type.ElementType!, model), (uint)type.ArrayLength),
         _ when type.Kind == SemanticTypeKind.Enum => ToLlvmType(
             SemanticType.FromPrimitive(model.Enums[type.EnumName!].UnderlyingType), model),
-        _ when type.Kind == SemanticTypeKind.Union => LLVMTypeRef.CreateStruct(
-            [LLVMTypeRef.Int32, ToLlvmType(UnionPayloadType(type, model), model)], false),
+        _ when type.Kind == SemanticTypeKind.Union => _context.GetStructType(
+            [_context.Int32Type, ToLlvmType(UnionPayloadType(type, model), model)], false),
         _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
     };
     }
@@ -225,12 +225,12 @@ public sealed partial class LlvmModuleGenerator
             var result = LLVMValueRef.CreateConstNull(ToLlvmType(target, model));
             result = builder.BuildInsertValue(
                 result,
-                builder.BuildBitCast(value, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.data"),
+                builder.BuildBitCast(value, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "interface.data"),
                 0,
                 "interface.data");
             var table = _interfaceTables[(source.StructName!, target.StructName!)];
             return builder.BuildInsertValue(result,
-                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.table"),
+                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "interface.table"),
                 1, "interface.table");
         }
         if (source.IsPointer && target.IsNumeric)

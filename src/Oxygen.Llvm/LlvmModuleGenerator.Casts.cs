@@ -69,7 +69,7 @@ public sealed partial class LlvmModuleGenerator
 
         var enumSymbol = model.Enums[targetType.EnumName!];
         var enumLlvmType = ToLlvmType(targetType, model);
-        LLVMValueRef valid = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, 0, false);
+        LLVMValueRef valid = LLVMValueRef.CreateConstInt(_context.Int1Type, 0, false);
         foreach (var member in enumSymbol.Members)
         {
             var candidate = LLVMValueRef.CreateConstInt(enumLlvmType, unchecked((ulong)member.Value), false);
@@ -83,7 +83,7 @@ public sealed partial class LlvmModuleGenerator
         builder.PositionAtEnd(failureBlock);
         var failureValue = enumSymbol.UnderlyingType is PrimitiveType.I64 or PrimitiveType.U64
             ? operand
-            : builder.BuildZExt(operand, LLVMTypeRef.Int64, "enum.value");
+            : builder.BuildZExt(operand, _context.Int64Type, "enum.value");
         builder.BuildCall2(_enumCastFailure.FunctionType, _enumCastFailure, [failureValue]);
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
@@ -104,13 +104,13 @@ public sealed partial class LlvmModuleGenerator
         var name = builder.BuildGlobalStringPtr(typeName, $"oxygen.type.name.{typeName}");
         builder.BuildStore(name, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 0, "type.name"));
         builder.BuildStore(
-            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, kind, false),
+            LLVMValueRef.CreateConstInt(_context.Int32Type, kind, false),
             builder.BuildStructGEP2(_runtimeTypeInfoType, info, 1, "type.kind"));
         builder.BuildStore(
-            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false),
+            LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false),
             builder.BuildStructGEP2(_runtimeTypeInfoType, info, 2, "type.flags"));
         var parent = parentType is null
-            ? LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0))
+            ? LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0))
             : GetTypeName(builder, parentType);
         builder.BuildStore(parent, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 3, "type.parent"));
         // Only advertise a message field when the generated class layout
@@ -126,7 +126,7 @@ public sealed partial class LlvmModuleGenerator
             : checked((ulong)(IntPtr.Size * (1 + _virtualSlotCount))
                 + (ulong)cls!.Fields.Take(messageField.index).Sum(field => (long)SizeOf(field.Type, model)));
         builder.BuildStore(
-            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, messageOffset, false),
+            LLVMValueRef.CreateConstInt(_context.Int32Type, messageOffset, false),
             builder.BuildStructGEP2(_runtimeTypeInfoType, info, 4, "type.message.offset"));
     }
 
@@ -155,12 +155,12 @@ public sealed partial class LlvmModuleGenerator
             var result = LLVMValueRef.CreateConstNull(ToLlvmType(target, model));
             result = builder.BuildInsertValue(
                 result,
-                builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.data"),
+                builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "interface.data"),
                 0,
                 "interface.data");
             var table = _interfaceTables[(source.StructName!, target.StructName!)];
             return builder.BuildInsertValue(result,
-                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "interface.table"),
+                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "interface.table"),
                 1, "interface.table");
         }
 
@@ -170,7 +170,7 @@ public sealed partial class LlvmModuleGenerator
         if (source.IsInterface)
             objectValue = builder.BuildBitCast(
                 objectValue,
-                LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                 "cast.object");
 
         if (target.IsClass && (!source.IsClass || IsClassDerivedFrom(target.StructName!, source.StructName!, model)))
@@ -181,7 +181,7 @@ public sealed partial class LlvmModuleGenerator
                 .Where(candidate => !source.IsInterface
                     || ClassImplementsInterface(candidate, source.StructName!, model))
                 .ToArray();
-            var valid = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false);
+            var valid = LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false);
             foreach (var possibleType in possibleTypes)
             {
                 var candidate = builder.BuildCall2(
@@ -194,7 +194,7 @@ public sealed partial class LlvmModuleGenerator
             var invalid = builder.BuildICmp(
                 LLVMIntPredicate.LLVMIntEQ,
                 valid,
-                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false),
+                LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false),
                 "cast.invalid");
             var failureBlock = _currentFunction.AppendBasicBlock("cast.failure");
             var continueBlock = _currentFunction.AppendBasicBlock("cast.continue");
@@ -202,7 +202,7 @@ public sealed partial class LlvmModuleGenerator
             builder.PositionAtEnd(failureBlock);
             var sourceName = source.IsClass
                 ? GetTypeName(builder, source.StructName!)
-                : builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                : builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                     objectValue, "interface.type");
             builder.BuildCall2(_invalidCast.FunctionType, _invalidCast,
                 [sourceName, GetTypeName(builder, target.StructName!)]);
@@ -238,14 +238,14 @@ public sealed partial class LlvmModuleGenerator
     {
         var objectValue = source.IsInterface
             ? builder.BuildExtractValue(operand, 0, "pattern.data")
-            : builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "pattern.object");
+            : builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "pattern.object");
         var possibleTypes = model.Classes.Keys
             .Where(candidate => !model.Classes[candidate].IsGeneric)
             .Where(candidate => target.IsClass
                 ? IsClassDerivedFrom(candidate, target.StructName!, model)
                 : ClassImplementsInterface(candidate, target.StructName!, model))
             .ToArray();
-        var match = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false);
+        var match = LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false);
         foreach (var possibleType in possibleTypes)
         {
             var candidate = builder.BuildCall2(_isInstance.FunctionType, _isInstance,
@@ -268,11 +268,11 @@ public sealed partial class LlvmModuleGenerator
                 return operand;
             var result = LLVMValueRef.CreateConstNull(ToLlvmType(target, model));
             result = builder.BuildInsertValue(result,
-                builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "pattern.data"),
+                builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "pattern.data"),
                 0, "pattern.data");
             var table = _interfaceTables[(source.StructName!, target.StructName!)];
             return builder.BuildInsertValue(result,
-                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "pattern.table"),
+                builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "pattern.table"),
                 1, "pattern.table");
         }
         var objectValue = source.IsInterface
@@ -307,7 +307,7 @@ public sealed partial class LlvmModuleGenerator
         var type = expression.TargetType is not null
             ? FromTypeSyntax(expression.TargetType, model)
             : model.ExpressionTypes[expression.Operand!];
-        return LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)SizeOf(type, model), false);
+        return LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)SizeOf(type, model), false);
     }
 
     private static ulong SizeOf(SemanticType type, SemanticModel model) =>

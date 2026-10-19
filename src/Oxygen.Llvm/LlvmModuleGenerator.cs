@@ -44,8 +44,11 @@ public sealed partial class LlvmModuleGenerator
     private static Stack<ExceptionContext> _exceptionContexts = new();
     private static bool _usesExceptions;
     private static bool _usesWindowsSeh;
+    // Context that owns every type and value created during Generate. Type factories must come from this context,
+    // not from LLVMTypeRef's static (global-context) properties, or the module fails verification.
+    private static LLVMContextRef _context;
     private static LLVMTypeRef ToLlvmStringType() =>
-        LLVMTypeRef.CreateStruct([LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int64], false);
+        _context.GetStructType([LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false);
 
     public GeneratedLlvmModule Generate(string moduleName, SemanticModel model)
     {
@@ -53,6 +56,7 @@ public sealed partial class LlvmModuleGenerator
         ArgumentNullException.ThrowIfNull(model);
 
         var context = LLVMContextRef.Create();
+        _context = context;
         var module = context.CreateModuleWithName(moduleName);
         _module = module;
         _exceptionPointer = default;
@@ -84,10 +88,10 @@ public sealed partial class LlvmModuleGenerator
 
             _classTypes.Clear();
             _runtimeTypeInfos.Clear();
-            _runtimeTypeInfoType = LLVMTypeRef.CreateStruct(
-                [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32,
-                    LLVMTypeRef.Int32, LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                    LLVMTypeRef.Int32], false);
+            _runtimeTypeInfoType = _context.GetStructType(
+                [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type,
+                    _context.Int32Type, LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+                    _context.Int32Type], false);
             _constructors.Clear();
             _destructors.Clear();
             _virtualSlotCount = concreteClasses.Select(cls => GetVirtualMethods(cls, model).Count)
@@ -98,8 +102,8 @@ public sealed partial class LlvmModuleGenerator
             {
                 var fields = (cls.IsValue
                         ? Enumerable.Empty<LLVMTypeRef>()
-                        : new[] { LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0) }
-                            .Concat(Enumerable.Repeat(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), _virtualSlotCount)))
+                        : new[] { LLVMTypeRef.CreatePointer(_context.Int8Type, 0) }
+                            .Concat(Enumerable.Repeat(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _virtualSlotCount)))
                     .Concat(cls.Fields.Select(field => ToLlvmType(field.Type, model))).ToArray();
                 _classTypes[cls.Name].StructSetBody(fields, false);
             }
@@ -125,49 +129,49 @@ public sealed partial class LlvmModuleGenerator
                     AddInterfaceTable(module, cls, iface, slots, llvmFunctions, model);
             }
             var allocType = LLVMTypeRef.CreateFunction(
-                LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), [LLVMTypeRef.Int64], false);
+                LLVMTypeRef.CreatePointer(_context.Int8Type, 0), [_context.Int64Type], false);
             _oxygenAlloc = GetOrDeclareRuntimeFunction(
                 module, "oxygen_alloc", allocType, llvmFunctions);
-            var freeType = LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
-                [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false);
+            var freeType = LLVMTypeRef.CreateFunction(_context.VoidType,
+                [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false);
             _oxygenFree = GetOrDeclareRuntimeFunction(
                 module, "oxygen_free", freeType, llvmFunctions);
             _memcmp = module.AddFunction("memcmp",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32,
-                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                        LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int64], false));
+                LLVMTypeRef.CreateFunction(_context.Int32Type,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+                        LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false));
             _personality = module.AddFunction(_usesWindowsSeh ? "__C_specific_handler" : "__gxx_personality_v0",
                 _usesWindowsSeh
-                    ? LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32, [], true)
-                    : LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32,
-                        [LLVMTypeRef.Int32, LLVMTypeRef.Int32, LLVMTypeRef.Int64,
-                            LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                            LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
+                    ? LLVMTypeRef.CreateFunction(_context.Int32Type, [], true)
+                    : LLVMTypeRef.CreateFunction(_context.Int32Type,
+                        [_context.Int32Type, _context.Int32Type, _context.Int64Type,
+                            LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+                            LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
             _exceptionThrow = module.AddFunction("__oxygen_runtime_throw_object",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
-                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
             _exceptionObject = module.AddFunction("__oxygen_runtime_exception_object",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
+                LLVMTypeRef.CreateFunction(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
             _exceptionEndCatch = module.AddFunction("__oxygen_runtime_end_catch",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [], false));
+                LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             _exceptionRethrow = module.AddFunction("__oxygen_runtime_rethrow",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [], false));
+                LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             _exceptionUnhandled = module.AddFunction("__oxygen_runtime_unhandled_object",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
-                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)], false));
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
             _tracePush = module.AddFunction("__oxygen_runtime_trace_push",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
-                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
-                        LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32,
-                        LLVMTypeRef.Int32], false));
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+                        LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type,
+                        _context.Int32Type], false));
             _tracePop = module.AddFunction("__oxygen_runtime_trace_pop",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [], false));
+                LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             foreach (var cls in concreteClasses)
             {
                 foreach (var ctor in cls.Constructors)
                 {
-                    var type = LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
+                    var type = LLVMTypeRef.CreateFunction(_context.VoidType,
                         new[] { LLVMTypeRef.CreatePointer(_classTypes[cls.Name], 0) }
                             .Concat(ctor.Parameters.Select(p => ToLlvmType(p.Type, model))).ToArray(), false);
                     _constructors[ConstructorKey(cls, ctor)] = module.AddFunction(
@@ -177,27 +181,27 @@ public sealed partial class LlvmModuleGenerator
                 if (cls.Destructor is not null)
                     _destructors[cls.Name] = module.AddFunction(
                         OxygenNameMangler.MangleDestructor(cls.ModuleName, cls),
-                        LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
+                        LLVMTypeRef.CreateFunction(_context.VoidType,
                             [LLVMTypeRef.CreatePointer(_classTypes[cls.Name], 0)], false));
             }
             var boundsFailureType = LLVMTypeRef.CreateFunction(
-                LLVMTypeRef.Void, [LLVMTypeRef.Int64, LLVMTypeRef.Int64], false);
+                _context.VoidType, [_context.Int64Type, _context.Int64Type], false);
             _arrayBoundsFailure = module.AddFunction("__oxygen_runtime_array_bounds_failure", boundsFailureType);
             _enumCastFailure = module.AddFunction(
                 "__oxygen_runtime_enum_cast_failure",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void, [LLVMTypeRef.Int64], false));
+                LLVMTypeRef.CreateFunction(_context.VoidType, [_context.Int64Type], false));
             _isInstance = GetOrDeclareRuntimeFunction(
                 module,
                 "__oxygen_runtime_is_instance",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Int8,
-                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)],
+                LLVMTypeRef.CreateFunction(_context.Int8Type,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), LLVMTypeRef.CreatePointer(_context.Int8Type, 0)],
                     false),
                 llvmFunctions);
             _invalidCast = GetOrDeclareRuntimeFunction(
                 module,
                 "__oxygen_runtime_invalid_cast",
-                LLVMTypeRef.CreateFunction(LLVMTypeRef.Void,
-                    [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)],
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), LLVMTypeRef.CreatePointer(_context.Int8Type, 0)],
                     false),
                 llvmFunctions);
 
@@ -216,7 +220,8 @@ public sealed partial class LlvmModuleGenerator
 
             EmitNativeMain(context, builder, module, model, llvmFunctions);
 
-            if (module.TryVerify(LLVMVerifierFailureAction.LLVMReturnStatusAction, out var error))
+            // TryVerify returns true when the module is valid, so an invalid module is the one that must be rejected.
+            if (!module.TryVerify(LLVMVerifierFailureAction.LLVMReturnStatusAction, out var error))
                 throw new InvalidOperationException($"LLVM verification failed: {error}");
 
             var metadata = new NativeModuleMetadata

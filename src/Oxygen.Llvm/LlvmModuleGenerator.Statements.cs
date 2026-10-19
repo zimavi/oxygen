@@ -16,7 +16,7 @@ public sealed partial class LlvmModuleGenerator
             _exceptionPointer = _module.AddFunction(
                 "llvm.eh.exceptionpointer.p0",
                 LLVMTypeRef.CreateFunction(
-                    LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                    LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                     [catchPad.TypeOf], false));
         }
 
@@ -103,10 +103,10 @@ public sealed partial class LlvmModuleGenerator
                         var table = builder.BuildExtractValue(receiver, 1, "interface.table");
                         var objectValue = builder.BuildExtractValue(receiver, 0, "interface.data");
                         var slot = _interfaceSlots[iface.Name].ToList().IndexOf(setter);
-                        var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), table,
-                            [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)slot, false)],
+                        var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), table,
+                            [LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)slot, false)],
                             (ReadOnlySpan<char>)"interface.property.slot");
-                        var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                        var rawTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                             tableEntry, "interface.property.call");
                         var setterType = ToLlvmFunctionType(setter, model);
                         EmitCallOrInvoke(builder, setterType, rawTarget,
@@ -132,7 +132,7 @@ public sealed partial class LlvmModuleGenerator
                                     .First(pair => pair.candidate == setter).index;
                                 var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
                                     (uint)slot + 1, "property.vtable.slot");
-                                targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                                targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                                     slotAddress, "property.vtable.target");
                             }
                             EmitCallOrInvoke(builder, setterType, targetFunction,
@@ -190,7 +190,7 @@ public sealed partial class LlvmModuleGenerator
                                 .First(pair => pair.candidate == setter).index;
                             var slotAddress = builder.BuildStructGEP2(_classTypes[owner.Name], values["this"],
                                 (uint)slot + 1, "property.vtable.slot");
-                            setterTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0),
+                            setterTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                                 slotAddress, "property.vtable.target");
                         }
                         EmitCallOrInvoke(builder, setterType, setterTarget,
@@ -355,7 +355,7 @@ public sealed partial class LlvmModuleGenerator
                             var caseIndex = union.Cases.Select((candidate, candidateIndex) => (candidate, candidateIndex))
                                 .First(pair => pair.candidate.Name == item.CaseName).candidateIndex;
                             var match = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, tag,
-                                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)caseIndex, false), "union.match");
+                                LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)caseIndex, false), "union.match");
                             var miss = index + 1 < switchStatement.Cases.Count
                                 ? function.AppendBasicBlock($"switch.next{index}")
                                 : defaultTarget;
@@ -393,7 +393,6 @@ public sealed partial class LlvmModuleGenerator
                         }
                     }
 
-                    var terminated = true;
                     loops.Push((end, end, _ownedScopes.Count, false));
                     for (var index = 0; index < bodies.Length; index++)
                     {
@@ -406,13 +405,17 @@ public sealed partial class LlvmModuleGenerator
                                 : builder.BuildExtractValue(selector, 1, "union.payload");
                         var bodyTerminated = EmitStatement(context, builder, function, item.Body, values, storage,
                             storageRequirements, model, llvmFunctions, emittedReturnType, loops);
-                        terminated &= bodyTerminated;
                         if (!bodyTerminated)
                             builder.BuildBr(index + 1 < bodies.Length ? bodies[index + 1] : end);
                     }
                     loops.Pop();
                     builder.PositionAtEnd(end);
-                    return terminated;
+                    // 'end' is reached by dispatch misses (no default), by 'break', or by falling off the last case.
+                    // The switch only terminates the enclosing block when none of those edges exist.
+                    if (end.AsValue().Uses.Any())
+                        return false;
+                    builder.BuildUnreachable();
+                    return true;
                 }
             case WhileStatement whileStatement:
                 {
@@ -455,7 +458,7 @@ public sealed partial class LlvmModuleGenerator
                             (ReadOnlySpan<LLVMValueRef>)new[] { iteratorValue }, (ReadOnlySpan<char>)"for.in.next");
                         var tag = builder.BuildExtractValue(nextResult, 0, "for.in.option.tag");
                         var hasValue = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, tag,
-                            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false), "for.in.has_value");
+                            LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false), "for.in.has_value");
                         builder.BuildCondBr(hasValue, protocolBodyBlock, protocolEndBlock);
                         builder.PositionAtEnd(protocolBodyBlock);
                         builder.BuildStore(builder.BuildExtractValue(nextResult, 1, "for.in.option.value"),
@@ -482,8 +485,8 @@ public sealed partial class LlvmModuleGenerator
                     var collectionStorage = builder.BuildAlloca(ToLlvmType(collectionType, model), "for.in.collection");
                     var collectionValue = EmitExpression(context, builder, forInStatement.Collection, values, storage, model, llvmFunctions);
                     builder.BuildStore(collectionValue, collectionStorage);
-                    var counter = builder.BuildAlloca(LLVMTypeRef.Int64, "for.in.index");
-                    builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false), counter);
+                    var counter = builder.BuildAlloca(_context.Int64Type, "for.in.index");
+                    builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), counter);
                     var valueStorage = builder.BuildAlloca(ToLlvmType(elementType, model), forInStatement.VariableName + ".addr");
                     var hadPreviousStorage = storage.TryGetValue(forInStatement.VariableName, out var previousStorage);
                     storage[forInStatement.VariableName] = valueStorage;
@@ -493,13 +496,13 @@ public sealed partial class LlvmModuleGenerator
                     var endBlock = function.AppendBasicBlock("for.in.end");
                     builder.BuildBr(conditionBlock);
                     builder.PositionAtEnd(conditionBlock);
-                    var currentIndex = builder.BuildLoad2(LLVMTypeRef.Int64, counter, "for.in.index");
-                    var length = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, (ulong)collectionType.ArrayLength, false);
+                    var currentIndex = builder.BuildLoad2(_context.Int64Type, counter, "for.in.index");
+                    var length = LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)collectionType.ArrayLength, false);
                     var hasNext = builder.BuildICmp(LLVMIntPredicate.LLVMIntULT, currentIndex, length, "for.in.has_next");
                     builder.BuildCondBr(hasNext, bodyBlock, endBlock);
                     builder.PositionAtEnd(bodyBlock);
                     var elementAddress = builder.BuildGEP2(ToLlvmType(collectionType, model), collectionStorage,
-                        [LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false), currentIndex],
+                        [LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), currentIndex],
                         (ReadOnlySpan<char>)"for.in.element");
                     var element = builder.BuildLoad2(ToLlvmType(elementType, model), elementAddress, "for.in.value");
                     builder.BuildStore(element, valueStorage);
@@ -511,9 +514,9 @@ public sealed partial class LlvmModuleGenerator
                     loops.Pop();
                     if (!bodyTerminated) builder.BuildBr(incrementBlock);
                     builder.PositionAtEnd(incrementBlock);
-                    currentIndex = builder.BuildLoad2(LLVMTypeRef.Int64, counter, "for.in.index");
+                    currentIndex = builder.BuildLoad2(_context.Int64Type, counter, "for.in.index");
                     builder.BuildStore(builder.BuildAdd(currentIndex,
-                        LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 1, false), "for.in.next"), counter);
+                        LLVMValueRef.CreateConstInt(_context.Int64Type, 1, false), "for.in.next"), counter);
                     builder.BuildBr(conditionBlock);
                     builder.PositionAtEnd(endBlock);
                     if (_ownedScopes.Count > forInScopeDepth)
@@ -539,7 +542,7 @@ public sealed partial class LlvmModuleGenerator
                     builder.BuildBr(conditionBlock);
                     builder.PositionAtEnd(conditionBlock);
                     var condition = forStatement.Condition is null
-                        ? LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, 1, false)
+                        ? LLVMValueRef.CreateConstInt(_context.Int1Type, 1, false)
                         : EmitExpression(context, builder, forStatement.Condition, values, storage, model, llvmFunctions);
                     builder.BuildCondBr(condition, bodyBlock, endBlock);
                     builder.PositionAtEnd(bodyBlock);
@@ -574,7 +577,7 @@ public sealed partial class LlvmModuleGenerator
                 {
                     var thrown = EmitExpression(context, builder, throwStatement.Value, values, storage, model, llvmFunctions);
                     var raw = builder.BuildBitCast(thrown,
-                        LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), "exception.object");
+                        LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "exception.object");
                     if (_exceptionContexts.Count == 0)
                     {
                         builder.BuildCall2(_exceptionThrow.FunctionType, _exceptionThrow,
@@ -642,10 +645,10 @@ public sealed partial class LlvmModuleGenerator
         builder.PositionAtEnd(landing);
         if (statement.Finally is not null && outerExceptionContext is not null)
             _exceptionContexts.Push(outerExceptionContext);
-        var landingType = LLVMTypeRef.CreateStruct(
-            [LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0), LLVMTypeRef.Int32], false);
+        var landingType = _context.GetStructType(
+            [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type], false);
         var landingPad = builder.BuildLandingPad(landingType, _personality, 1, "exception.landingpad");
-        landingPad.AddClause(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)));
+        landingPad.AddClause(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)));
         var exception = builder.BuildExtractValue(landingPad, 0, "exception.handle");
         var exceptionalFinallyReturned = statement.Finally is not null
             && EmitStatement(context, builder, function, statement.Finally, values, storage,
@@ -728,7 +731,7 @@ public sealed partial class LlvmModuleGenerator
     private static LLVMValueRef EmitExceptionTypeCheck(
         LLVMBuilderRef builder, LLVMValueRef objectValue, SemanticType target, SemanticModel model)
     {
-        var match = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false);
+        var match = LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false);
         foreach (var possible in model.Classes.Keys.Where(candidate => !model.Classes[candidate].IsGeneric).Where(candidate =>
                      IsClassDerivedFrom(candidate, target.StructName!, model)))
         {
@@ -738,7 +741,7 @@ public sealed partial class LlvmModuleGenerator
         }
 
         return builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, match,
-            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false), "catch.match");
+            LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false), "catch.match");
     }
 
     private static bool EmitWindowsSehTryStatement(
@@ -782,8 +785,8 @@ public sealed partial class LlvmModuleGenerator
             var catchPad = builder.BuildCatchPad(catchSwitch,
                 new LLVMValueRef[]
                 {
-                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0)),
-                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0))
+                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
+                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0))
                 },
                 "try.catchpad");
             _exceptionContexts.Push(new ExceptionContext(

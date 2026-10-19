@@ -346,9 +346,10 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
+        // Pointers are opaque, so the receiver needs no bitcast; the slot is loaded and called indirectly.
         Assert.Contains("vtable.slot", ir);
-        Assert.Contains("call i32", ir);
-        Assert.Contains("bitcast", ir);
+        Assert.Contains("load ptr, ptr %vtable.slot", ir);
+        Assert.Contains("call i32 %vtable.target", ir);
     }
 
     [Fact]
@@ -739,6 +740,30 @@ public sealed class LlvmTests
 
         Assert.Contains("switch i32", ir);
         Assert.Contains("switch.body", ir);
+    }
+
+    [Fact]
+    public void SwitchWhoseCasesAllReturnEndsWithUnreachableMergeBlock()
+    {
+        var model = Analyze(
+            "i32 main() { i32 value = 1; switch (value) { case 0: return 10; default: return 30; } }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Matches(@"switch\.end:[^\n]*\n\s+unreachable", ir);
+    }
+
+    [Fact]
+    public void CodeAfterSwitchWithBreakIsKept()
+    {
+        var model = Analyze(
+            "i32 main() { i32 value = 1; switch (value) { case 1: break; default: return 2; } return 3; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("ret i32 3", ir);
     }
 
     [Fact]
