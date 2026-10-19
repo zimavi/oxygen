@@ -9,10 +9,10 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static LLVMTypeRef getterType(FunctionSymbol getter, SemanticModel model) =>
+    private LLVMTypeRef getterType(FunctionSymbol getter, SemanticModel model) =>
         ToLlvmFunctionType(getter, model);
 
-    private static LLVMValueRef EmitCast(
+    private LLVMValueRef EmitCast(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         CastExpression cast,
@@ -71,7 +71,7 @@ public sealed partial class LlvmModuleGenerator
     // Semantic analysis admits only the cast pairs lowered above. The one case left to pass through is a value that
     // already has the target's LLVM type, such as an enum and its underlying type. Any other pair is a compiler bug,
     // so it is reported rather than turned into IR of the wrong type.
-    private static LLVMValueRef RequireSameRepresentation(
+    private LLVMValueRef RequireSameRepresentation(
         LLVMValueRef operand,
         SemanticType operandType,
         SemanticType targetType,
@@ -83,10 +83,10 @@ public sealed partial class LlvmModuleGenerator
         return operand;
     }
 
-    private static bool IsReferenceType(SemanticType type, SemanticModel model) =>
+    private bool IsReferenceType(SemanticType type, SemanticModel model) =>
         (type.IsClass && !IsValueClass(type, model)) || type.IsInterface;
 
-    private static void InitializeRuntimeTypeInfo(
+    private void InitializeRuntimeTypeInfo(
         LLVMBuilderRef builder,
         string typeName,
         string? parentType,
@@ -130,7 +130,7 @@ public sealed partial class LlvmModuleGenerator
     }
 
     // The destructor that releases an object of `typeName`: the nearest one in its class chain, or null when there is none.
-    private static LLVMValueRef? FindDestructor(string typeName, SemanticModel model)
+    private LLVMValueRef? FindDestructor(string typeName, SemanticModel model)
     {
         for (var cls = model.Classes.GetValueOrDefault(typeName); cls is not null;
              cls = cls.BaseTypeName is null ? null : model.Classes.GetValueOrDefault(cls.BaseTypeName))
@@ -141,7 +141,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Releases the object `reference` points to through its runtime type. The destructor stored in its type information
     // runs first, so a reference typed as a base class still runs the derived destructor; then the memory is freed.
-    private static void EmitDestroyAndFree(LLVMBuilderRef builder, LLVMValueRef reference)
+    private void EmitDestroyAndFree(LLVMBuilderRef builder, LLVMValueRef reference)
     {
         var pointerType = LLVMTypeRef.CreatePointer(_context.Int8Type, 0);
         var function = builder.InsertBlock.Parent;
@@ -161,7 +161,7 @@ public sealed partial class LlvmModuleGenerator
             [builder.BuildBitCast(reference, pointerType, "free.memory")]);
     }
 
-    private static LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName)
+    private LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName)
     {
         var info = module.AddGlobal(_runtimeTypeInfoType, $"oxygen.type.info.{typeName}");
         info.Linkage = LLVMLinkage.LLVMInternalLinkage;
@@ -169,12 +169,12 @@ public sealed partial class LlvmModuleGenerator
         return info;
     }
 
-    private static LLVMValueRef GetTypeName(LLVMBuilderRef builder, string typeName)
+    private LLVMValueRef GetTypeName(LLVMBuilderRef builder, string typeName)
     {
         return _runtimeTypeInfos[typeName];
     }
 
-    private static LLVMValueRef EmitReferenceCast(
+    private LLVMValueRef EmitReferenceCast(
         LLVMBuilderRef builder,
         LLVMValueRef operand,
         SemanticType source,
@@ -241,7 +241,7 @@ public sealed partial class LlvmModuleGenerator
             : objectValue;
     }
 
-    private static LLVMValueRef EmitIsExpression(
+    private LLVMValueRef EmitIsExpression(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         IsExpression expression,
@@ -255,7 +255,7 @@ public sealed partial class LlvmModuleGenerator
             FromTypeSyntax(expression.TargetType, model), model);
     }
 
-    private static LLVMValueRef EmitRuntimeTypeCheck(
+    private LLVMValueRef EmitRuntimeTypeCheck(
         LLVMBuilderRef builder,
         LLVMValueRef operand,
         SemanticType source,
@@ -280,7 +280,7 @@ public sealed partial class LlvmModuleGenerator
         return match;
     }
 
-    private static LLVMValueRef EmitPatternBindingValue(
+    private LLVMValueRef EmitPatternBindingValue(
         LLVMBuilderRef builder,
         LLVMValueRef operand,
         SemanticType source,
@@ -328,7 +328,7 @@ public sealed partial class LlvmModuleGenerator
     }
 
     // The size is LLVM's own answer for the module's data layout, which is also what the struct GEPs use.
-    private static LLVMValueRef EmitSizeOf(SizeOfExpression expression, SemanticModel model)
+    private LLVMValueRef EmitSizeOf(SizeOfExpression expression, SemanticModel model)
     {
         var type = expression.TargetType is not null
             ? FromTypeSyntax(expression.TargetType, model)

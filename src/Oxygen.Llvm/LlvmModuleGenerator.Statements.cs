@@ -9,7 +9,7 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static LLVMValueRef GetWindowsExceptionPointer(LLVMValueRef catchPad)
+    private LLVMValueRef GetWindowsExceptionPointer(LLVMValueRef catchPad)
     {
         if (_exceptionPointer.Handle == IntPtr.Zero)
         {
@@ -24,11 +24,11 @@ public sealed partial class LlvmModuleGenerator
     }
 
     // Sets the runtime flag of a local that some `delete` releases: true while its object is alive.
-    private static void SetDropFlag(LLVMBuilderRef builder, LLVMValueRef slot, bool alive) =>
+    private void SetDropFlag(LLVMBuilderRef builder, LLVMValueRef slot, bool alive) =>
         builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int1Type, alive ? 1UL : 0UL, false), _dropFlags[slot]);
 
     // growing the stack on every iteration, and mem2reg can promote the slot.
-    private static LLVMValueRef BuildEntryAlloca(LLVMBuilderRef builder, LLVMTypeRef type, string name)
+    private LLVMValueRef BuildEntryAlloca(LLVMBuilderRef builder, LLVMTypeRef type, string name)
     {
         var entry = builder.InsertBlock.Parent.EntryBasicBlock;
         using var entryBuilder = _context.CreateBuilder();
@@ -42,7 +42,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Binds a name to a new slot. A value binding of the same name (for example a pattern binding in an enclosing
     // scope) is removed, because values are looked up before storage.
-    private static LLVMValueRef DeclareLocalSlot(LLVMBuilderRef builder, Dictionary<string, LLVMValueRef> values,
+    private LLVMValueRef DeclareLocalSlot(LLVMBuilderRef builder, Dictionary<string, LLVMValueRef> values,
         Dictionary<string, LLVMValueRef> storage, string name, LLVMTypeRef type, LLVMValueRef? initialValue)
     {
         var slot = BuildEntryAlloca(builder, type, name + ".addr");
@@ -56,7 +56,7 @@ public sealed partial class LlvmModuleGenerator
     // Every local and parameter lives in a stack slot (see BuildEntryAlloca), so the only bindings that need
     // scoping are names. Constructs that introduce names restore the previous bindings when they end, which makes
     // an inner declaration shadow an outer one without changing the outer one's storage.
-    private static bool EmitStatement(
+    private bool EmitStatement(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMValueRef function,
@@ -82,7 +82,7 @@ public sealed partial class LlvmModuleGenerator
         return terminated;
     }
 
-    private static void ReplaceBindings(Dictionary<string, LLVMValueRef> bindings,
+    private void ReplaceBindings(Dictionary<string, LLVMValueRef> bindings,
         Dictionary<string, LLVMValueRef> saved)
     {
         bindings.Clear();
@@ -90,7 +90,7 @@ public sealed partial class LlvmModuleGenerator
             bindings.Add(name, value);
     }
 
-    private static bool EmitStatementBody(
+    private bool EmitStatementBody(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMValueRef function,
@@ -738,7 +738,7 @@ public sealed partial class LlvmModuleGenerator
         }
     }
 
-    private static bool EmitTryStatement(
+    private bool EmitTryStatement(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMValueRef function,
@@ -853,7 +853,7 @@ public sealed partial class LlvmModuleGenerator
         return normalFinallyReturned;
     }
 
-    private static LLVMValueRef EmitExceptionTypeCheck(
+    private LLVMValueRef EmitExceptionTypeCheck(
         LLVMBuilderRef builder, LLVMValueRef objectValue, SemanticType target, SemanticModel model)
     {
         var match = LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false);

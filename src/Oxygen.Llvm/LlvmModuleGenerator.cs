@@ -10,47 +10,47 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static LLVMValueRef _arrayBoundsFailure;
-    private static LLVMValueRef _enumCastFailure;
-    private static LLVMValueRef _arithmeticFailure;
-    private static LLVMValueRef _isInstance;
-    private static LLVMValueRef _invalidCast;
-    private static LLVMValueRef _currentFunction;
-    private static readonly Dictionary<string, LLVMTypeRef> _classTypes = new(StringComparer.Ordinal);
-    private static readonly Dictionary<string, LLVMValueRef> _runtimeTypeInfos = new(StringComparer.Ordinal);
-    private static readonly Dictionary<string, LLVMValueRef> _constructors = new(StringComparer.Ordinal);
-    private static readonly Dictionary<string, LLVMValueRef> _destructors = new(StringComparer.Ordinal);
-    private static readonly Dictionary<(string ClassName, string PropertyName, PropertyAccessorKind Kind), FunctionSymbol> _propertyAccessors = new();
-    private static readonly HashSet<FunctionSymbol> _accessorSymbols = [];
-    private static readonly Dictionary<(string ClassName, string InterfaceName), LLVMValueRef> _interfaceTables = new();
-    private static readonly Dictionary<string, IReadOnlyList<FunctionSymbol>> _interfaceSlots = new(StringComparer.Ordinal);
-    private static int _virtualSlotCount;
+    private LLVMValueRef _arrayBoundsFailure;
+    private LLVMValueRef _enumCastFailure;
+    private LLVMValueRef _arithmeticFailure;
+    private LLVMValueRef _isInstance;
+    private LLVMValueRef _invalidCast;
+    private LLVMValueRef _currentFunction;
+    private readonly Dictionary<string, LLVMTypeRef> _classTypes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LLVMValueRef> _runtimeTypeInfos = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LLVMValueRef> _constructors = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LLVMValueRef> _destructors = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string ClassName, string PropertyName, PropertyAccessorKind Kind), FunctionSymbol> _propertyAccessors = new();
+    private readonly HashSet<FunctionSymbol> _accessorSymbols = [];
+    private readonly Dictionary<(string ClassName, string InterfaceName), LLVMValueRef> _interfaceTables = new();
+    private readonly Dictionary<string, IReadOnlyList<FunctionSymbol>> _interfaceSlots = new(StringComparer.Ordinal);
+    private int _virtualSlotCount;
     private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type);
-    private static Stack<List<OwnedLocal>> _ownedScopes = new();
-    private static LLVMValueRef _oxygenAlloc;
-    private static LLVMValueRef _oxygenFree;
-    private static LLVMValueRef _memcmp;
-    private static LLVMTypeRef _runtimeTypeInfoType;
-    private static LLVMValueRef _exceptionThrow;
-    private static LLVMValueRef _exceptionObject;
-    private static LLVMValueRef _exceptionEndCatch;
-    private static LLVMValueRef _exceptionRethrow;
-    private static LLVMValueRef _exceptionUnhandled;
-    private static LLVMValueRef _tracePush;
-    private static LLVMValueRef _tracePop;
-    private static LLVMValueRef _exceptionPointer;
-    private static LLVMModuleRef _module;
-    private static LLVMValueRef _personality;
+    private Stack<List<OwnedLocal>> _ownedScopes = new();
+    private LLVMValueRef _oxygenAlloc;
+    private LLVMValueRef _oxygenFree;
+    private LLVMValueRef _memcmp;
+    private LLVMTypeRef _runtimeTypeInfoType;
+    private LLVMValueRef _exceptionThrow;
+    private LLVMValueRef _exceptionObject;
+    private LLVMValueRef _exceptionEndCatch;
+    private LLVMValueRef _exceptionRethrow;
+    private LLVMValueRef _exceptionUnhandled;
+    private LLVMValueRef _tracePush;
+    private LLVMValueRef _tracePop;
+    private LLVMValueRef _exceptionPointer;
+    private LLVMModuleRef _module;
+    private LLVMValueRef _personality;
     private sealed record ExceptionContext(LLVMBasicBlockRef Unwind, LLVMValueRef Pad);
-    private static Stack<ExceptionContext> _exceptionContexts = new();
-    private static bool _usesExceptions;
-    private static bool _usesWindowsSeh;
+    private Stack<ExceptionContext> _exceptionContexts = new();
+    private bool _usesExceptions;
+    private bool _usesWindowsSeh;
     // The runtime "alive" flag of each local that some `delete` releases, keyed by the local's stack slot.
-    private static readonly Dictionary<LLVMValueRef, LLVMValueRef> _dropFlags = new();
+    private readonly Dictionary<LLVMValueRef, LLVMValueRef> _dropFlags = new();
     // Context that owns every type and value created during Generate. Type factories must come from this context,
     // not from LLVMTypeRef's static (global-context) properties, or the module fails verification.
-    private static LLVMContextRef _context;
-    private static LLVMTypeRef ToLlvmStringType() =>
+    private LLVMContextRef _context;
+    private LLVMTypeRef ToLlvmStringType() =>
         _context.GetStructType([LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false);
 
     public GeneratedLlvmModule Generate(string moduleName, SemanticModel model)

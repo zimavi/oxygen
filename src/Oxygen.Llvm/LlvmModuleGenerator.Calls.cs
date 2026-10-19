@@ -9,7 +9,7 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static LLVMValueRef EmitCall(LLVMContextRef context, LLVMBuilderRef builder, CallExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    private LLVMValueRef EmitCall(LLVMContextRef context, LLVMBuilderRef builder, CallExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var parts = expression.Name.Split('.');
         if (parts.Length == 2 && model.Unions.TryGetValue(parts[0], out var union))
@@ -129,7 +129,7 @@ public sealed partial class LlvmModuleGenerator
     }
 
     // `receiver.name(args)` on a primitive, string, or struct receiver: the receiver is the first argument.
-    private static LLVMValueRef EmitReceiverArgumentCall(
+    private LLVMValueRef EmitReceiverArgumentCall(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         CallExpression expression,
@@ -158,7 +158,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Calls a runtime helper that does not throw. Inside a Windows funclet the call must carry the funclet bundle;
     // without it the callee does not get the funclet's frame, and the code faults at run time.
-    private static LLVMValueRef BuildNoThrowCall(LLVMBuilderRef builder, LLVMValueRef function,
+    private LLVMValueRef BuildNoThrowCall(LLVMBuilderRef builder, LLVMValueRef function,
         LLVMValueRef[] arguments, string resultName = "")
     {
         if (_usesWindowsSeh && _exceptionContexts.Count > 0 && _exceptionContexts.Peek().Pad.Handle != IntPtr.Zero)
@@ -171,7 +171,7 @@ public sealed partial class LlvmModuleGenerator
         return builder.BuildCall2(function.FunctionType, function, arguments, resultName);
     }
 
-    private static LLVMValueRef EmitCallOrInvoke(
+    private LLVMValueRef EmitCallOrInvoke(
         LLVMBuilderRef builder,
         LLVMTypeRef functionType,
         LLVMValueRef target,

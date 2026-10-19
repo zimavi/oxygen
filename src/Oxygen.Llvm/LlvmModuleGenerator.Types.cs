@@ -9,7 +9,7 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static bool HasGenericAggregateOwner(FunctionSymbol symbol, SemanticModel model)
+    private bool HasGenericAggregateOwner(FunctionSymbol symbol, SemanticModel model)
     {
         var separator = symbol.ModuleName.LastIndexOf('.');
         if (separator < 0)
@@ -19,13 +19,13 @@ public sealed partial class LlvmModuleGenerator
             || model.Interfaces.TryGetValue(owner, out var iface) && iface.IsGeneric;
     }
 
-    private static bool HasGenericType(SemanticType type) =>
+    private bool HasGenericType(SemanticType type) =>
         type.IsGenericParameter
         || (type.Pointee is not null && HasGenericType(type.Pointee))
         || (type.ElementType is not null && HasGenericType(type.ElementType))
         || (type.TypeArguments?.Any(HasGenericType) ?? false);
 
-    private static LLVMTypeRef ToLlvmFunctionType(FunctionSymbol symbol, SemanticModel model)
+    private LLVMTypeRef ToLlvmFunctionType(FunctionSymbol symbol, SemanticModel model)
     {
         var parameterTypes = new List<LLVMTypeRef>();
         foreach (var parameter in symbol.Parameters)
@@ -89,19 +89,19 @@ public sealed partial class LlvmModuleGenerator
 
     // External functions return string through a trailing out-pointer, because a 16-byte struct return
     // is classified differently by LLVM and by the C ABI of each target.
-    private static bool ReturnsStringThroughPointer(FunctionSymbol symbol) =>
+    private bool ReturnsStringThroughPointer(FunctionSymbol symbol) =>
         symbol.IsExternal && symbol.ReturnType.Kind == SemanticTypeKind.String;
 
-    private static bool IsClassMethod(FunctionSymbol symbol, SemanticModel model) =>
+    private bool IsClassMethod(FunctionSymbol symbol, SemanticModel model) =>
         _accessorSymbols.Contains(symbol)
         || model.Classes.Values.Any(cls => cls.Methods.Contains(symbol))
         || model.Interfaces.Values.Any(iface => iface.Methods.Contains(symbol));
 
-    private static bool UsesPointerStringAbi(FunctionSymbol symbol) =>
+    private bool UsesPointerStringAbi(FunctionSymbol symbol) =>
         symbol.IsExternal &&
         symbol.NativeName is "oxygen_write_stdout" or "oxygen_write_stderr";
 
-    private static LLVMTypeRef ToLlvmType(SemanticType type, SemanticModel model)
+    private LLVMTypeRef ToLlvmType(SemanticType type, SemanticModel model)
     {
         type = NormalizeAggregateType(type, model);
         return type.Primitive switch
@@ -134,7 +134,7 @@ public sealed partial class LlvmModuleGenerator
     };
     }
 
-    private static SemanticType NormalizeAggregateType(SemanticType type, SemanticModel model)
+    private SemanticType NormalizeAggregateType(SemanticType type, SemanticModel model)
     {
         if (type.IsPointer)
             return SemanticType.PointerTo(NormalizeAggregateType(type.Pointee!, model));
@@ -176,7 +176,7 @@ public sealed partial class LlvmModuleGenerator
             : normalized with { StructName = specialized, TypeArguments = null };
     }
 
-    private static SemanticType UnionPayloadType(SemanticType type, SemanticModel model)
+    private SemanticType UnionPayloadType(SemanticType type, SemanticModel model)
     {
         var union = model.Unions[type.EnumName!];
         var payload = union.Cases.FirstOrDefault(item => item.PayloadType is not null)?.PayloadType;
@@ -185,7 +185,7 @@ public sealed partial class LlvmModuleGenerator
         return SubstituteGeneric(payload, union.DeclaredTypeParameters, type.TypeArguments);
     }
 
-    private static SemanticType SubstituteGeneric(
+    private SemanticType SubstituteGeneric(
         SemanticType type, IReadOnlyList<string> parameters, IReadOnlyList<SemanticType>? arguments)
     {
         if (type.IsGenericParameter && arguments is not null)
@@ -205,7 +205,7 @@ public sealed partial class LlvmModuleGenerator
         return type;
     }
 
-    private static string NumericValue(string lexeme)
+    private string NumericValue(string lexeme)
     {
         foreach (var suffix in new[] { "usize", "isize", "f32", "f64", "i16", "i32", "i64", "u16", "u32", "u64", "i8", "u8" })
             if (lexeme.EndsWith(suffix, StringComparison.Ordinal))
@@ -213,7 +213,7 @@ public sealed partial class LlvmModuleGenerator
         return lexeme;
     }
 
-    private static LLVMValueRef CoerceValue(
+    private LLVMValueRef CoerceValue(
         LLVMBuilderRef builder, LLVMValueRef value, SemanticType source, SemanticType target, SemanticModel model)
     {
         if (source == target)
@@ -250,7 +250,7 @@ public sealed partial class LlvmModuleGenerator
     // The single place where numeric conversions are chosen, shared by implicit coercion and explicit casts. The
     // operand's signedness picks the extension and the int/float instructions, so an unsigned value is never read as
     // negative.
-    private static LLVMValueRef EmitNumericConversion(LLVMBuilderRef builder, LLVMValueRef value, SemanticType source,
+    private LLVMValueRef EmitNumericConversion(LLVMBuilderRef builder, LLVMValueRef value, SemanticType source,
         SemanticType target, SemanticModel model)
     {
         var targetType = ToLlvmType(target, model);
@@ -278,12 +278,12 @@ public sealed partial class LlvmModuleGenerator
         return value;
     }
 
-    private static bool IsSignedInteger(SemanticType type) =>
+    private bool IsSignedInteger(SemanticType type) =>
         type.Primitive is PrimitiveType.I8 or PrimitiveType.I16 or PrimitiveType.I32 or PrimitiveType.I64
             or PrimitiveType.ISize;
 
     // Pointer and array indexes are widened to i64. An unsigned index is zero-extended, so u32 4294967295 stays positive.
-    private static LLVMValueRef ExtendIndexToInt64(LLVMBuilderRef builder, LLVMValueRef index, SemanticType type,
+    private LLVMValueRef ExtendIndexToInt64(LLVMBuilderRef builder, LLVMValueRef index, SemanticType type,
         string name) =>
         type.Primitive is PrimitiveType.I64 or PrimitiveType.U64 or PrimitiveType.USize
             ? index
@@ -293,7 +293,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Specializations are keyed by structural types (`Box<Cell<i32>>`), so the type is built
     // structurally and normalized to its specialized name once, at the top.
-    private static SemanticType FromTypeSyntax(TypeSyntax syntax, SemanticModel model) =>
+    private SemanticType FromTypeSyntax(TypeSyntax syntax, SemanticModel model) =>
         NormalizeAggregateType(StructuralTypeFromSyntax(syntax, model), model);
 
     private static SemanticType StructuralTypeFromSyntax(TypeSyntax syntax, SemanticModel model)

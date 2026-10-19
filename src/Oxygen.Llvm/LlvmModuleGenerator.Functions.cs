@@ -9,7 +9,7 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static void EmitConstructor(LLVMContextRef context, LLVMBuilderRef builder, LLVMValueRef function,
+    private void EmitConstructor(LLVMContextRef context, LLVMBuilderRef builder, LLVMValueRef function,
             ClassSymbol cls, ConstructorSymbol ctor, SemanticModel model,
             IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
@@ -68,7 +68,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Emits the statements of a constructor or destructor body. A return inside it has already emitted the exit, so the
     // trailing return is only added when the body falls through.
-    private static void EmitVoidBody(
+    private void EmitVoidBody(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMValueRef function,
@@ -91,7 +91,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Calls the constructor that semantic analysis selected for `: this(...)`, `: base(...)`, or the implicit base
     // call. The arguments are evaluated in the constructor's parameter scope.
-    private static void EmitConstructorChain(
+    private void EmitConstructorChain(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         ClassSymbol cls,
@@ -113,7 +113,7 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildCall2(targetFunction.FunctionType, targetFunction, args.ToArray(), (ReadOnlySpan<char>)string.Empty);
     }
 
-    private static LLVMValueRef CreateZeroValue(SemanticType type, SemanticModel model)
+    private LLVMValueRef CreateZeroValue(SemanticType type, SemanticModel model)
     {
         if (IsValueClass(type, model))
         {
@@ -151,7 +151,7 @@ public sealed partial class LlvmModuleGenerator
         return LLVMValueRef.CreateConstInt(ToLlvmType(type, model), 0, false);
     }
 
-    private static void EmitDestructor(LLVMContextRef context, LLVMBuilderRef builder, LLVMValueRef function,
+    private void EmitDestructor(LLVMContextRef context, LLVMBuilderRef builder, LLVMValueRef function,
             ClassSymbol cls, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         if (_usesExceptions)
@@ -171,7 +171,7 @@ public sealed partial class LlvmModuleGenerator
         EmitVoidBody(context, builder, function, cls.Destructor!.Body, values, storage, model, llvmFunctions);
     }
 
-    private static void EmitNativeMain(
+    private void EmitNativeMain(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMModuleRef module,
@@ -281,7 +281,7 @@ public sealed partial class LlvmModuleGenerator
             builder.BuildRet(result);
     }
 
-    private static void RegisterRuntimeType(
+    private void RegisterRuntimeType(
         LLVMBuilderRef builder,
         LLVMValueRef registerType,
         string actualType,
@@ -291,7 +291,7 @@ public sealed partial class LlvmModuleGenerator
             [GetTypeName(builder, actualType), GetTypeName(builder, parentType)]);
     }
 
-    private static void EmitFunction(
+    private void EmitFunction(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMValueRef function,
@@ -399,7 +399,7 @@ public sealed partial class LlvmModuleGenerator
         }
     }
 
-    private static void EmitTracePush(LLVMBuilderRef builder, string functionName, string fileName, SourceLocation location)
+    private void EmitTracePush(LLVMBuilderRef builder, string functionName, string fileName, SourceLocation location)
     {
         if (!_usesExceptions)
             return;
@@ -411,13 +411,13 @@ public sealed partial class LlvmModuleGenerator
                 LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)Math.Max(0, location.Column), false)]);
     }
 
-    private static void EmitTracePop(LLVMBuilderRef builder)
+    private void EmitTracePop(LLVMBuilderRef builder)
     {
         if (_usesExceptions)
             builder.BuildCall2(_tracePop.FunctionType, _tracePop, []);
     }
 
-    private static void InitializeClassFieldStorage(
+    private void InitializeClassFieldStorage(
         LLVMBuilderRef builder,
         IReadOnlyDictionary<string, LLVMValueRef> values,
         IDictionary<string, LLVMValueRef> storage,
@@ -437,7 +437,7 @@ public sealed partial class LlvmModuleGenerator
         }
     }
 
-    private static void CleanupOwnedScopes(
+    private void CleanupOwnedScopes(
         LLVMBuilderRef builder,
         IReadOnlyDictionary<string, LLVMValueRef> values,
         IReadOnlyDictionary<string, LLVMValueRef> storage,
@@ -446,7 +446,7 @@ public sealed partial class LlvmModuleGenerator
         CleanupOwnedScopesTo(builder, values, storage, model, 0);
     }
 
-    private static void EmitOwnedScopeDestructors(
+    private void EmitOwnedScopeDestructors(
         LLVMBuilderRef builder,
         IReadOnlyDictionary<string, LLVMValueRef> values,
         IReadOnlyDictionary<string, LLVMValueRef> storage,
@@ -463,7 +463,7 @@ public sealed partial class LlvmModuleGenerator
         }
     }
 
-    private static void CleanupOwnedScopesTo(
+    private void CleanupOwnedScopesTo(
         LLVMBuilderRef builder,
         IReadOnlyDictionary<string, LLVMValueRef> values,
         IReadOnlyDictionary<string, LLVMValueRef> storage,
@@ -477,7 +477,7 @@ public sealed partial class LlvmModuleGenerator
         }
     }
 
-    private static void CleanupOwnedScope(
+    private void CleanupOwnedScope(
         LLVMBuilderRef builder,
         IReadOnlyDictionary<string, LLVMValueRef> values,
         IReadOnlyDictionary<string, LLVMValueRef> storage,
@@ -536,13 +536,13 @@ public sealed partial class LlvmModuleGenerator
         scope.Clear();
     }
 
-    private static void RemoveOwned(string name)
+    private void RemoveOwned(string name)
     {
         foreach (var scope in _ownedScopes)
             scope.RemoveAll(owned => owned.Name == name);
     }
 
-    private static void TransferOwnership(string sourceName, string targetName)
+    private void TransferOwnership(string sourceName, string targetName)
     {
         RemoveOwned(sourceName);
     }

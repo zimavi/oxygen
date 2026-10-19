@@ -13,9 +13,9 @@ public sealed partial class LlvmModuleGenerator
     // LoopDepth is the number of enclosing loops and switches, which decides whether a break or continue crosses it.
     private sealed record FinallyScope(Statement Finally, int ContextDepth, int LoopDepth);
 
-    private static Stack<FinallyScope> _finallyScopes = new();
+    private Stack<FinallyScope> _finallyScopes = new();
 
-    private static bool PushExceptionTarget(LLVMBasicBlockRef unwind)
+    private bool PushExceptionTarget(LLVMBasicBlockRef unwind)
     {
         if (unwind.Handle == IntPtr.Zero)
             return false;
@@ -25,7 +25,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Emits one copy of a finally body as control leaves the try statement that owns `scope`. Exceptions in the copy
     // go to the handlers that enclose that try statement. Returns true when the copy itself returns or branches away.
-    private static bool EmitFinallyCopy(
+    private bool EmitFinallyCopy(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMValueRef function,
@@ -65,7 +65,7 @@ public sealed partial class LlvmModuleGenerator
     // Runs the finally bodies that a return, break or continue leaves, innermost first. Only scopes whose LoopDepth is
     // at least minLoopDepth are crossed: a break or continue stays inside its target loop. Returns true if a finally
     // body returned, in which case the caller must not emit its own exit.
-    private static bool EmitExitFinallies(
+    private bool EmitExitFinallies(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMValueRef function,
@@ -92,7 +92,7 @@ public sealed partial class LlvmModuleGenerator
 
     // The loop depth a break or continue leaves to: its target loop is the innermost entry for break and the innermost
     // loop for continue. Scopes deeper than that are crossed.
-    private static int TargetLoopDepth(
+    private int TargetLoopDepth(
         Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)> loops,
         bool isContinue)
     {
@@ -111,7 +111,7 @@ public sealed partial class LlvmModuleGenerator
     // ordinary block. The catch bodies then run as normal code, so a return, break or continue inside them needs no
     // funclet-aware control flow, and their finally copy is emitted inline like any other exit. Only the unwinding path
     // runs finally inside a cleanup funclet.
-    private static bool EmitWindowsSehTryStatement(
+    private bool EmitWindowsSehTryStatement(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         LLVMValueRef function,

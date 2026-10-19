@@ -11,7 +11,7 @@ public sealed partial class LlvmModuleGenerator
 {
     // The bytes go into a private constant global of exactly their length, with no NUL terminator added, so an embedded
     // zero byte is part of the value and the length stays correct.
-    private static LLVMValueRef EmitStringLiteral(LLVMBuilderRef builder, StringLiteralExpression literal)
+    private LLVMValueRef EmitStringLiteral(LLVMBuilderRef builder, StringLiteralExpression literal)
     {
         var bytes = Encoding.UTF8.GetBytes(StringLiteralDecoder.Decode(literal.Lexeme, literal.Location));
         var module = builder.InsertBlock.Parent.GlobalParent;
@@ -30,7 +30,7 @@ public sealed partial class LlvmModuleGenerator
             "string.length");
     }
 
-    private static LLVMValueRef EmitConditional(
+    private LLVMValueRef EmitConditional(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         ConditionalExpression expression,
@@ -68,7 +68,7 @@ public sealed partial class LlvmModuleGenerator
 
     // The right operand runs only when the left one does not decide the result, so `a != null && a.x` never reads a.x
     // through a null a. The result is a phi over the two incoming edges.
-    private static LLVMValueRef EmitShortCircuit(LLVMContextRef context, LLVMBuilderRef builder, BinaryExpression expression,
+    private LLVMValueRef EmitShortCircuit(LLVMContextRef context, LLVMBuilderRef builder, BinaryExpression expression,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
@@ -95,7 +95,7 @@ public sealed partial class LlvmModuleGenerator
         return result;
     }
 
-    private static LLVMValueRef EmitBinary(LLVMContextRef context, LLVMBuilderRef builder, BinaryExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    private LLVMValueRef EmitBinary(LLVMContextRef context, LLVMBuilderRef builder, BinaryExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         if (expression.Operator is TokenKind.AmpersandAmpersand or TokenKind.PipePipe)
             return EmitShortCircuit(context, builder, expression, values, storage, model, llvmFunctions);
@@ -198,7 +198,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Integer division and remainder are undefined in LLVM for a zero divisor and for INT_MIN / -1 (signed only). Oxygen
     // reports both through the runtime instead, so the undefined operation is never executed.
-    private static void EmitIntegerDivisionChecks(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef right, bool isUnsigned)
+    private void EmitIntegerDivisionChecks(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef right, bool isUnsigned)
     {
         var divisorIsZero = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, right,
             LLVMValueRef.CreateConstInt(right.TypeOf, 0, false), "div.zero");
@@ -215,7 +215,7 @@ public sealed partial class LlvmModuleGenerator
     }
 
     // A shift count must be less than the bit width of the shifted value; LLVM leaves other counts undefined.
-    private static void EmitShiftRangeCheck(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef count)
+    private void EmitShiftRangeCheck(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef count)
     {
         var width = left.TypeOf.IntWidth;
         var outOfRange = builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, count,
@@ -232,7 +232,7 @@ public sealed partial class LlvmModuleGenerator
     }
 
     // Branches to the runtime failure hook when `failed` is true. The hook does not return.
-    private static void EmitArithmeticCheck(LLVMBuilderRef builder, LLVMValueRef failed, ArithmeticFailureKind kind,
+    private void EmitArithmeticCheck(LLVMBuilderRef builder, LLVMValueRef failed, ArithmeticFailureKind kind,
         LLVMValueRef operand)
     {
         var function = builder.InsertBlock.Parent;
@@ -249,7 +249,7 @@ public sealed partial class LlvmModuleGenerator
         type.Primitive is PrimitiveType.U8 or PrimitiveType.U16 or PrimitiveType.U32 or PrimitiveType.U64
             or PrimitiveType.USize;
 
-    private static SemanticType CommonNumericType(SemanticType left, SemanticType right)
+    private SemanticType CommonNumericType(SemanticType left, SemanticType right)
     {
         if (left == right)
             return left;
@@ -264,7 +264,7 @@ public sealed partial class LlvmModuleGenerator
         return left;
     }
 
-    private static LLVMValueRef EmitUnary(LLVMContextRef context, LLVMBuilderRef builder, UnaryExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    private LLVMValueRef EmitUnary(LLVMContextRef context, LLVMBuilderRef builder, UnaryExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         if (expression.Operator is TokenKind.PlusPlus or TokenKind.MinusMinus)
         {
@@ -316,7 +316,7 @@ public sealed partial class LlvmModuleGenerator
             : throw new InvalidOperationException($"Unsupported unary operator '{expression.Operator}'.");
     }
 
-    private static LLVMValueRef EmitLValueAddress(
+    private LLVMValueRef EmitLValueAddress(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         Expression expression,

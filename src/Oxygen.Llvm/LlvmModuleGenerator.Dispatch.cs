@@ -9,7 +9,7 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static IReadOnlyList<FunctionSymbol> GetVirtualMethods(ClassSymbol cls, SemanticModel model)
+    private IReadOnlyList<FunctionSymbol> GetVirtualMethods(ClassSymbol cls, SemanticModel model)
     {
         var methods = cls.BaseTypeName is not null && model.Classes.TryGetValue(cls.BaseTypeName, out var baseClass)
             ? GetVirtualMethods(baseClass, model).ToList()
@@ -34,12 +34,12 @@ public sealed partial class LlvmModuleGenerator
         return methods;
     }
 
-    private static IReadOnlyList<FunctionSymbol> GetClassAccessors(ClassSymbol cls, SemanticModel model) =>
+    private IReadOnlyList<FunctionSymbol> GetClassAccessors(ClassSymbol cls, SemanticModel model) =>
         cls.DeclaredProperties.SelectMany(property => property.Declaration.Accessors
             .Where(accessor => accessor.Kind is PropertyAccessorKind.Get or PropertyAccessorKind.Set)
             .Select(accessor => _propertyAccessors[(cls.Name, property.Name, accessor.Kind)])).ToArray();
 
-    private static IEnumerable<FunctionSymbol> CreatePropertyAccessorSymbols(ClassSymbol cls, SemanticModel model)
+    private IEnumerable<FunctionSymbol> CreatePropertyAccessorSymbols(ClassSymbol cls, SemanticModel model)
     {
         foreach (var property in cls.DeclaredProperties)
             foreach (var accessor in property.Declaration.Accessors.Where(accessor =>
@@ -67,7 +67,7 @@ public sealed partial class LlvmModuleGenerator
             }
     }
 
-    private static IEnumerable<FunctionSymbol> CreateInterfaceAccessorSymbols(InterfaceSymbol iface)
+    private IEnumerable<FunctionSymbol> CreateInterfaceAccessorSymbols(InterfaceSymbol iface)
     {
         foreach (var property in iface.DeclaredProperties)
             foreach (var accessor in property.Declaration.Accessors.Where(accessor =>
@@ -96,7 +96,7 @@ public sealed partial class LlvmModuleGenerator
             }
     }
 
-    private static IReadOnlyList<FunctionSymbol> GetInterfaceSlots(InterfaceSymbol iface)
+    private IReadOnlyList<FunctionSymbol> GetInterfaceSlots(InterfaceSymbol iface)
     {
         var slots = iface.Methods.ToList();
         foreach (var property in iface.DeclaredProperties)
@@ -107,7 +107,7 @@ public sealed partial class LlvmModuleGenerator
         return slots;
     }
 
-    private static void AddInterfaceTable(
+    private void AddInterfaceTable(
             LLVMModuleRef module,
             ClassSymbol cls,
             InterfaceSymbol iface,
@@ -129,7 +129,7 @@ public sealed partial class LlvmModuleGenerator
         _interfaceTables[(cls.Name, iface.Name)] = table;
     }
 
-    private static FunctionSymbol ResolveInterfaceImplementation(ClassSymbol cls, InterfaceSymbol iface, FunctionSymbol contract,
+    private FunctionSymbol ResolveInterfaceImplementation(ClassSymbol cls, InterfaceSymbol iface, FunctionSymbol contract,
             SemanticModel model)
     {
         if (contract.Name.StartsWith("get_", StringComparison.Ordinal)
@@ -179,13 +179,13 @@ public sealed partial class LlvmModuleGenerator
                 ? new TypeSyntax(null, false, location, IsString: true)
                 : new TypeSyntax(null, false, location, NamedType: type.StructName ?? type.EnumName);
 
-    private static int FieldOffset(ClassSymbol cls, SemanticModel model, int fieldIndex) =>
+    private int FieldOffset(ClassSymbol cls, SemanticModel model, int fieldIndex) =>
         cls.IsValue ? fieldIndex : 1 + _virtualSlotCount + fieldIndex;
 
     private static bool IsValueClass(SemanticType type, SemanticModel model) =>
         type.IsClass && model.Classes.TryGetValue(type.StructName!, out var cls) && cls.IsValue;
 
-    private static LLVMTypeRef ClassPointerType(string name) =>
+    private LLVMTypeRef ClassPointerType(string name) =>
         LLVMTypeRef.CreatePointer(_classTypes[name], 0);
 
     // Every native symbol the module declares goes through here: runtime functions, the native entry point, externs and

@@ -9,7 +9,7 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static LLVMValueRef EmitExpression(
+    private LLVMValueRef EmitExpression(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         Expression expression,
@@ -65,10 +65,10 @@ public sealed partial class LlvmModuleGenerator
             _ => throw new InvalidOperationException($"Unsupported expression '{expression.GetType().Name}'.")
         };
 
-    private static bool IsNativeSwitchType(SemanticType type) =>
+    private bool IsNativeSwitchType(SemanticType type) =>
         type.IsInteger || type.IsEnum || type.Primitive == PrimitiveType.Bool;
 
-    private static LLVMValueRef EmitSwitchConstant(
+    private LLVMValueRef EmitSwitchConstant(
         Expression expression,
         SemanticType selectorType,
         LLVMContextRef context,
@@ -85,7 +85,7 @@ public sealed partial class LlvmModuleGenerator
 
     // Two strings are equal when their lengths match and their bytes match. The bytes compared are only those both
     // strings have, so a shorter string is never read past its end.
-    private static LLVMValueRef EmitStringEquality(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef right)
+    private LLVMValueRef EmitStringEquality(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef right)
     {
         var leftPointer = builder.BuildExtractValue(left, 0, "string.left.pointer");
         var rightPointer = builder.BuildExtractValue(right, 0, "string.right.pointer");
@@ -102,7 +102,7 @@ public sealed partial class LlvmModuleGenerator
         return builder.BuildAnd(sameLength, sameContents, "string.equal");
     }
 
-    private static LLVMValueRef EmitSwitchEquality(
+    private LLVMValueRef EmitSwitchEquality(
         LLVMBuilderRef builder,
         LLVMValueRef selector,
         LLVMValueRef label,
@@ -119,7 +119,7 @@ public sealed partial class LlvmModuleGenerator
 
     // The class declaring the property accessed as `this.<member>`: the class of `this` or its
     // nearest base class that declares it. Null when the member is a field.
-    private static ClassSymbol? ThisPropertyOwner(MemberAccessExpression member, SemanticModel model)
+    private ClassSymbol? ThisPropertyOwner(MemberAccessExpression member, SemanticModel model)
     {
         var thisType = NormalizeAggregateType(model.ExpressionTypes[member.Target], model);
         for (var cls = model.Classes.GetValueOrDefault(thisType.StructName!); cls is not null;
@@ -131,7 +131,7 @@ public sealed partial class LlvmModuleGenerator
         return null;
     }
 
-    private static LLVMValueRef EmitNewExpression(
+    private LLVMValueRef EmitNewExpression(
         LLVMContextRef context, LLVMBuilderRef builder, NewExpression expression,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
@@ -143,7 +143,7 @@ public sealed partial class LlvmModuleGenerator
             model.ConstructorSelections[expression], values, storage, model, llvmFunctions);
     }
 
-    private static LLVMValueRef EmitClassConstructionExpression(
+    private LLVMValueRef EmitClassConstructionExpression(
         LLVMContextRef context, LLVMBuilderRef builder, ClassConstructionExpression expression,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
@@ -152,7 +152,7 @@ public sealed partial class LlvmModuleGenerator
             expression.Arguments, false, model.ConstructorSelections[expression],
             values, storage, model, llvmFunctions);
 
-    private static LLVMValueRef EmitClassConstruction(
+    private LLVMValueRef EmitClassConstruction(
         LLVMContextRef context, LLVMBuilderRef builder, string className,
         IReadOnlyList<Expression> arguments, bool heapAllocated, int constructorIndex,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
@@ -205,7 +205,7 @@ public sealed partial class LlvmModuleGenerator
         return cls.IsValue ? builder.BuildLoad2(classType, instance, "value") : instance;
     }
 
-    private static LLVMValueRef EmitUnionConstruction(
+    private LLVMValueRef EmitUnionConstruction(
         LLVMContextRef context, LLVMBuilderRef builder, UnionConstructionExpression construction,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
@@ -225,7 +225,7 @@ public sealed partial class LlvmModuleGenerator
         return result;
     }
 
-    private static LLVMValueRef EmitArrayLiteral(LLVMContextRef context, LLVMBuilderRef builder, ArrayLiteralExpression literal,
+    private LLVMValueRef EmitArrayLiteral(LLVMContextRef context, LLVMBuilderRef builder, ArrayLiteralExpression literal,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
@@ -235,7 +235,7 @@ public sealed partial class LlvmModuleGenerator
         return result;
     }
 
-    private static LLVMValueRef EmitArrayAddress(LLVMContextRef context, LLVMBuilderRef builder, IndexExpression index,
+    private LLVMValueRef EmitArrayAddress(LLVMContextRef context, LLVMBuilderRef builder, IndexExpression index,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
@@ -275,7 +275,7 @@ public sealed partial class LlvmModuleGenerator
             new LLVMValueRef[] { LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), llvmIndex }, (ReadOnlySpan<char>)"array.address");
     }
 
-    private static LLVMValueRef EmitStructLiteral(
+    private LLVMValueRef EmitStructLiteral(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         StructLiteralExpression literal,
@@ -300,7 +300,7 @@ public sealed partial class LlvmModuleGenerator
         return result;
     }
 
-    private static LLVMValueRef EmitMemberAccess(
+    private LLVMValueRef EmitMemberAccess(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         MemberAccessExpression member,
