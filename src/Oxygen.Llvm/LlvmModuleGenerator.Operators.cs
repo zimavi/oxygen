@@ -11,9 +11,12 @@ public sealed partial class LlvmModuleGenerator
 {
     // The bytes go into a private constant global of exactly their length, with no NUL terminator added, so an embedded
     // zero byte is part of the value and the length stays correct.
-    private LLVMValueRef EmitStringLiteral(LLVMBuilderRef builder, StringLiteralExpression literal)
+    private LLVMValueRef EmitStringLiteral(LLVMBuilderRef builder, StringLiteralExpression literal) =>
+        EmitStringBytes(builder, Encoding.UTF8.GetBytes(StringLiteralDecoder.Decode(literal.Lexeme, literal.Location)));
+
+    // A string value whose bytes are the given UTF-8 text, with a private constant global holding the bytes.
+    private LLVMValueRef EmitStringBytes(LLVMBuilderRef builder, byte[] bytes)
     {
-        var bytes = Encoding.UTF8.GetBytes(StringLiteralDecoder.Decode(literal.Lexeme, literal.Location));
         var module = builder.InsertBlock.Parent.GlobalParent;
         var data = module.AddGlobal(LLVMTypeRef.CreateArray(_context.Int8Type, (uint)bytes.Length), "oxygen.string");
         data.Initializer = LLVMValueRef.CreateConstArray(_context.Int8Type,

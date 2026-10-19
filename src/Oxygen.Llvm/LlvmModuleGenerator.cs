@@ -91,7 +91,9 @@ public sealed partial class LlvmModuleGenerator
                 .ToList();
             var llvmFunctions = new Dictionary<FunctionSymbol, LLVMValueRef>();
 
-            _usesExceptions = RequiresExceptionRuntime(model);
+            // Null-reference checks can raise NullReferenceException from any class member access, and std.exception is always
+            // loaded, so every module needs the exception runtime.
+            _usesExceptions = true;
             _usesWindowsSeh = _usesExceptions && IsWindowsNativeSehTarget();
 
             _classTypes.Clear();
@@ -264,43 +266,6 @@ public sealed partial class LlvmModuleGenerator
         OperatingSystem.IsWindows()
         && !RuntimeInformation.RuntimeIdentifier.Contains("mingw", StringComparison.OrdinalIgnoreCase)
         && !RuntimeInformation.OSDescription.Contains("mingw", StringComparison.OrdinalIgnoreCase);
-
-    private static bool RequiresExceptionRuntime(SemanticModel model)
-    {
-        IEnumerable<BlockStatement> bodies = model.Functions.Values
-            .Where(function => !function.IsGeneric)
-            .Select(function => function.Declaration.Body)
-            .Concat(model.Classes.Values.Where(cls => !cls.IsGeneric)
-                .SelectMany(cls => cls.Constructors.Select(ctor => ctor.Declaration.Body)))
-            .Concat(model.Classes.Values.Where(cls => !cls.IsGeneric)
-                .Where(cls => cls.Destructor is not null)
-                .Select(cls => cls.Destructor!.Body))
-            .Concat(model.Classes.Values.Where(cls => !cls.IsGeneric)
-                .SelectMany(cls => cls.Methods.Select(method => method.Declaration.Body)))
-            .Concat(model.Interfaces.Values.Where(iface => !iface.IsGeneric)
-                .SelectMany(iface => iface.Methods.Select(method => method.Declaration.Body)));
-
-        return bodies.Any(ContainsExceptionStatement);
-    }
-
-    private static bool ContainsExceptionStatement(BlockStatement block) =>
-        block.Statements.Any(ContainsExceptionStatement);
-
-    private static bool ContainsExceptionStatement(Statement statement) =>
-        statement switch
-        {
-            ThrowStatement => true,
-            TryStatement => true,
-            BlockStatement block => ContainsExceptionStatement(block),
-            IfStatement conditional => ContainsExceptionStatement(conditional.Then)
-                || (conditional.Else is not null && ContainsExceptionStatement(conditional.Else)),
-            WhileStatement loop => ContainsExceptionStatement(loop.Body),
-            ForStatement loop => (loop.Initializer is not null && ContainsExceptionStatement(loop.Initializer))
-                || (loop.Increment is not null && ContainsExceptionStatement(loop.Increment))
-                || ContainsExceptionStatement(loop.Body),
-            ForInStatement loop => ContainsExceptionStatement(loop.Body),
-            _ => false
-        };
 
     private static string ConstructorKey(ClassSymbol cls, ConstructorSymbol ctor) =>
             cls.Name + "(" + string.Join(",", ctor.Parameters.Select(p => OxygenNameMangler.EncodeType(p.Type))) + ")";

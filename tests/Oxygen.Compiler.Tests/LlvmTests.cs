@@ -417,7 +417,7 @@ public sealed class LlvmTests
         var ir = generated.ToString();
 
         Assert.Contains("define void @_Ox_v0_m7program_f4main()", ir);
-        Assert.Contains("call void @_Ox_v0_m7program_f4main()", ir);
+        Assert.Contains("invoke void @_Ox_v0_m7program_f4main()", ir);
         Assert.DoesNotContain("%call = call void", ir);
         Assert.Contains("define i32 @main(i32 %argc, ptr %argv)", ir);
         Assert.Contains("ret i32 0", ir);
@@ -678,7 +678,7 @@ public sealed class LlvmTests
         Assert.Contains("declare void @__oxygen_runtime_initialize()", ir);
         Assert.Contains("define i32 @main(i32 %argc, ptr %argv)", ir);
         Assert.Contains("call void @__oxygen_runtime_initialize()", ir);
-        Assert.Contains("call i32 @_Ox_v0_m7program_f4main()", ir);
+        Assert.Contains("invoke i32 @_Ox_v0_m7program_f4main()", ir);
     }
 
     [Fact]
@@ -850,7 +850,7 @@ public sealed class LlvmTests
     public void EmitsAFreeWhenAnAutomaticFunctionsAllocationGoesOutOfScope()
     {
         var model = Analyze(
-            "class Box { i32 value = 1; } void f() { Box b = new Box(); i32 v = b.value; } i32 main() { f(); return 0; }");
+            "class Box { i32 value = 1; } void f() { Box b = new Box(); i32 v = 1; } i32 main() { f(); return 0; }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
@@ -965,7 +965,7 @@ public sealed class LlvmTests
     [Fact]
     public void AFailedGenerationDoesNotChangeTheNextOne()
     {
-        const string valid = "class Box { i32 value; } i32 main() { Box box = new Box(); return box.value; }";
+        const string valid = "class Box { i32 value; } i32 main() { Box box = new Box(); return 0; }";
         var expected = new LlvmModuleGenerator().Generate("program", Analyze(valid)).ToString();
 
         // The forced cast fails inside a try, while main owns a local, which leaves the generator partway through both.

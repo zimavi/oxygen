@@ -702,32 +702,7 @@ public sealed partial class LlvmModuleGenerator
             case ThrowStatement throwStatement:
                 {
                     var thrown = EmitExpression(context, builder, throwStatement.Value, values, storage, model, llvmFunctions);
-                    var raw = builder.BuildBitCast(thrown,
-                        LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "exception.object");
-                    if (_exceptionContexts.Count == 0)
-                    {
-                        builder.BuildCall2(_exceptionThrow.FunctionType, _exceptionThrow,
-                            new[] { raw }, (ReadOnlySpan<char>)string.Empty);
-                        builder.BuildUnreachable();
-                        return true;
-                    }
-
-                    var normal = function.AppendBasicBlock("throw.returned");
-                    var exceptionContext = _exceptionContexts.Peek();
-                    if (_usesWindowsSeh && exceptionContext.Pad.Handle != IntPtr.Zero)
-                    {
-                        using var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { exceptionContext.Pad });
-                        builder.BuildInvokeWithOperandBundles(_exceptionThrow.FunctionType, _exceptionThrow,
-                            new[] { raw }, normal, exceptionContext.Unwind, new LLVMOperandBundleRef[] { funclet },
-                            (ReadOnlySpan<char>)string.Empty);
-                    }
-                    else
-                    {
-                        builder.BuildInvoke2(_exceptionThrow.FunctionType, _exceptionThrow,
-                            new[] { raw }, normal, exceptionContext.Unwind, (ReadOnlySpan<char>)string.Empty);
-                    }
-                    builder.PositionAtEnd(normal);
-                    builder.BuildUnreachable();
+                    EmitThrowObject(builder, thrown);
                     return true;
                 }
             case TryStatement tryStatement:

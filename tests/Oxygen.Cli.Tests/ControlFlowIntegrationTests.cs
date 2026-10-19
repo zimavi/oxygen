@@ -644,6 +644,39 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void ReadingAMemberThroughANullClassReferenceThrowsNullReferenceException()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                i32 value = 3;
+            }
+
+            class Holder {
+                Box inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                try {
+                    io.print(holder.inner.value);
+                } catch (NullReferenceException error) {
+                    io.print(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("The member 'value' was read through a null class reference.", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
     public void BreakInsideACatchBodyLeavesTheLoop()
     {
         NativeProgram.RequireNativeToolchain();

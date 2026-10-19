@@ -161,11 +161,26 @@ public sealed partial class LlvmModuleGenerator
         className = NormalizeAggregateType(SemanticType.Class(className), model).StructName ?? className;
         var cls = model.Classes[className];
         var classType = ToLlvmType(SemanticType.Class(className), model);
+        var instance = AllocateClassInstance(builder, className, cls, heapAllocated, model, llvmFunctions);
+        var ctor = cls.Constructors[constructorIndex];
+        var args = new List<LLVMValueRef> { instance };
+        for (var i = 0; i < arguments.Count; i++)
+            args.Add(CoerceValue(builder, EmitExpression(context, builder, arguments[i], values, storage, model, llvmFunctions),
+                model.ExpressionTypes[arguments[i]], ctor.Parameters[i].Type, model));
+        builder.BuildCall2(_constructors[ConstructorKey(cls, ctor)].FunctionType,
+            _constructors[ConstructorKey(cls, ctor)], args.ToArray(), (ReadOnlySpan<char>)string.Empty);
+        return cls.IsValue ? builder.BuildLoad2(classType, instance, "value") : instance;
+    }
+
+    // Allocates an instance and stores its runtime type and vtable, before any constructor runs. A heap object is
+    // allocated with its own layout (header and fields), not SizeOf(class), which is the size of a class reference.
+    private LLVMValueRef AllocateClassInstance(
+        LLVMBuilderRef builder, string className, ClassSymbol cls, bool heapAllocated,
+        SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
         LLVMValueRef instance;
         if (heapAllocated)
         {
-            // The object's own layout (header and fields), not SizeOf(class), which is the size of
-            // a class reference.
             var raw = builder.BuildCall2(_oxygenAlloc.FunctionType, _oxygenAlloc,
                 new[] { _classTypes[className].SizeOf }, "object");
             instance = builder.BuildBitCast(raw, ClassPointerType(className), "object.cast");
@@ -195,14 +210,7 @@ public sealed partial class LlvmModuleGenerator
                     LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "vtable.method"), slotAddress);
             }
         }
-        var ctor = cls.Constructors[constructorIndex];
-        var args = new List<LLVMValueRef> { instance };
-        for (var i = 0; i < arguments.Count; i++)
-            args.Add(CoerceValue(builder, EmitExpression(context, builder, arguments[i], values, storage, model, llvmFunctions),
-                model.ExpressionTypes[arguments[i]], ctor.Parameters[i].Type, model));
-        builder.BuildCall2(_constructors[ConstructorKey(cls, ctor)].FunctionType,
-            _constructors[ConstructorKey(cls, ctor)], args.ToArray(), (ReadOnlySpan<char>)string.Empty);
-        return cls.IsValue ? builder.BuildLoad2(classType, instance, "value") : instance;
+        return instance;
     }
 
     private LLVMValueRef EmitUnionConstruction(
@@ -358,6 +366,8 @@ public sealed partial class LlvmModuleGenerator
                 var getter = _propertyAccessors[(cls.Name, property.Name, PropertyAccessorKind.Get)];
                 var targetFunction = llvmFunctions[getter];
                 var receiver = target;
+                if (!cls.IsValue)
+                    EmitNullReferenceCheck(builder, receiver, member.MemberName, model, llvmFunctions);
                 if (property.Declaration.IsVirtual || property.Declaration.IsOverride)
                 {
                     var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
@@ -373,6 +383,7 @@ public sealed partial class LlvmModuleGenerator
                 .First(pair => pair.field.Name == member.MemberName).index + 1;
             if (cls.IsValue)
                 return builder.BuildExtractValue(target, (uint)(fieldIndex - 1), $"field.{member.MemberName}");
+            EmitNullReferenceCheck(builder, target, member.MemberName, model, llvmFunctions);
             fieldIndex = FieldOffset(cls, model, fieldIndex - 1);
             var address = builder.BuildStructGEP2(_classTypes[cls.Name], target, (uint)fieldIndex,
                 $"field.{member.MemberName}");
