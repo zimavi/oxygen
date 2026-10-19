@@ -176,4 +176,45 @@ public sealed class LexerTests
 
         Assert.Equal(new SourceLocation(1, 5), exception.Location);
     }
+
+    [Fact]
+    public void AcceptsTheSupportedStringEscapes()
+    {
+        var token = _lexer.Tokenize("\"a\\n\\t\\\\\\\"\\/\\b\\f\\r\"")[0];
+
+        Assert.Equal(TokenKind.StringLiteral, token.Kind);
+    }
+
+    [Fact]
+    public void ReportsAnUnsupportedStringEscapeAtItsColumn()
+    {
+        var exception = Assert.Throws<LexicalException>(() => _lexer.Tokenize("\"bad \\q\""));
+
+        Assert.Contains("Unsupported escape sequence '\\q'", exception.Message);
+        Assert.Equal(new SourceLocation(1, 6), exception.Location);
+    }
+
+    [Fact]
+    public void ReportsAUnicodeEscapeWithoutFourDigits()
+    {
+        var exception = Assert.Throws<LexicalException>(() => _lexer.Tokenize("\"\\u00G1\""));
+
+        Assert.Contains("four hexadecimal digits", exception.Message);
+    }
+
+    [Fact]
+    public void ReportsALoneSurrogateEscape()
+    {
+        var exception = Assert.Throws<LexicalException>(() => _lexer.Tokenize("\"\\uD800\""));
+
+        Assert.Contains("surrogate", exception.Message);
+    }
+
+    [Fact]
+    public void DecodesEscapesIncludingAnEmbeddedNulAndASurrogatePair()
+    {
+        var value = StringLiteralDecoder.Decode("\"a\\u0000b\\uD83D\\uDE00\"", new SourceLocation(1, 1));
+
+        Assert.Equal("a\0b\uD83D\uDE00", value);
+    }
 }

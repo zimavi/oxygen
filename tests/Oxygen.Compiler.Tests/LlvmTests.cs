@@ -332,7 +332,8 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("ret i64 8", ir);
+        // A class reference is a pointer, so its size is LLVM's pointer size under the module's data layout.
+        Assert.Contains("ret i64 ptrtoint (ptr getelementptr (ptr, ptr null, i32 1) to i64)", ir);
     }
 
     [Fact]
@@ -764,6 +765,83 @@ public sealed class LlvmTests
         var ir = generated.ToString();
 
         Assert.Contains("ret i32 3", ir);
+    }
+
+    [Fact]
+    public void ShortCircuitOperatorsBranchOnTheLeftOperandAndJoinWithAPhi()
+    {
+        var model = Analyze(
+            "i32 main() { i32 n = 0; if (n == 0 || 5 / n > 0) { return 4; } return 5; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("or.rhs", ir);
+        Assert.Contains("phi i1", ir);
+    }
+
+    [Fact]
+    public void IntegerDivisionChecksZeroDivisorAndSignedOverflowBeforeDividing()
+    {
+        var model = Analyze(
+            "i32 main() { i32 a = 7; i32 b = 2; return a / b + a % b; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("div.zero", ir);
+        Assert.Contains("div.overflow", ir);
+        Assert.Contains("call void @__oxygen_runtime_arithmetic_failure", ir);
+    }
+
+    [Fact]
+    public void UnsignedIntegersConvertToFloatingPointWithUnsignedInstructions()
+    {
+        var model = Analyze(
+            "i32 main() { u32 value = 4294967295; f64 converted = cast<f64>(value); return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("uitofp i32", ir);
+        Assert.DoesNotContain("sitofp i32", ir);
+    }
+
+    [Fact]
+    public void IfWhoseArmsBothReturnEndsItsMergeBlockWithUnreachable()
+    {
+        var model = Analyze(
+            "i32 main() { i32 x = 1; if (x == 1) { return 7; } else { return 8; } }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Matches(@"if\.end:[^\n]*\n\s+unreachable", ir);
+    }
+
+    [Fact]
+    public void StringLiteralsKeepEmbeddedZeroBytes()
+    {
+        var model = Analyze(
+            "i32 main() { string text = \"a\\u0000b\"; return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("[3 x i8] c\"a\\00b\"", ir);
+    }
+
+    [Fact]
+    public void ShadowingDeclarationGetsItsOwnSlotAndTheOuterOneIsRestored()
+    {
+        var model = Analyze(
+            "i32 main() { i32 a = 1; { i32 a = 2; } return a; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("%a.addr1 = alloca i32", ir);
+        Assert.Contains("ret i32 %a", ir);
     }
 
     [Fact]

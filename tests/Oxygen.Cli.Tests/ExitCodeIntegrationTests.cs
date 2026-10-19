@@ -44,16 +44,6 @@ public sealed class ExitCodeIntegrationTests : IDisposable
         Assert.Equal(55, run.ExitCode);
     }
 
-    private (int ExitCode, string Output, string Error) BuildAndRun(string source)
-    {
-        var sourcePath = Path.Combine(_directory, "main.oxy");
-        var executable = Path.Combine(_directory, "main.exe");
-        File.WriteAllText(sourcePath, source);
-
-        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
-            ["build", sourcePath, "-o", executable, "-r", NativeProgram.RuntimeLibrary]);
-        Assert.True(build.ExitCode == 0, $"Build failed with exit code {build.ExitCode}:\n{build.Error}");
-
-        return NativeProgram.RunProcess(executable, []);
-    }
+    private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
+        NativeProgram.BuildAndRun(_directory, source);
 }

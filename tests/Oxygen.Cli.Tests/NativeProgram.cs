@@ -39,12 +39,29 @@ internal static class NativeProgram
             throw Xunit.Sdk.SkipException.ForSkip($"Runtime not built: '{RuntimeLibrary}' (run runtime/build.ps1).");
     }
 
+    // Compiles `source` as main.oxy in `directory` against the runtime, then runs the executable.
+    public static (int ExitCode, string Output, string Error) BuildAndRun(string directory, string source)
+    {
+        var sourcePath = Path.Combine(directory, "main.oxy");
+        var executable = Path.Combine(directory, "main.exe");
+        File.WriteAllText(sourcePath, source);
+
+        var build = RunProcess(CompilerExecutable,
+            ["build", sourcePath, "-o", executable, "-r", RuntimeLibrary]);
+        Assert.True(build.ExitCode == 0, $"Build failed with exit code {build.ExitCode}:\n{build.Error}");
+
+        return RunProcess(executable, []);
+    }
+
     public static (int ExitCode, string Output, string Error) RunProcess(string fileName, IEnumerable<string> arguments)
     {
         var startInfo = new ProcessStartInfo(fileName)
         {
             RedirectStandardError = true,
             RedirectStandardOutput = true,
+            // The runtime writes UTF-8 bytes; decoding them with the console code page would garble non-ASCII output.
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false
         };
         foreach (var argument in arguments)
