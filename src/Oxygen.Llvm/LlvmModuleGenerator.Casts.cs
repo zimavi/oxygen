@@ -38,29 +38,7 @@ public sealed partial class LlvmModuleGenerator
         if (operandType.IsPointer && targetType.Primitive is PrimitiveType.USize or PrimitiveType.ISize)
             return builder.BuildPtrToInt(operand, ToLlvmType(targetType, model), "ptr.to.int");
         if (targetType.IsNumeric && operandType.IsNumeric)
-        {
-            var target = ToLlvmType(targetType, model);
-            var source = ToLlvmType(operandType, model);
-            if (targetType.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
-                return operandType.Primitive is PrimitiveType.F32 or PrimitiveType.F64
-                    ? builder.BuildFPCast(operand, target, "float.cast")
-                    : builder.BuildSIToFP(operand, target, "int.to.float");
-            if (operandType.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
-                return builder.BuildFPToSI(operand, target, "float.to.int");
-            var sourceBits = IntegerBitWidth(operandType.Primitive!.Value);
-            var targetBits = IntegerBitWidth(targetType.Primitive!.Value);
-            if (targetBits > sourceBits)
-            {
-                var signed = operandType.Primitive is PrimitiveType.I8 or PrimitiveType.I16
-                    or PrimitiveType.I32 or PrimitiveType.I64;
-                return signed
-                    ? builder.BuildSExt(operand, target, "int.cast")
-                    : builder.BuildZExt(operand, target, "int.cast");
-            }
-            return targetBits < sourceBits
-                ? builder.BuildTrunc(operand, target, "int.cast")
-                : operand;
-        }
+            return EmitNumericConversion(builder, operand, operandType, targetType, model);
         if (!targetType.IsEnum)
             return operand;
 
@@ -84,7 +62,7 @@ public sealed partial class LlvmModuleGenerator
         var failureValue = enumSymbol.UnderlyingType is PrimitiveType.I64 or PrimitiveType.U64
             ? operand
             : builder.BuildZExt(operand, _context.Int64Type, "enum.value");
-        builder.BuildCall2(_enumCastFailure.FunctionType, _enumCastFailure, [failureValue]);
+        BuildNoThrowCall(builder, _enumCastFailure, [failureValue]);
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
         return operand;
@@ -121,13 +99,16 @@ public sealed partial class LlvmModuleGenerator
                 .FirstOrDefault(item => item.field.Name == "message"
                     && item.field.Type.Kind == SemanticTypeKind.String)
             : default;
+        // The offset is the field's address in the object's LLVM layout, so padding and the pointer size come from the
+        // module's data layout rather than a second copy of those rules.
         var messageOffset = messageField.field is null
-            ? 0UL
-            : checked((ulong)(IntPtr.Size * (1 + _virtualSlotCount))
-                + (ulong)cls!.Fields.Take(messageField.index).Sum(field => (long)SizeOf(field.Type, model)));
-        builder.BuildStore(
-            LLVMValueRef.CreateConstInt(_context.Int32Type, messageOffset, false),
-            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 4, "type.message.offset"));
+            ? LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false)
+            : builder.BuildPtrToInt(
+                builder.BuildStructGEP2(_classTypes[typeName],
+                    LLVMValueRef.CreateConstNull(ClassPointerType(typeName)),
+                    (uint)FieldOffset(cls!, model, messageField.index), "message.address"),
+                _context.Int32Type, "message.offset");
+        builder.BuildStore(messageOffset, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 4, "type.message.offset"));
     }
 
     private static LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName)
@@ -184,11 +165,7 @@ public sealed partial class LlvmModuleGenerator
             var valid = LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false);
             foreach (var possibleType in possibleTypes)
             {
-                var candidate = builder.BuildCall2(
-                    _isInstance.FunctionType,
-                    _isInstance,
-                    [objectValue, GetTypeName(builder, possibleType)],
-                    (ReadOnlySpan<char>)"cast.valid");
+                var candidate = BuildNoThrowCall(builder, _isInstance, [objectValue, GetTypeName(builder, possibleType)], "cast.valid");
                 valid = builder.BuildOr(valid, candidate, "cast.valid");
             }
             var invalid = builder.BuildICmp(
@@ -204,8 +181,7 @@ public sealed partial class LlvmModuleGenerator
                 ? GetTypeName(builder, source.StructName!)
                 : builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                     objectValue, "interface.type");
-            builder.BuildCall2(_invalidCast.FunctionType, _invalidCast,
-                [sourceName, GetTypeName(builder, target.StructName!)]);
+            BuildNoThrowCall(builder, _invalidCast, [sourceName, GetTypeName(builder, target.StructName!)]);
             builder.BuildUnreachable();
             builder.PositionAtEnd(continueBlock);
         }
@@ -248,8 +224,7 @@ public sealed partial class LlvmModuleGenerator
         var match = LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false);
         foreach (var possibleType in possibleTypes)
         {
-            var candidate = builder.BuildCall2(_isInstance.FunctionType, _isInstance,
-                [objectValue, GetTypeName(builder, possibleType)], (ReadOnlySpan<char>)"type.match");
+            var candidate = BuildNoThrowCall(builder, _isInstance, [objectValue, GetTypeName(builder, possibleType)], "type.match");
             match = builder.BuildOr(match, candidate, "type.match");
         }
         return match;
@@ -302,38 +277,14 @@ public sealed partial class LlvmModuleGenerator
             && ClassImplementsInterface(cls.BaseTypeName, interfaceName, model);
     }
 
+    // The size is LLVM's own answer for the module's data layout, which is also what the struct GEPs use.
     private static LLVMValueRef EmitSizeOf(SizeOfExpression expression, SemanticModel model)
     {
         var type = expression.TargetType is not null
             ? FromTypeSyntax(expression.TargetType, model)
             : model.ExpressionTypes[expression.Operand!];
-        return LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)SizeOf(type, model), false);
+        return ToLlvmType(type, model).SizeOf;
     }
-
-    private static ulong SizeOf(SemanticType type, SemanticModel model) =>
-        type.Kind switch
-        {
-            SemanticTypeKind.Pointer => 8,
-            SemanticTypeKind.Class => IsValueClass(type, model)
-                ? (ulong)model.Classes[type.StructName!].Fields.Sum(field => (long)SizeOf(field.Type, model))
-                : 8,
-            SemanticTypeKind.Interface => 16,
-            SemanticTypeKind.String => 16,
-            SemanticTypeKind.Array => checked((ulong)type.ArrayLength * SizeOf(type.ElementType!, model)),
-            SemanticTypeKind.Struct => (ulong)model.Structs[type.StructName!].Fields
-                .Sum(field => checked((long)SizeOf(field.Type, model))),
-            SemanticTypeKind.Union => checked(4UL + SizeOf(UnionPayloadType(type, model), model)),
-            SemanticTypeKind.Enum => SizeOf(SemanticType.FromPrimitive(model.Enums[type.EnumName!].UnderlyingType), model),
-            SemanticTypeKind.Primitive => type.Primitive switch
-            {
-                PrimitiveType.I8 or PrimitiveType.U8 or PrimitiveType.Bool => 1,
-                PrimitiveType.I16 or PrimitiveType.U16 => 2,
-                PrimitiveType.I32 or PrimitiveType.U32 or PrimitiveType.F32 => 4,
-                PrimitiveType.I64 or PrimitiveType.U64 or PrimitiveType.F64 => 8,
-                _ => throw new InvalidOperationException($"Type '{type}' has no size.")
-            },
-            _ => throw new InvalidOperationException($"Type '{type}' has no size.")
-        };
 
     private static int IntegerBitWidth(PrimitiveType type) =>
         type switch

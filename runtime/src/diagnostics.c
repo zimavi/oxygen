@@ -18,6 +18,28 @@ void __oxygen_runtime_enum_cast_failure(uint64_t value)
     abort();
 }
 
+void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand)
+{
+    switch (kind)
+    {
+    case 1:
+        fprintf(stderr, "Oxygen integer division by zero\n");
+        break;
+    case 2:
+        fprintf(stderr, "Oxygen signed integer division overflowed (minimum value divided by -1)\n");
+        break;
+    case 3:
+        fprintf(stderr, "Oxygen shift count %llu is out of range for the shifted integer type\n",
+            (unsigned long long)operand);
+        break;
+    default:
+        fprintf(stderr, "Oxygen arithmetic failure %d\n", (int)kind);
+        break;
+    }
+    fflush(stderr);
+    abort();
+}
+
 void __oxygen_runtime_invalid_cast(
     const oxygen_runtime_type_info *source_type,
     const oxygen_runtime_type_info *target_type)

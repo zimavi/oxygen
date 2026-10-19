@@ -23,6 +23,36 @@ public sealed partial class LlvmModuleGenerator
         return _exceptionPointer;
     }
 
+    // Allocas go at the top of the function's entry block. A declaration inside a loop then reuses one slot instead of
+    // growing the stack on every iteration, and mem2reg can promote the slot.
+    private static LLVMValueRef BuildEntryAlloca(LLVMBuilderRef builder, LLVMTypeRef type, string name)
+    {
+        var entry = builder.InsertBlock.Parent.EntryBasicBlock;
+        using var entryBuilder = _context.CreateBuilder();
+        var first = entry.FirstInstruction;
+        if (first.Handle == IntPtr.Zero)
+            entryBuilder.PositionAtEnd(entry);
+        else
+            entryBuilder.PositionBefore(first);
+        return entryBuilder.BuildAlloca(type, name);
+    }
+
+    // Binds a name to a new slot. A value binding of the same name (for example a pattern binding in an enclosing
+    // scope) is removed, because values are looked up before storage.
+    private static LLVMValueRef DeclareLocalSlot(LLVMBuilderRef builder, Dictionary<string, LLVMValueRef> values,
+        Dictionary<string, LLVMValueRef> storage, string name, LLVMTypeRef type, LLVMValueRef? initialValue)
+    {
+        var slot = BuildEntryAlloca(builder, type, name + ".addr");
+        if (initialValue is { } value)
+            builder.BuildStore(value, slot);
+        values.Remove(name);
+        storage[name] = slot;
+        return slot;
+    }
+
+    // Every local and parameter lives in a stack slot (see BuildEntryAlloca), so the only bindings that need
+    // scoping are names. Constructs that introduce names restore the previous bindings when they end, which makes
+    // an inner declaration shadow an outer one without changing the outer one's storage.
     private static bool EmitStatement(
         LLVMContextRef context,
         LLVMBuilderRef builder,
@@ -30,7 +60,40 @@ public sealed partial class LlvmModuleGenerator
         Statement statement,
         Dictionary<string, LLVMValueRef> values,
         Dictionary<string, LLVMValueRef> storage,
-        IReadOnlySet<string> storageRequirements,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
+        SemanticType emittedReturnType,
+        Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)> loops)
+    {
+        if (statement is not (BlockStatement or IfStatement or ForStatement or ForInStatement or SwitchStatement
+            or TryStatement))
+            return EmitStatementBody(context, builder, function, statement, values, storage, model, llvmFunctions,
+                emittedReturnType, loops);
+
+        var savedValues = new Dictionary<string, LLVMValueRef>(values, StringComparer.Ordinal);
+        var savedStorage = new Dictionary<string, LLVMValueRef>(storage, StringComparer.Ordinal);
+        var terminated = EmitStatementBody(context, builder, function, statement, values, storage, model, llvmFunctions,
+            emittedReturnType, loops);
+        ReplaceBindings(values, savedValues);
+        ReplaceBindings(storage, savedStorage);
+        return terminated;
+    }
+
+    private static void ReplaceBindings(Dictionary<string, LLVMValueRef> bindings,
+        Dictionary<string, LLVMValueRef> saved)
+    {
+        bindings.Clear();
+        foreach (var (name, value) in saved)
+            bindings.Add(name, value);
+    }
+
+    private static bool EmitStatementBody(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        LLVMValueRef function,
+        Statement statement,
+        Dictionary<string, LLVMValueRef> values,
+        Dictionary<string, LLVMValueRef> storage,
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
         SemanticType emittedReturnType,
@@ -42,6 +105,7 @@ public sealed partial class LlvmModuleGenerator
                 var declaredType = declaration.Type.IsInferred && declaration.Initializer is not null
                     ? model.ExpressionTypes[declaration.Initializer]
                     : FromTypeSyntax(declaration.Type, model);
+                LLVMValueRef? declaredValue = null;
                 if (declaration.Initializer is not null)
                 {
                     var initializer = EmitExpression(
@@ -52,28 +116,10 @@ public sealed partial class LlvmModuleGenerator
                         storage,
                         model,
                         llvmFunctions);
-                    if (storageRequirements.Contains(declaration.Name))
-                    {
-                        var declarationStorage = builder.BuildAlloca(
-                            ToLlvmType(declaredType, model),
-                            declaration.Name + ".addr");
-                        builder.BuildStore(CoerceValue(builder, initializer,
-                            model.ExpressionTypes[declaration.Initializer], declaredType, model), declarationStorage);
-                        storage[declaration.Name] = declarationStorage;
-                    }
-                    else
-                    {
-                        values[declaration.Name] = CoerceValue(builder, initializer,
-                            model.ExpressionTypes[declaration.Initializer], declaredType, model);
-                    }
+                    declaredValue = CoerceValue(builder, initializer,
+                        model.ExpressionTypes[declaration.Initializer], declaredType, model);
                 }
-                else
-                {
-                    var declarationStorage = builder.BuildAlloca(
-                        ToLlvmType(declaredType, model),
-                        declaration.Name + ".addr");
-                    storage[declaration.Name] = declarationStorage;
-                }
+                DeclareLocalSlot(builder, values, storage, declaration.Name, ToLlvmType(declaredType, model), declaredValue);
                 if (declaredType.IsClass)
                     _ownedScopes.Peek().Add(new OwnedLocal(declaration, declaration.Name, declaredType));
                 return false;
@@ -219,6 +265,9 @@ public sealed partial class LlvmModuleGenerator
                 LLVMValueRef? returnValue = null;
                 if (returnStatement.Value is null)
                 {
+                    if (EmitExitFinallies(context, builder, function, values, storage, model, llvmFunctions,
+                            emittedReturnType, loops, 0))
+                        return true;
                     EmitOwnedScopeDestructors(builder, values, storage, model);
                     if (emittedReturnType.IsVoid)
                     {
@@ -228,7 +277,7 @@ public sealed partial class LlvmModuleGenerator
                     else
                     {
                         EmitTracePop(builder);
-                        builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType, model), 0, false));
+                        builder.BuildRet(CreateZeroValue(emittedReturnType, model));
                     }
                 }
                 else
@@ -236,6 +285,9 @@ public sealed partial class LlvmModuleGenerator
                     returnValue = CoerceValue(builder,
                         EmitExpression(context, builder, returnStatement.Value, values, storage, model, llvmFunctions),
                         model.ExpressionTypes[returnStatement.Value], emittedReturnType, model);
+                    if (EmitExitFinallies(context, builder, function, values, storage, model, llvmFunctions,
+                            emittedReturnType, loops, 0))
+                        return true;
                     if (returnStatement.Value is IdentifierExpression returnedIdentifier
                         && model.ExpressionTypes[returnStatement.Value].IsClass)
                         RemoveOwned(returnedIdentifier.Name);
@@ -258,7 +310,6 @@ public sealed partial class LlvmModuleGenerator
                         nested,
                         values,
                         storage,
-                        storageRequirements,
                         model,
                         llvmFunctions,
                         emittedReturnType,
@@ -294,14 +345,19 @@ public sealed partial class LlvmModuleGenerator
                         ((IDictionary<string, LLVMValueRef>)values)[binding] =
                             EmitPatternBindingValue(builder, patternOperand.Value, model.ExpressionTypes[boundPattern.Operand],
                                 FromTypeSyntax(boundPattern.TargetType, model), model);
-                    var thenTerminated = EmitStatement(context, builder, function, conditional.Then, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                    var thenTerminated = EmitStatement(context, builder, function, conditional.Then, values, storage, model, llvmFunctions, emittedReturnType, loops);
                     if (!thenTerminated) builder.BuildBr(mergeBlock);
                     builder.PositionAtEnd(elseBlock);
                     var elseTerminated = conditional.Else is not null
-                        && EmitStatement(context, builder, function, conditional.Else, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                        && EmitStatement(context, builder, function, conditional.Else, values, storage, model, llvmFunctions, emittedReturnType, loops);
                     if (!elseTerminated) builder.BuildBr(mergeBlock);
-                    if (thenTerminated && elseTerminated) return true;
                     builder.PositionAtEnd(mergeBlock);
+                    // Both arms returned: nothing branches to the merge block, so it must still end in a terminator.
+                    if (!mergeBlock.AsValue().Uses.Any())
+                    {
+                        builder.BuildUnreachable();
+                        return true;
+                    }
                     return false;
                 }
             case SwitchStatement switchStatement:
@@ -321,24 +377,29 @@ public sealed partial class LlvmModuleGenerator
 
                     if (switchStatement.Cases.Any(item => item.PatternType is not null))
                     {
+                        // As for value switches: every type pattern is tested in order, and the last test falls through
+                        // to the default target, whatever position `default` has.
+                        var patternCases = switchStatement.Cases
+                            .Select((item, index) => (item, index))
+                            .Where(pair => !pair.item.IsDefault)
+                            .ToArray();
                         var dispatch = function.AppendBasicBlock("switch.dispatch");
                         builder.BuildBr(dispatch);
-                        builder.PositionAtEnd(dispatch);
                         var next = dispatch;
-                        foreach (var (item, index) in switchStatement.Cases.Select((item, index) => (item, index)))
+                        if (patternCases.Length == 0)
                         {
-                            if (item.IsDefault)
-                            {
-                                builder.BuildBr(bodies[index]);
-                                break;
-                            }
+                            builder.PositionAtEnd(dispatch);
+                            builder.BuildBr(defaultTarget);
+                        }
+                        foreach (var (item, index) in patternCases)
+                        {
+                            builder.PositionAtEnd(next);
                             var targetType = FromTypeSyntax(item.PatternType!, model);
                             var match = EmitRuntimeTypeCheck(builder, selector, selectorType, targetType, model);
-                            var miss = index + 1 < switchStatement.Cases.Count
-                                ? function.AppendBasicBlock($"switch.next{index}")
-                                : defaultTarget;
+                            var miss = index == patternCases[^1].index
+                                ? defaultTarget
+                                : function.AppendBasicBlock($"switch.next{index}");
                             builder.BuildCondBr(match, bodies[index], miss);
-                            builder.PositionAtEnd(miss);
                             next = miss;
                         }
                     }
@@ -376,18 +437,26 @@ public sealed partial class LlvmModuleGenerator
                     }
                     else
                     {
+                        // Tests each non-default label in order. The last test falls through to the default target,
+                        // so no test block is left without a terminator, and cases after `default` are still tested.
+                        var valueCases = switchStatement.Cases
+                            .Select((item, index) => (item, index))
+                            .Where(pair => !pair.item.IsDefault)
+                            .ToArray();
                         var next = function.AppendBasicBlock("switch.dispatch");
                         builder.BuildBr(next);
-                        foreach (var (item, index) in switchStatement.Cases.Select((item, index) => (item, index)))
+                        if (valueCases.Length == 0)
                         {
-                            if (item.IsDefault)
-                                break;
+                            builder.PositionAtEnd(next);
+                            builder.BuildBr(defaultTarget);
+                        }
+                        foreach (var (item, index) in valueCases)
+                        {
                             builder.PositionAtEnd(next);
                             var label = EmitExpression(context, builder, item.Value!, values, storage, model, llvmFunctions);
                             var match = EmitSwitchEquality(builder, selector, label, selectorType, model);
-                            var miss = index + 1 < switchStatement.Cases.Count
-                                ? function.AppendBasicBlock($"switch.next{index}")
-                                : defaultTarget;
+                            var isLast = index == valueCases[^1].index;
+                            var miss = isLast ? defaultTarget : function.AppendBasicBlock($"switch.next{index}");
                             builder.BuildCondBr(match, bodies[index], miss);
                             next = miss;
                         }
@@ -404,7 +473,7 @@ public sealed partial class LlvmModuleGenerator
                                     FromTypeSyntax(item.PatternType, model), model)
                                 : builder.BuildExtractValue(selector, 1, "union.payload");
                         var bodyTerminated = EmitStatement(context, builder, function, item.Body, values, storage,
-                            storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                            model, llvmFunctions, emittedReturnType, loops);
                         if (!bodyTerminated)
                             builder.BuildBr(index + 1 < bodies.Length ? bodies[index + 1] : end);
                     }
@@ -428,7 +497,7 @@ public sealed partial class LlvmModuleGenerator
                     builder.BuildCondBr(condition, bodyBlock, endBlock);
                     builder.PositionAtEnd(bodyBlock);
                     loops.Push((endBlock, conditionBlock, _ownedScopes.Count, true));
-                    var bodyTerminated = EmitStatement(context, builder, function, whileStatement.Body, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                    var bodyTerminated = EmitStatement(context, builder, function, whileStatement.Body, values, storage, model, llvmFunctions, emittedReturnType, loops);
                     loops.Pop();
                     if (!bodyTerminated) builder.BuildBr(conditionBlock);
                     builder.PositionAtEnd(endBlock);
@@ -467,7 +536,7 @@ public sealed partial class LlvmModuleGenerator
                         _ownedScopes.Push([]);
                         loops.Push((protocolEndBlock, protocolConditionBlock, protocolScopeDepth, true));
                         var protocolBodyTerminated = EmitStatement(context, builder, function, forInStatement.Body,
-                            values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                            values, storage, model, llvmFunctions, emittedReturnType, loops);
                         loops.Pop();
                         if (!protocolBodyTerminated) builder.BuildBr(protocolConditionBlock);
                         builder.PositionAtEnd(protocolEndBlock);
@@ -510,7 +579,7 @@ public sealed partial class LlvmModuleGenerator
                     _ownedScopes.Push([]);
                     loops.Push((endBlock, incrementBlock, forInScopeDepth, true));
                     var bodyTerminated = EmitStatement(context, builder, function, forInStatement.Body, values, storage,
-                        storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                        model, llvmFunctions, emittedReturnType, loops);
                     loops.Pop();
                     if (!bodyTerminated) builder.BuildBr(incrementBlock);
                     builder.PositionAtEnd(incrementBlock);
@@ -533,7 +602,7 @@ public sealed partial class LlvmModuleGenerator
             case ForStatement forStatement:
                 {
                     if (forStatement.Initializer is not null
-                        && EmitStatement(context, builder, function, forStatement.Initializer, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops))
+                        && EmitStatement(context, builder, function, forStatement.Initializer, values, storage, model, llvmFunctions, emittedReturnType, loops))
                         return true;
                     var conditionBlock = function.AppendBasicBlock("for.cond");
                     var bodyBlock = function.AppendBasicBlock("for.body");
@@ -549,12 +618,12 @@ public sealed partial class LlvmModuleGenerator
                     var forScopeDepth = _ownedScopes.Count;
                     _ownedScopes.Push([]);
                     loops.Push((endBlock, incrementBlock, forScopeDepth, true));
-                    var bodyTerminated = EmitStatement(context, builder, function, forStatement.Body, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                    var bodyTerminated = EmitStatement(context, builder, function, forStatement.Body, values, storage, model, llvmFunctions, emittedReturnType, loops);
                     loops.Pop();
                     if (!bodyTerminated) builder.BuildBr(incrementBlock);
                     builder.PositionAtEnd(incrementBlock);
                     var incrementTerminated = forStatement.Increment is not null
-                        && EmitStatement(context, builder, function, forStatement.Increment, values, storage, storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                        && EmitStatement(context, builder, function, forStatement.Increment, values, storage, model, llvmFunctions, emittedReturnType, loops);
                     if (!incrementTerminated) builder.BuildBr(conditionBlock);
                     builder.PositionAtEnd(endBlock);
                     if (_ownedScopes.Count > forScopeDepth)
@@ -565,11 +634,17 @@ public sealed partial class LlvmModuleGenerator
                     return false;
                 }
             case BreakStatement:
+                if (EmitExitFinallies(context, builder, function, values, storage, model, llvmFunctions,
+                        emittedReturnType, loops, TargetLoopDepth(loops, isContinue: false)))
+                    return true;
                 CleanupOwnedScopesTo(builder, values, storage, model, loops.Peek().ScopeDepth);
                 builder.BuildBr(loops.Peek().Break);
                 return true;
             case ContinueStatement:
                 var loop = loops.First(item => item.IsLoop);
+                if (EmitExitFinallies(context, builder, function, values, storage, model, llvmFunctions,
+                        emittedReturnType, loops, TargetLoopDepth(loops, isContinue: true)))
+                    return true;
                 CleanupOwnedScopesTo(builder, values, storage, model, loop.ScopeDepth);
                 builder.BuildBr(loop.Continue);
                 return true;
@@ -606,7 +681,7 @@ public sealed partial class LlvmModuleGenerator
                 }
             case TryStatement tryStatement:
                 return EmitTryStatement(context, builder, function, tryStatement, values, storage,
-                    storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                    model, llvmFunctions, emittedReturnType, loops);
             default:
                 throw new InvalidOperationException($"Unsupported statement '{statement.GetType().Name}'.");
         }
@@ -619,7 +694,6 @@ public sealed partial class LlvmModuleGenerator
         TryStatement statement,
         Dictionary<string, LLVMValueRef> values,
         Dictionary<string, LLVMValueRef> storage,
-        IReadOnlySet<string> storageRequirements,
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
         SemanticType emittedReturnType,
@@ -627,7 +701,7 @@ public sealed partial class LlvmModuleGenerator
     {
         if (_usesWindowsSeh)
             return EmitWindowsSehTryStatement(context, builder, function, statement, values, storage,
-                storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                model, llvmFunctions, emittedReturnType, loops);
 
         var body = function.AppendBasicBlock("try.body");
         var normal = function.AppendBasicBlock("try.normal");
@@ -637,7 +711,7 @@ public sealed partial class LlvmModuleGenerator
         var outerExceptionContext = _exceptionContexts.Count == 0 ? null : _exceptionContexts.Peek();
         _exceptionContexts.Push(new ExceptionContext(landing, default));
         var bodyReturned = EmitStatement(context, builder, function, statement.Body, values, storage,
-            storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+            model, llvmFunctions, emittedReturnType, loops);
         _exceptionContexts.Pop();
         if (!bodyReturned)
             builder.BuildBr(normal);
@@ -652,7 +726,7 @@ public sealed partial class LlvmModuleGenerator
         var exception = builder.BuildExtractValue(landingPad, 0, "exception.handle");
         var exceptionalFinallyReturned = statement.Finally is not null
             && EmitStatement(context, builder, function, statement.Finally, values, storage,
-                storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                model, llvmFunctions, emittedReturnType, loops);
         if (statement.Finally is not null && outerExceptionContext is not null)
             _exceptionContexts.Pop();
         if (exceptionalFinallyReturned)
@@ -707,7 +781,7 @@ public sealed partial class LlvmModuleGenerator
             if (outerExceptionContext is not null)
                 _exceptionContexts.Push(outerExceptionContext);
             var returned = EmitStatement(context, builder, function, clause.Body, values, storage,
-                storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                model, llvmFunctions, emittedReturnType, loops);
             if (outerExceptionContext is not null)
                 _exceptionContexts.Pop();
             if (!returned)
@@ -719,7 +793,7 @@ public sealed partial class LlvmModuleGenerator
             _exceptionContexts.Push(outerExceptionContext);
         var normalFinallyReturned = statement.Finally is not null
             && EmitStatement(context, builder, function, statement.Finally, values, storage,
-                storageRequirements, model, llvmFunctions, emittedReturnType, loops);
+                model, llvmFunctions, emittedReturnType, loops);
         if (statement.Finally is not null && outerExceptionContext is not null)
             _exceptionContexts.Pop();
         if (!normalFinallyReturned)
@@ -735,8 +809,7 @@ public sealed partial class LlvmModuleGenerator
         foreach (var possible in model.Classes.Keys.Where(candidate => !model.Classes[candidate].IsGeneric).Where(candidate =>
                      IsClassDerivedFrom(candidate, target.StructName!, model)))
         {
-            var candidate = builder.BuildCall2(_isInstance.FunctionType, _isInstance,
-                new[] { objectValue, GetTypeName(builder, possible) }, (ReadOnlySpan<char>)"catch.match");
+            var candidate = BuildNoThrowCall(builder, _isInstance, new[] { objectValue, GetTypeName(builder, possible) }, "catch.match");
             match = builder.BuildOr(match, candidate, "catch.match");
         }
 
@@ -744,129 +817,5 @@ public sealed partial class LlvmModuleGenerator
             LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false), "catch.match");
     }
 
-    private static bool EmitWindowsSehTryStatement(
-            LLVMContextRef context,
-            LLVMBuilderRef builder,
-            LLVMValueRef function,
-            TryStatement statement,
-            Dictionary<string, LLVMValueRef> values,
-            Dictionary<string, LLVMValueRef> storage,
-            IReadOnlySet<string> storageRequirements,
-            SemanticModel model,
-            IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
-            SemanticType emittedReturnType,
-            Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)> loops)
-        {
-            var body = function.AppendBasicBlock("try.body");
-            var normal = function.AppendBasicBlock("try.normal");
-            var end = function.AppendBasicBlock("try.end");
-            var catchDispatch = function.AppendBasicBlock("try.catchswitch");
-            var catchBody = function.AppendBasicBlock("try.catchpad");
-            var unmatched = function.AppendBasicBlock("try.unmatched");
-            var outer = _exceptionContexts.Count == 0 ? null : _exceptionContexts.Peek();
-            var cleanup = statement.Finally is null ? default : function.AppendBasicBlock("try.cleanuppad");
-
-            builder.BuildBr(body);
-            builder.PositionAtEnd(body);
-            _exceptionContexts.Push(new ExceptionContext(catchDispatch, default));
-            var bodyReturned = EmitStatement(context, builder, function, statement.Body, values, storage,
-                storageRequirements, model, llvmFunctions, emittedReturnType, loops);
-            _exceptionContexts.Pop();
-            if (!bodyReturned)
-                builder.BuildBr(normal);
-
-            builder.PositionAtEnd(catchDispatch);
-            var catchSwitch = builder.BuildCatchSwitch(default,
-                outer?.Unwind ?? (statement.Finally is null ? default : cleanup),
-                1, "try.catchswitch");
-            catchSwitch.AddHandler(catchBody);
-
-            builder.PositionAtEnd(catchBody);
-            var catchPad = builder.BuildCatchPad(catchSwitch,
-                new LLVMValueRef[]
-                {
-                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
-                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0))
-                },
-                "try.catchpad");
-            _exceptionContexts.Push(new ExceptionContext(
-                outer?.Unwind ?? (statement.Finally is null ? default : cleanup), catchPad));
-            var exceptionPointer = GetWindowsExceptionPointer(catchPad);
-            var nativeException = builder.BuildCall2(
-                exceptionPointer.FunctionType, exceptionPointer,
-                new LLVMValueRef[] { catchPad }, "native.exception");
-            var objectValue = builder.BuildCallWithOperandBundles(
-                _exceptionObject.FunctionType, _exceptionObject,
-                new LLVMValueRef[] { nativeException },
-                new LLVMOperandBundleRef[] { LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad }) },
-                "exception.object");
-            var catchBlocks = statement.Catches.Select((_, index) =>
-                function.AppendBasicBlock($"catch.{index}")).ToArray();
-            var next = unmatched;
-            var dispatchBlocks = statement.Catches.Select((_, index) =>
-                index == 0 ? catchBody : function.AppendBasicBlock($"catch.next{index}")).ToArray();
-            for (var index = 0; index < statement.Catches.Count; index++)
-            {
-                builder.PositionAtEnd(dispatchBlocks[index]);
-                var clause = statement.Catches[index];
-                if (clause.ExceptionType is null)
-                    builder.BuildBr(catchBlocks[index]);
-                else
-                {
-                    var target = FromTypeSyntax(clause.ExceptionType, model);
-                    var match = EmitExceptionTypeCheck(builder, objectValue, target, model);
-                    builder.BuildCondBr(match, catchBlocks[index],
-                        index + 1 < catchBlocks.Length ? dispatchBlocks[index + 1] : next);
-                }
-                if (clause.ExceptionType is null)
-                    break;
-            }
-            if (statement.Catches.Count == 0)
-                builder.BuildBr(unmatched);
-
-            builder.PositionAtEnd(unmatched);
-            using (var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad }))
-                builder.BuildCallWithOperandBundles(_exceptionRethrow.FunctionType, _exceptionRethrow,
-                    Array.Empty<LLVMValueRef>(), new LLVMOperandBundleRef[] { funclet });
-            builder.BuildUnreachable();
-
-            for (var index = 0; index < statement.Catches.Count; index++)
-            {
-                builder.PositionAtEnd(catchBlocks[index]);
-                var clause = statement.Catches[index];
-                if (clause.BindingName is not null && clause.ExceptionType is not null)
-                    values[clause.BindingName] = builder.BuildBitCast(objectValue,
-                        ToLlvmType(FromTypeSyntax(clause.ExceptionType, model), model), "caught.exception");
-                using (var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad }))
-                    builder.BuildCallWithOperandBundles(_exceptionEndCatch.FunctionType, _exceptionEndCatch,
-                        Array.Empty<LLVMValueRef>(), new LLVMOperandBundleRef[] { funclet });
-                var returned = EmitStatement(context, builder, function, clause.Body, values, storage,
-                    storageRequirements, model, llvmFunctions, emittedReturnType, loops);
-                if (!returned)
-                    builder.BuildCatchRet(catchPad, end);
-            }
-            _exceptionContexts.Pop();
-
-            builder.PositionAtEnd(normal);
-            var normalFinallyReturned = statement.Finally is not null
-                && EmitStatement(context, builder, function, statement.Finally, values, storage,
-                    storageRequirements, model, llvmFunctions, emittedReturnType, loops);
-            if (!normalFinallyReturned)
-                builder.BuildBr(end);
-
-            if (statement.Finally is not null)
-            {
-                builder.PositionAtEnd(cleanup);
-                var cleanupPad = builder.BuildCleanupPad(default, Array.Empty<LLVMValueRef>(), "try.cleanuppad");
-                _exceptionContexts.Push(new ExceptionContext(outer?.Unwind ?? default, cleanupPad));
-                var cleanupReturned = EmitStatement(context, builder, function, statement.Finally, values, storage,
-                    storageRequirements, model, llvmFunctions, emittedReturnType, loops);
-                _exceptionContexts.Pop();
-                if (!cleanupReturned)
-                    builder.BuildCleanupRet(cleanupPad, outer?.Unwind ?? default);
-            }
-            builder.PositionAtEnd(end);
-            return normalFinallyReturned;
-    }
 
 }

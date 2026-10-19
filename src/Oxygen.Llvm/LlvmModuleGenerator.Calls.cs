@@ -156,6 +156,21 @@ public sealed partial class LlvmModuleGenerator
             arguments.ToArray(), function.ReturnType.IsVoid ? string.Empty : "call");
     }
 
+    // Calls a runtime helper that does not throw. Inside a Windows funclet the call must carry the funclet bundle;
+    // without it the callee does not get the funclet's frame, and the code faults at run time.
+    private static LLVMValueRef BuildNoThrowCall(LLVMBuilderRef builder, LLVMValueRef function,
+        LLVMValueRef[] arguments, string resultName = "")
+    {
+        if (_usesWindowsSeh && _exceptionContexts.Count > 0 && _exceptionContexts.Peek().Pad.Handle != IntPtr.Zero)
+        {
+            using var funclet = LLVMOperandBundleRef.Create("funclet",
+                new LLVMValueRef[] { _exceptionContexts.Peek().Pad });
+            return builder.BuildCallWithOperandBundles(function.FunctionType, function, arguments,
+                new LLVMOperandBundleRef[] { funclet }, resultName);
+        }
+        return builder.BuildCall2(function.FunctionType, function, arguments, resultName);
+    }
+
     private static LLVMValueRef EmitCallOrInvoke(
         LLVMBuilderRef builder,
         LLVMTypeRef functionType,

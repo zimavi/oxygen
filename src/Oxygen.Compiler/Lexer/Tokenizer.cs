@@ -272,7 +272,10 @@ public sealed class Tokenizer
         }
 
         Advance(source[position], ref position, ref line, ref column);
-        return new Token(TokenKind.StringLiteral, source[start..position], location);
+        var text = source[start..position];
+        // Reports unsupported escapes here, so the backend can decode any lexed literal without failing.
+        StringLiteralDecoder.Decode(text, location);
+        return new Token(TokenKind.StringLiteral, text, location);
     }
 
     private static Token ReadOperatorOrPunctuation(

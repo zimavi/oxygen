@@ -26,24 +26,15 @@ public sealed partial class LlvmModuleGenerator
         // Field initializers see the fields only, so they keep this view when a parameter shadows a field.
         var fieldValues = new Dictionary<string, LLVMValueRef>(values, StringComparer.Ordinal);
         var fieldStorage = new Dictionary<string, LLVMValueRef>(storage, StringComparer.Ordinal);
-        var storageRequirements = CollectStorageRequirements(ctor.Declaration.Body);
-        foreach (var argument in ctor.Declaration.Initializer?.Arguments ?? [])
-            CollectStorageRequirements(argument, storageRequirements);
+        _ownedScopes = new Stack<List<OwnedLocal>>();
+        _ownedScopes.Push([]);
+        _exceptionContexts = new Stack<ExceptionContext>();
+        _finallyScopes = new Stack<FinallyScope>();
         for (var i = 0; i < ctor.Parameters.Count; i++)
         {
             var parameter = function.GetParam((uint)i + 1);
-            if (storageRequirements.Contains(ctor.Parameters[i].Name))
-            {
-                var parameterStorage = builder.BuildAlloca(
-                    ToLlvmType(ctor.Parameters[i].Type, model),
-                    ctor.Parameters[i].Name + ".addr");
-                builder.BuildStore(parameter, parameterStorage);
-                storage[ctor.Parameters[i].Name] = parameterStorage;
-            }
-            else
-            {
-                values[ctor.Parameters[i].Name] = parameter;
-            }
+            DeclareLocalSlot(builder, values, storage, ctor.Parameters[i].Name,
+                ToLlvmType(ctor.Parameters[i].Type, model), parameter);
         }
         _currentFunction = function;
 
@@ -72,10 +63,28 @@ public sealed partial class LlvmModuleGenerator
                     fieldStorage["this." + field.Name]);
             }
         }
-        foreach (var statement in ctor.Declaration.Body.Statements)
-            EmitStatement(context, builder, function, statement, values, storage, storageRequirements,
-                model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
-                new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>());
+        EmitVoidBody(context, builder, function, ctor.Declaration.Body, values, storage, model, llvmFunctions);
+    }
+
+    // Emits the statements of a constructor or destructor body. A return inside it has already emitted the exit, so the
+    // trailing return is only added when the body falls through.
+    private static void EmitVoidBody(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        LLVMValueRef function,
+        BlockStatement body,
+        Dictionary<string, LLVMValueRef> values,
+        Dictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        foreach (var statement in body.Statements)
+        {
+            if (EmitStatement(context, builder, function, statement, values, storage, model, llvmFunctions,
+                    SemanticType.FromPrimitive(PrimitiveType.Void),
+                    new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>()))
+                return;
+        }
         EmitTracePop(builder);
         builder.BuildRetVoid();
     }
@@ -154,12 +163,12 @@ public sealed partial class LlvmModuleGenerator
         var values = new Dictionary<string, LLVMValueRef> { ["this"] = function.GetParam(0) };
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         InitializeClassFieldStorage(builder, values, storage, cls, model);
-        foreach (var statement in cls.Destructor!.Body.Statements)
-            EmitStatement(context, builder, function, statement, values, storage,
-                new HashSet<string>(), model, llvmFunctions, SemanticType.FromPrimitive(PrimitiveType.Void),
-                new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>());
-        EmitTracePop(builder);
-        builder.BuildRetVoid();
+        // Locals destroyed by a return come from this destructor only, not from the function emitted before it.
+        _ownedScopes = new Stack<List<OwnedLocal>>();
+        _ownedScopes.Push([]);
+        _exceptionContexts = new Stack<ExceptionContext>();
+        _finallyScopes = new Stack<FinallyScope>();
+        EmitVoidBody(context, builder, function, cls.Destructor!.Body, values, storage, model, llvmFunctions);
     }
 
     private static void EmitNativeMain(
@@ -233,12 +242,10 @@ public sealed partial class LlvmModuleGenerator
                 var nativeException = builder.BuildCall2(
                     exceptionPointer.FunctionType, exceptionPointer,
                     new LLVMValueRef[] { catchPad }, "native.exception");
-                var exception = builder.BuildCallWithOperandBundles(
-                    _exceptionObject.FunctionType, _exceptionObject,
-                    new LLVMValueRef[] { nativeException },
-                    new LLVMOperandBundleRef[] { funclet }, "main.exception");
+                // The runtime takes the native handle, as on POSIX, and extracts the Oxygen object itself. Passing the
+                // extracted object here would make the runtime read it as an EXCEPTION_POINTERS and fault.
                 builder.BuildCallWithOperandBundles(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
-                    new LLVMValueRef[] { exception }, new LLVMOperandBundleRef[] { funclet });
+                    new LLVMValueRef[] { nativeException }, new LLVMOperandBundleRef[] { funclet });
                 builder.BuildUnreachable();
             }
             else
@@ -302,8 +309,8 @@ public sealed partial class LlvmModuleGenerator
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         _ownedScopes = new Stack<List<OwnedLocal>>();
         _exceptionContexts = new Stack<ExceptionContext>();
+        _finallyScopes = new Stack<FinallyScope>();
         _ownedScopes.Push([]);
-        var storageRequirements = CollectStorageRequirements(symbol.Declaration.Body);
         var parameterOffset = IsClassMethod(symbol, model) ? 1 : 0;
         if (parameterOffset != 0)
         {
@@ -320,18 +327,8 @@ public sealed partial class LlvmModuleGenerator
         {
             var parameter = function.GetParam((uint)(index + parameterOffset));
             parameter.Name = symbol.Parameters[index].Name;
-            if (storageRequirements.Contains(symbol.Parameters[index].Name))
-            {
-                var parameterStorage = builder.BuildAlloca(
-                    ToLlvmType(symbol.Parameters[index].Type, model),
-                    parameter.Name + ".addr");
-                builder.BuildStore(parameter, parameterStorage);
-                storage[symbol.Parameters[index].Name] = parameterStorage;
-            }
-            else
-            {
-                values.Add(symbol.Parameters[index].Name, parameter);
-            }
+            DeclareLocalSlot(builder, values, storage, symbol.Parameters[index].Name,
+                ToLlvmType(symbol.Parameters[index].Type, model), parameter);
             if (symbol.Parameters[index].Type.IsClass)
                 _ownedScopes.Peek().Add(new OwnedLocal(null, symbol.Parameters[index].Name, symbol.Parameters[index].Type));
         }
@@ -354,7 +351,7 @@ public sealed partial class LlvmModuleGenerator
                         "property.get"));
                 }
                 else
-                    builder.BuildStore(values["value"], address);
+                    builder.BuildStore(function.GetParam(1), address);
                 if (accessor.Kind == PropertyAccessorKind.Set)
                 {
                     EmitTracePop(builder);
@@ -376,7 +373,6 @@ public sealed partial class LlvmModuleGenerator
                 statement,
                 values,
                 storage,
-                storageRequirements,
                 model,
                 llvmFunctions,
                 emittedReturnType,
@@ -396,7 +392,7 @@ public sealed partial class LlvmModuleGenerator
             else
             {
                 EmitTracePop(builder);
-                builder.BuildRet(LLVMValueRef.CreateConstInt(ToLlvmType(emittedReturnType, model), 0, false));
+                builder.BuildRet(CreateZeroValue(emittedReturnType, model));
             }
         }
     }

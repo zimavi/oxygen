@@ -1,5 +1,5 @@
 using System.Globalization;
-using System.Text.Json;
+using System.Text;
 using LLVMSharp.Interop;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Lexer;
@@ -9,120 +9,23 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
-    private static HashSet<string> CollectStorageRequirements(BlockStatement body)
-    {
-        var requirements = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var statement in body.Statements)
-            CollectStorageRequirements(statement, requirements);
-        return requirements;
-    }
-
-    private static void CollectStorageRequirements(Statement statement, HashSet<string> requirements)
-    {
-        switch (statement)
-        {
-            case AssignmentStatement assignment:
-                if (assignment.Target is IdentifierExpression identifier)
-                    requirements.Add(identifier.Name);
-                else if (assignment.Target is MemberAccessExpression { Target: IdentifierExpression memberIdentifier })
-                    requirements.Add(memberIdentifier.Name);
-                else if (assignment.Target is IndexExpression { Target: IdentifierExpression indexedIdentifier })
-                    requirements.Add(indexedIdentifier.Name);
-                CollectStorageRequirements(assignment.Target, requirements);
-                CollectStorageRequirements(assignment.Value, requirements);
-                break;
-            case VariableDeclarationStatement declaration when declaration.Initializer is not null:
-                CollectStorageRequirements(declaration.Initializer, requirements);
-                break;
-            case ExpressionStatement expression:
-                CollectStorageRequirements(expression.Expression, requirements);
-                break;
-            case ReturnStatement returnStatement when returnStatement.Value is not null:
-                CollectStorageRequirements(returnStatement.Value, requirements);
-                break;
-            case BlockStatement block:
-                foreach (var nested in block.Statements)
-                    CollectStorageRequirements(nested, requirements);
-                break;
-            case IfStatement conditional:
-                CollectStorageRequirements(conditional.Condition, requirements);
-                CollectStorageRequirements(conditional.Then, requirements);
-                if (conditional.Else is not null) CollectStorageRequirements(conditional.Else, requirements);
-                break;
-            case WhileStatement loop:
-                CollectStorageRequirements(loop.Condition, requirements);
-                CollectStorageRequirements(loop.Body, requirements);
-                break;
-            case ForStatement loop:
-                if (loop.Initializer is not null) CollectStorageRequirements(loop.Initializer, requirements);
-                if (loop.Condition is not null) CollectStorageRequirements(loop.Condition, requirements);
-                if (loop.Increment is not null) CollectStorageRequirements(loop.Increment, requirements);
-                CollectStorageRequirements(loop.Body, requirements);
-                break;
-            case ForInStatement loop:
-                CollectStorageRequirements(loop.Collection, requirements);
-                CollectStorageRequirements(loop.Body, requirements);
-                break;
-            case SwitchStatement switchStatement:
-                CollectStorageRequirements(switchStatement.Value, requirements);
-                foreach (var item in switchStatement.Cases) CollectStorageRequirements(item.Body, requirements);
-                break;
-        }
-    }
-
-    private static void CollectStorageRequirements(Expression expression, HashSet<string> requirements)
-    {
-        switch (expression)
-        {
-            case UnaryExpression { Operator: TokenKind.Ampersand, Operand: IdentifierExpression identifier }:
-                requirements.Add(identifier.Name);
-                break;
-            case UnaryExpression unary:
-                CollectStorageRequirements(unary.Operand, requirements);
-                break;
-            case BinaryExpression binary:
-                CollectStorageRequirements(binary.Left, requirements);
-                CollectStorageRequirements(binary.Right, requirements);
-                break;
-            case ConditionalExpression conditional:
-                CollectStorageRequirements(conditional.Condition, requirements);
-                CollectStorageRequirements(conditional.WhenTrue, requirements);
-                CollectStorageRequirements(conditional.WhenFalse, requirements);
-                break;
-            case CallExpression call:
-                foreach (var argument in call.Arguments)
-                    CollectStorageRequirements(argument, requirements);
-                break;
-            case MemberAccessExpression member:
-                CollectStorageRequirements(member.Target, requirements);
-                break;
-            case IndexExpression index:
-                if (index.Target is IdentifierExpression arrayIdentifier)
-                    requirements.Add(arrayIdentifier.Name);
-                CollectStorageRequirements(index.Target, requirements);
-                CollectStorageRequirements(index.Index, requirements);
-                break;
-            case CastExpression cast:
-                CollectStorageRequirements(cast.Operand, requirements);
-                break;
-            case IsExpression pattern:
-                CollectStorageRequirements(pattern.Operand, requirements);
-                break;
-        }
-    }
-
+    // The bytes go into a private constant global of exactly their length, with no NUL terminator added, so an embedded
+    // zero byte is part of the value and the length stays correct.
     private static LLVMValueRef EmitStringLiteral(LLVMBuilderRef builder, StringLiteralExpression literal)
     {
-        var value = JsonSerializer.Deserialize(
-                literal.Lexeme,
-                NativeModuleMetadataJsonContext.Default.String)
-            ?? throw new InvalidOperationException("String literal decoded to null.");
-        var pointer = builder.BuildGlobalStringPtr(value, "oxygen.string");
+        var bytes = Encoding.UTF8.GetBytes(StringLiteralDecoder.Decode(literal.Lexeme, literal.Location));
+        var module = builder.InsertBlock.Parent.GlobalParent;
+        var data = module.AddGlobal(LLVMTypeRef.CreateArray(_context.Int8Type, (uint)bytes.Length), "oxygen.string");
+        data.Initializer = LLVMValueRef.CreateConstArray(_context.Int8Type,
+            bytes.Select(value => LLVMValueRef.CreateConstInt(_context.Int8Type, value, false)).ToArray());
+        data.Linkage = LLVMLinkage.LLVMPrivateLinkage;
+        data.IsGlobalConstant = true;
+        data.Alignment = 1;
         var result = LLVMValueRef.CreateConstNull(ToLlvmStringType());
-        result = builder.BuildInsertValue(result, pointer, 0, "string.pointer");
+        result = builder.BuildInsertValue(result, data, 0, "string.pointer");
         return builder.BuildInsertValue(
             result,
-            LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)System.Text.Encoding.UTF8.GetByteCount(value), false),
+            LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)bytes.Length, false),
             1,
             "string.length");
     }
@@ -163,8 +66,39 @@ public sealed partial class LlvmModuleGenerator
         return builder.BuildLoad2(ToLlvmType(resultType, model), resultStorage, "conditional.result");
     }
 
+    // The right operand runs only when the left one does not decide the result, so `a != null && a.x` never reads a.x
+    // through a null a. The result is a phi over the two incoming edges.
+    private static LLVMValueRef EmitShortCircuit(LLVMContextRef context, LLVMBuilderRef builder, BinaryExpression expression,
+        IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var isAnd = expression.Operator == TokenKind.AmpersandAmpersand;
+        var function = builder.InsertBlock.Parent;
+        var left = EmitExpression(context, builder, expression.Left, values, storage, model, llvmFunctions);
+        var leftEnd = builder.InsertBlock;
+        var rightBlock = function.AppendBasicBlock(isAnd ? "and.rhs" : "or.rhs");
+        var endBlock = function.AppendBasicBlock(isAnd ? "and.end" : "or.end");
+        if (isAnd)
+            builder.BuildCondBr(left, rightBlock, endBlock);
+        else
+            builder.BuildCondBr(left, endBlock, rightBlock);
+
+        builder.PositionAtEnd(rightBlock);
+        var right = EmitExpression(context, builder, expression.Right, values, storage, model, llvmFunctions);
+        var rightEnd = builder.InsertBlock;
+        builder.BuildBr(endBlock);
+
+        builder.PositionAtEnd(endBlock);
+        var result = builder.BuildPhi(_context.Int1Type, isAnd ? "and" : "or");
+        var decided = LLVMValueRef.CreateConstInt(_context.Int1Type, isAnd ? 0UL : 1UL, false);
+        result.AddIncoming([decided, right], [leftEnd, rightEnd], 2);
+        return result;
+    }
+
     private static LLVMValueRef EmitBinary(LLVMContextRef context, LLVMBuilderRef builder, BinaryExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        if (expression.Operator is TokenKind.AmpersandAmpersand or TokenKind.PipePipe)
+            return EmitShortCircuit(context, builder, expression, values, storage, model, llvmFunctions);
         var left = EmitExpression(context, builder, expression.Left, values, storage, model, llvmFunctions);
         var right = EmitExpression(context, builder, expression.Right, values, storage, model, llvmFunctions);
         var leftType = model.ExpressionTypes[expression.Left];
@@ -186,8 +120,7 @@ public sealed partial class LlvmModuleGenerator
         if (model.ExpressionTypes[expression].IsPointer)
         {
             var index = right;
-            if (model.ExpressionTypes[expression.Right].Primitive != PrimitiveType.I64)
-                index = builder.BuildSExt(right, _context.Int64Type, "ptr.index");
+            index = ExtendIndexToInt64(builder, right, model.ExpressionTypes[expression.Right], "ptr.index");
             var pointee = ToLlvmType(model.ExpressionTypes[expression].Pointee!, model);
             return expression.Operator == TokenKind.Plus
                 ? builder.BuildGEP2(pointee, left, new LLVMValueRef[] { index }, (ReadOnlySpan<char>)"ptr.add")
@@ -228,10 +161,10 @@ public sealed partial class LlvmModuleGenerator
             };
             return builder.BuildICmp(intPredicate, left, right, "icmp");
         }
-        if (expression.Operator is TokenKind.AmpersandAmpersand or TokenKind.PipePipe)
-            return expression.Operator == TokenKind.AmpersandAmpersand
-                ? builder.BuildAnd(left, right, "and")
-                : builder.BuildOr(left, right, "or");
+        if (!isFloatingPoint && expression.Operator is TokenKind.Slash or TokenKind.Percent)
+            EmitIntegerDivisionChecks(builder, left, right, IsUnsignedInteger(leftType));
+        if (!isFloatingPoint && expression.Operator is TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan)
+            EmitShiftRangeCheck(builder, left, right);
         return expression.Operator switch
         {
             TokenKind.Plus when isFloatingPoint => builder.BuildFAdd(left, right, "fadd"),
@@ -256,6 +189,55 @@ public sealed partial class LlvmModuleGenerator
                 : builder.BuildAShr(left, right, "ashr"),
             _ => throw new InvalidOperationException($"Unsupported binary operator '{expression.Operator}'.")
         };
+    }
+
+    // Integer division and remainder are undefined in LLVM for a zero divisor and for INT_MIN / -1 (signed only). Oxygen
+    // reports both through the runtime instead, so the undefined operation is never executed.
+    private static void EmitIntegerDivisionChecks(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef right, bool isUnsigned)
+    {
+        var divisorIsZero = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, right,
+            LLVMValueRef.CreateConstInt(right.TypeOf, 0, false), "div.zero");
+        EmitArithmeticCheck(builder, divisorIsZero, ArithmeticFailureKind.DivideByZero, LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false));
+        if (isUnsigned)
+            return;
+        var width = left.TypeOf.IntWidth;
+        var minimum = LLVMValueRef.CreateConstInt(left.TypeOf, 1UL << (int)(width - 1), false);
+        var leftIsMinimum = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, left, minimum, "div.min");
+        var rightIsMinusOne = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, right,
+            LLVMValueRef.CreateConstInt(right.TypeOf, ulong.MaxValue, true), "div.minus.one");
+        var overflows = builder.BuildAnd(leftIsMinimum, rightIsMinusOne, "div.overflow");
+        EmitArithmeticCheck(builder, overflows, ArithmeticFailureKind.SignedOverflow, LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false));
+    }
+
+    // A shift count must be less than the bit width of the shifted value; LLVM leaves other counts undefined.
+    private static void EmitShiftRangeCheck(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef count)
+    {
+        var width = left.TypeOf.IntWidth;
+        var outOfRange = builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, count,
+            LLVMValueRef.CreateConstInt(count.TypeOf, width, false), "shift.range");
+        var operand = builder.BuildZExtOrBitCast(count, _context.Int64Type, "shift.count");
+        EmitArithmeticCheck(builder, outOfRange, ArithmeticFailureKind.ShiftOutOfRange, operand);
+    }
+
+    private enum ArithmeticFailureKind
+    {
+        DivideByZero = 1,
+        SignedOverflow = 2,
+        ShiftOutOfRange = 3
+    }
+
+    // Branches to the runtime failure hook when `failed` is true. The hook does not return.
+    private static void EmitArithmeticCheck(LLVMBuilderRef builder, LLVMValueRef failed, ArithmeticFailureKind kind,
+        LLVMValueRef operand)
+    {
+        var function = builder.InsertBlock.Parent;
+        var failureBlock = function.AppendBasicBlock("arith.failure");
+        var continueBlock = function.AppendBasicBlock("arith.continue");
+        builder.BuildCondBr(failed, failureBlock, continueBlock);
+        builder.PositionAtEnd(failureBlock);
+        BuildNoThrowCall(builder, _arithmeticFailure, [LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)kind, false), operand]);
+        builder.BuildUnreachable();
+        builder.PositionAtEnd(continueBlock);
     }
 
     private static bool IsUnsignedInteger(SemanticType type) =>

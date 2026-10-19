@@ -66,6 +66,9 @@ typedef struct oxygen_runtime_type_info
 void __oxygen_runtime_initialize(void);
 void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length);
 void __oxygen_runtime_enum_cast_failure(uint64_t value);
+/* kind: 1 = integer division by zero, 2 = signed division overflow (INT_MIN / -1), 3 = shift count out of range.
+   operand is the shift count for kind 3 and 0 otherwise. */
+void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand);
 uint8_t __oxygen_runtime_is_instance(
     const void *object,
     const oxygen_runtime_type_info *expected_type);

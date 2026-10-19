@@ -238,25 +238,53 @@ public sealed partial class LlvmModuleGenerator
         if (target.IsPointer && source.IsNumeric)
             return builder.BuildIntToPtr(value, ToLlvmType(target, model), "int.to.ptr");
         if (source.IsNumeric && target.IsNumeric)
-        {
-            var targetType = ToLlvmType(target, model);
-            if (target.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
-                return source.Primitive is PrimitiveType.F32 or PrimitiveType.F64
-                    ? builder.BuildFPCast(value, targetType, "float.cast")
-                    : builder.BuildSIToFP(value, targetType, "int.to.float");
-            if (source.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
-                return builder.BuildFPToSI(value, targetType, "float.to.int");
-            var sourceBits = IntegerBitWidth(source.Primitive!.Value);
-            var targetBits = IntegerBitWidth(target.Primitive!.Value);
-            if (targetBits > sourceBits)
-                return source.Primitive is PrimitiveType.I8 or PrimitiveType.I16 or PrimitiveType.I32 or PrimitiveType.I64 or PrimitiveType.ISize
-                    ? builder.BuildSExt(value, targetType, "int.cast")
-                    : builder.BuildZExt(value, targetType, "int.cast");
-            if (targetBits < sourceBits)
-                return builder.BuildTrunc(value, targetType, "int.cast");
-        }
+            return EmitNumericConversion(builder, value, source, target, model);
         return value;
     }
+
+    // The single place where numeric conversions are chosen, shared by implicit coercion and explicit casts. The
+    // operand's signedness picks the extension and the int/float instructions, so an unsigned value is never read as
+    // negative.
+    private static LLVMValueRef EmitNumericConversion(LLVMBuilderRef builder, LLVMValueRef value, SemanticType source,
+        SemanticType target, SemanticModel model)
+    {
+        var targetType = ToLlvmType(target, model);
+        var sourceIsFloat = source.Primitive is PrimitiveType.F32 or PrimitiveType.F64;
+        if (target.Primitive is PrimitiveType.F32 or PrimitiveType.F64)
+        {
+            if (sourceIsFloat)
+                return builder.BuildFPCast(value, targetType, "float.cast");
+            return IsSignedInteger(source)
+                ? builder.BuildSIToFP(value, targetType, "int.to.float")
+                : builder.BuildUIToFP(value, targetType, "int.to.float");
+        }
+        if (sourceIsFloat)
+            return IsSignedInteger(target)
+                ? builder.BuildFPToSI(value, targetType, "float.to.int")
+                : builder.BuildFPToUI(value, targetType, "float.to.int");
+        var sourceBits = IntegerBitWidth(source.Primitive!.Value);
+        var targetBits = IntegerBitWidth(target.Primitive!.Value);
+        if (targetBits > sourceBits)
+            return IsSignedInteger(source)
+                ? builder.BuildSExt(value, targetType, "int.cast")
+                : builder.BuildZExt(value, targetType, "int.cast");
+        if (targetBits < sourceBits)
+            return builder.BuildTrunc(value, targetType, "int.cast");
+        return value;
+    }
+
+    private static bool IsSignedInteger(SemanticType type) =>
+        type.Primitive is PrimitiveType.I8 or PrimitiveType.I16 or PrimitiveType.I32 or PrimitiveType.I64
+            or PrimitiveType.ISize;
+
+    // Pointer and array indexes are widened to i64. An unsigned index is zero-extended, so u32 4294967295 stays positive.
+    private static LLVMValueRef ExtendIndexToInt64(LLVMBuilderRef builder, LLVMValueRef index, SemanticType type,
+        string name) =>
+        type.Primitive is PrimitiveType.I64 or PrimitiveType.U64 or PrimitiveType.USize
+            ? index
+            : IsSignedInteger(type)
+                ? builder.BuildSExt(index, _context.Int64Type, name)
+                : builder.BuildZExt(index, _context.Int64Type, name);
 
     // Specializations are keyed by structural types (`Box<Cell<i32>>`), so the type is built
     // structurally and normalized to its specialized name once, at the top.

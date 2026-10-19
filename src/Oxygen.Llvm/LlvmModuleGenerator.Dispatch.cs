@@ -188,19 +188,20 @@ public sealed partial class LlvmModuleGenerator
     private static LLVMTypeRef ClassPointerType(string name) =>
         LLVMTypeRef.CreatePointer(_classTypes[name], 0);
 
+    // An extern that names the same C symbol shares this declaration. A different signature would make the calls
+    // disagree with it, and LLVM would silently rename a second declaration, so that is rejected instead.
     private static LLVMValueRef GetOrDeclareRuntimeFunction(
         LLVMModuleRef module,
         string nativeName,
-        LLVMTypeRef functionType,
-        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+        LLVMTypeRef functionType)
     {
-        foreach (var pair in llvmFunctions)
-        {
-            if (pair.Key.IsExternal && pair.Key.NativeName == nativeName)
-                return pair.Value;
-        }
-
-        return module.AddFunction(nativeName, functionType);
+        var existing = module.GetNamedFunction(nativeName);
+        if (existing.Handle == IntPtr.Zero)
+            return module.AddFunction(nativeName, functionType);
+        if (existing.FunctionType != functionType)
+            throw new InvalidOperationException(
+                $"Native symbol '{nativeName}' is declared with a signature that conflicts with the runtime's.");
+        return existing;
     }
 
 }

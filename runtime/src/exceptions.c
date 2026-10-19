@@ -146,6 +146,11 @@ static _Thread_local void *oxygen_current_posix_object;
  */
 static _Thread_local void *oxygen_current_seh_object;
 static _Thread_local DWORD oxygen_current_seh_flags;
+/* The Oxygen object of the exception being raised. On Windows, a catch funclet receives the exception code from
+ * llvm.eh.exceptionpointer, not the exception record, so the object is handed over through this slot. It is set
+ * immediately before RaiseException. A finally that throws and catches internally overwrites it, which is a known
+ * limitation of this transport. */
+static _Thread_local void *oxygen_in_flight_seh_object;
 #endif
 
 void __oxygen_runtime_throw_object(void *object)
@@ -158,6 +163,7 @@ void __oxygen_runtime_throw_object(void *object)
     *payload = object;
     __cxa_throw(payload, &_ZTIv, NULL);
 #else
+    oxygen_in_flight_seh_object = object;
     ULONG_PTR arguments[1] = {(ULONG_PTR)object};
     RaiseException(
         (DWORD)OXYGEN_RUNTIME_SEH_EXCEPTION_CODE,
@@ -175,16 +181,13 @@ void *__oxygen_runtime_exception_object(void *exception_handle)
     oxygen_current_posix_object = payload == NULL ? NULL : *payload;
     return oxygen_current_posix_object;
 #else
-    EXCEPTION_POINTERS *pointers = (EXCEPTION_POINTERS *)exception_handle;
-    if (pointers == NULL || pointers->ExceptionRecord == NULL ||
-        pointers->ExceptionRecord->ExceptionCode !=
-            (DWORD)OXYGEN_RUNTIME_SEH_EXCEPTION_CODE ||
-        pointers->ExceptionRecord->NumberParameters < 1)
+    /* The handle is the exception code of the record being dispatched. Any other code (for example a hardware
+     * fault caught by the same catch-all) is not an Oxygen exception. */
+    if ((uintptr_t)exception_handle != (uintptr_t)OXYGEN_RUNTIME_SEH_EXCEPTION_CODE)
         return NULL;
 
-    oxygen_current_seh_object =
-        (void *)(ULONG_PTR)pointers->ExceptionRecord->ExceptionInformation[0];
-    oxygen_current_seh_flags = pointers->ExceptionRecord->ExceptionFlags;
+    oxygen_current_seh_object = oxygen_in_flight_seh_object;
+    oxygen_current_seh_flags = 0;
     return oxygen_current_seh_object;
 #endif
 }
@@ -217,6 +220,7 @@ void __oxygen_runtime_rethrow(void)
         abort();
     }
 
+    oxygen_in_flight_seh_object = oxygen_current_seh_object;
     ULONG_PTR arguments[1] = {(ULONG_PTR)oxygen_current_seh_object};
     RaiseException(
         (DWORD)OXYGEN_RUNTIME_SEH_EXCEPTION_CODE,

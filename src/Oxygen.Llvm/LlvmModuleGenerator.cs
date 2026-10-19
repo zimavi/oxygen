@@ -12,6 +12,7 @@ public sealed partial class LlvmModuleGenerator
 {
     private static LLVMValueRef _arrayBoundsFailure;
     private static LLVMValueRef _enumCastFailure;
+    private static LLVMValueRef _arithmeticFailure;
     private static LLVMValueRef _isInstance;
     private static LLVMValueRef _invalidCast;
     private static LLVMValueRef _currentFunction;
@@ -58,31 +59,36 @@ public sealed partial class LlvmModuleGenerator
         var context = LLVMContextRef.Create();
         _context = context;
         var module = context.CreateModuleWithName(moduleName);
+        // Set explicitly: LLVM's default layout gives i64 a 4-byte ABI alignment, which the x86-64 ABIs that the runtime
+        // is built for do not. Struct sizes, offsets and sizeof all follow from this layout.
+        module.DataLayout = OperatingSystem.IsWindows()
+            ? "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+            : "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128";
         _module = module;
         _exceptionPointer = default;
         var builder = context.CreateBuilder();
-        _propertyAccessors.Clear();
-        _accessorSymbols.Clear();
-        _interfaceTables.Clear();
-        _interfaceSlots.Clear();
-        var concreteClasses = model.Classes.Values.Where(cls => !cls.IsGeneric).ToArray();
-        var concreteInterfaces = model.Interfaces.Values.Where(iface => !iface.IsGeneric).ToArray();
-        var accessorSymbols = concreteClasses.SelectMany(cls => CreatePropertyAccessorSymbols(cls, model))
-            .Concat(concreteInterfaces.SelectMany(iface => CreateInterfaceAccessorSymbols(iface))).ToList();
-        var symbols = model.Functions.Values
-            .Concat(model.ResolvedCalls.Values)
-            .Concat(concreteClasses.SelectMany(cls => cls.Methods))
-            .Concat(concreteInterfaces.SelectMany(iface => iface.Methods))
-            .Concat(accessorSymbols)
-            .Where(symbol => !symbol.IsGeneric && !HasGenericAggregateOwner(symbol, model)
-                && !HasGenericType(symbol.ReturnType)
-                && symbol.Parameters.All(parameter => !HasGenericType(parameter.Type)))
-            .Distinct()
-            .ToList();
-        var llvmFunctions = new Dictionary<FunctionSymbol, LLVMValueRef>();
-
         try
         {
+            _propertyAccessors.Clear();
+            _accessorSymbols.Clear();
+            _interfaceTables.Clear();
+            _interfaceSlots.Clear();
+            var concreteClasses = model.Classes.Values.Where(cls => !cls.IsGeneric).ToArray();
+            var concreteInterfaces = model.Interfaces.Values.Where(iface => !iface.IsGeneric).ToArray();
+            var accessorSymbols = concreteClasses.SelectMany(cls => CreatePropertyAccessorSymbols(cls, model))
+                .Concat(concreteInterfaces.SelectMany(iface => CreateInterfaceAccessorSymbols(iface))).ToList();
+            var symbols = model.Functions.Values
+                .Concat(model.ResolvedCalls.Values)
+                .Concat(concreteClasses.SelectMany(cls => cls.Methods))
+                .Concat(concreteInterfaces.SelectMany(iface => iface.Methods))
+                .Concat(accessorSymbols)
+                .Where(symbol => !symbol.IsGeneric && !HasGenericAggregateOwner(symbol, model)
+                    && !HasGenericType(symbol.ReturnType)
+                    && symbol.Parameters.All(parameter => !HasGenericType(parameter.Type)))
+                .Distinct()
+                .ToList();
+            var llvmFunctions = new Dictionary<FunctionSymbol, LLVMValueRef>();
+
             _usesExceptions = RequiresExceptionRuntime(model);
             _usesWindowsSeh = _usesExceptions && IsWindowsNativeSehTarget();
 
@@ -131,12 +137,12 @@ public sealed partial class LlvmModuleGenerator
             var allocType = LLVMTypeRef.CreateFunction(
                 LLVMTypeRef.CreatePointer(_context.Int8Type, 0), [_context.Int64Type], false);
             _oxygenAlloc = GetOrDeclareRuntimeFunction(
-                module, "oxygen_alloc", allocType, llvmFunctions);
+                module, "oxygen_alloc", allocType);
             var freeType = LLVMTypeRef.CreateFunction(_context.VoidType,
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false);
             _oxygenFree = GetOrDeclareRuntimeFunction(
-                module, "oxygen_free", freeType, llvmFunctions);
-            _memcmp = module.AddFunction("memcmp",
+                module, "oxygen_free", freeType);
+            _memcmp = GetOrDeclareRuntimeFunction(module, "memcmp",
                 LLVMTypeRef.CreateFunction(_context.Int32Type,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                         LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false));
@@ -190,20 +196,21 @@ public sealed partial class LlvmModuleGenerator
             _enumCastFailure = module.AddFunction(
                 "__oxygen_runtime_enum_cast_failure",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [_context.Int64Type], false));
+            _arithmeticFailure = module.AddFunction(
+                "__oxygen_runtime_arithmetic_failure",
+                LLVMTypeRef.CreateFunction(_context.VoidType, [_context.Int32Type, _context.Int64Type], false));
             _isInstance = GetOrDeclareRuntimeFunction(
                 module,
                 "__oxygen_runtime_is_instance",
                 LLVMTypeRef.CreateFunction(_context.Int8Type,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), LLVMTypeRef.CreatePointer(_context.Int8Type, 0)],
-                    false),
-                llvmFunctions);
+                    false));
             _invalidCast = GetOrDeclareRuntimeFunction(
                 module,
                 "__oxygen_runtime_invalid_cast",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), LLVMTypeRef.CreatePointer(_context.Int8Type, 0)],
-                    false),
-                llvmFunctions);
+                    false));
 
             foreach (var symbol in symbols)
             {

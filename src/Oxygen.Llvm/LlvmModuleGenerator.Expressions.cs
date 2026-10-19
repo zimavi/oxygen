@@ -97,8 +97,12 @@ public sealed partial class LlvmModuleGenerator
             var labelLength = builder.BuildExtractValue(label, 1, "switch.label.length");
             var sameLength = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, selectorLength, labelLength,
                 "switch.string.length.match");
+            // Compare only the bytes both strings have, so a shorter label is never read past its end.
+            var shorter = builder.BuildSelect(
+                builder.BuildICmp(LLVMIntPredicate.LLVMIntULT, selectorLength, labelLength, "switch.string.shorter"),
+                selectorLength, labelLength, "switch.string.common");
             var contents = builder.BuildCall2(_memcmp.FunctionType, _memcmp,
-                new LLVMValueRef[] { selectorPointer, labelPointer, selectorLength }, "switch.string.compare");
+                new LLVMValueRef[] { selectorPointer, labelPointer, shorter }, "switch.string.compare");
             var sameContents = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, contents,
                 LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false), "switch.string.match");
             return builder.BuildAnd(sameLength, sameContents, "switch.string.equal");
@@ -236,8 +240,7 @@ public sealed partial class LlvmModuleGenerator
         {
             var pointerValue = EmitExpression(context, builder, index.Target, values, storage, model, llvmFunctions);
             var pointerIndex = EmitExpression(context, builder, index.Index, values, storage, model, llvmFunctions);
-            if (model.ExpressionTypes[index.Index].Primitive != PrimitiveType.I64)
-                pointerIndex = builder.BuildSExt(pointerIndex, _context.Int64Type, "pointer.index");
+            pointerIndex = ExtendIndexToInt64(builder, pointerIndex, model.ExpressionTypes[index.Index], "pointer.index");
             return builder.BuildGEP2(ToLlvmType(targetType.Pointee!, model), pointerValue,
                 [pointerIndex], (ReadOnlySpan<char>)"pointer.address");
         }
@@ -251,8 +254,7 @@ public sealed partial class LlvmModuleGenerator
         else
             throw new InvalidOperationException("Array indexing requires addressable storage.");
         var llvmIndex = EmitExpression(context, builder, index.Index, values, storage, model, llvmFunctions);
-        if (model.ExpressionTypes[index.Index].Primitive != PrimitiveType.I64)
-            llvmIndex = builder.BuildSExt(llvmIndex, _context.Int64Type, "array.index");
+        llvmIndex = ExtendIndexToInt64(builder, llvmIndex, model.ExpressionTypes[index.Index], "array.index");
         var length = LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)arrayType.ArrayLength, false);
         var negative = builder.BuildICmp(LLVMIntPredicate.LLVMIntSLT, llvmIndex,
             LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), "array.negative");
@@ -262,7 +264,7 @@ public sealed partial class LlvmModuleGenerator
         var continueBlock = _currentFunction.AppendBasicBlock("array.bounds.continue");
         builder.BuildCondBr(invalid, failureBlock, continueBlock);
         builder.PositionAtEnd(failureBlock);
-        builder.BuildCall2(_arrayBoundsFailure.FunctionType, _arrayBoundsFailure, [llvmIndex, length]);
+        BuildNoThrowCall(builder, _arrayBoundsFailure, [llvmIndex, length]);
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
         return builder.BuildGEP2(ToLlvmType(arrayType, model), pointer,
