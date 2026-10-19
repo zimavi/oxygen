@@ -312,7 +312,7 @@ public sealed partial class LlvmModuleGenerator
         if (expression.Operator == TokenKind.Ampersand)
         {
             if (expression.Operand is IdentifierExpression identifier)
-                return storage[identifier.Name];
+                return VariableAddress(identifier, storage, model);
             if (expression.Operand is UnaryExpression
                 { Operator: TokenKind.Star, Operand: var dereferenced })
                 return EmitExpression(context, builder, dereferenced, values, storage, model, llvmFunctions);
@@ -344,7 +344,7 @@ public sealed partial class LlvmModuleGenerator
     {
         return expression switch
         {
-            IdentifierExpression identifier => storage[identifier.Name],
+            IdentifierExpression identifier => VariableAddress(identifier, storage, model),
             UnaryExpression { Operator: TokenKind.Star, Operand: var pointer } =>
                 EmitExpression(context, builder, pointer, values, storage, model, llvmFunctions),
             IndexExpression index => EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions),

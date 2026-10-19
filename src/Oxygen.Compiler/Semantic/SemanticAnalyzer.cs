@@ -156,6 +156,10 @@ public sealed partial class SemanticAnalyzer
         _unionsByName.Clear();
         _classesByName.Clear();
         _interfacesByName.Clear();
+        _moduleScopes.Clear();
+        _globalSymbols.Clear();
+        _globalReferences.Clear();
+        _globals.Clear();
         _functionContexts.Clear();
         _classContexts.Clear();
         _analyzedSpecializations.Clear();
@@ -516,6 +520,7 @@ public sealed partial class SemanticAnalyzer
         }
 
         var expressionTypes = new Dictionary<Expression, SemanticType>(ReferenceEqualityComparer.Instance);
+        DeclareGlobalVariables(compilationUnits, sourceNames, functionsByName, expressionTypes, resolvedCalls);
         foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads).ToList())
         {
             if (symbol.IsExternal)
@@ -671,7 +676,9 @@ public sealed partial class SemanticAnalyzer
             new Dictionary<ConstructorDeclaration, int>(_constructorChainTargets, ReferenceEqualityComparer.Instance),
             new HashSet<VariableDeclarationStatement>(_autoFreedLocals, ReferenceEqualityComparer.Instance),
             new HashSet<VariableDeclarationStatement>(_deletedAnywhere, ReferenceEqualityComparer.Instance),
-            new HashSet<DeleteStatement>(_runtimeCheckedDeletes, ReferenceEqualityComparer.Instance));
+            new HashSet<DeleteStatement>(_runtimeCheckedDeletes, ReferenceEqualityComparer.Instance),
+            _globals.ToList(),
+            new Dictionary<IdentifierExpression, GlobalVariableSymbol>(_globalReferences, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

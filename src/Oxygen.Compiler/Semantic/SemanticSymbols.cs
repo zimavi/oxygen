@@ -143,6 +143,16 @@ public sealed record IteratorProtocol(
     SemanticType ElementType,
     SemanticType OptionType);
 
+// A module-level variable. Value is its constant starting value: a bool, a BigInteger for an integer type, a double for a
+// float type, or null when the variable starts as zero.
+public sealed record GlobalVariableSymbol(
+    string Name,
+    string ModuleName,
+    SemanticType Type,
+    bool IsConst,
+    object? Value,
+    GlobalVariableDeclaration Declaration);
+
 public sealed class SemanticModel
 {
     internal SemanticModel(
@@ -165,8 +175,12 @@ public sealed class SemanticModel
         IReadOnlyDictionary<ConstructorDeclaration, int>? constructorChainTargets = null,
         IReadOnlySet<VariableDeclarationStatement>? automaticallyFreedLocals = null,
         IReadOnlySet<VariableDeclarationStatement>? deletedLocals = null,
-        IReadOnlySet<DeleteStatement>? runtimeCheckedDeletes = null)
+        IReadOnlySet<DeleteStatement>? runtimeCheckedDeletes = null,
+        IReadOnlyList<GlobalVariableSymbol>? globals = null,
+        IReadOnlyDictionary<IdentifierExpression, GlobalVariableSymbol>? globalReferences = null)
     {
+        Globals = globals ?? [];
+        GlobalReferences = globalReferences ?? new Dictionary<IdentifierExpression, GlobalVariableSymbol>();
         Functions = functions;
         ExpressionTypes = expressionTypes;
         MainFunction = mainFunction;
@@ -190,6 +204,12 @@ public sealed class SemanticModel
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
+
+    // Every module-level variable, in declaration order.
+    public IReadOnlyList<GlobalVariableSymbol> Globals { get; }
+
+    // The identifiers that name a module-level variable. A local or parameter of the same name is not in this map.
+    public IReadOnlyDictionary<IdentifierExpression, GlobalVariableSymbol> GlobalReferences { get; }
 
     public IReadOnlyDictionary<Expression, SemanticType> ExpressionTypes { get; }
 

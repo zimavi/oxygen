@@ -158,11 +158,12 @@ public sealed partial class LlvmModuleGenerator
                     TransferOwnership(sourceIdentifier.Name, assignmentIdentifier.Name);
                 if (assignment.Target is IdentifierExpression identifier)
                 {
+                    var address = VariableAddress(identifier, storage, model);
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                        model.ExpressionTypes[assignment.Target], model), storage[identifier.Name]);
+                        model.ExpressionTypes[assignment.Target], model), address);
                     // Assigning a new object makes the local alive again; any other value leaves it not owning an object.
-                    if (_dropFlags.ContainsKey(storage[identifier.Name]))
-                        SetDropFlag(builder, storage[identifier.Name], assignment.Value is NewExpression);
+                    if (_dropFlags.ContainsKey(address))
+                        SetDropFlag(builder, address, assignment.Value is NewExpression);
                 }
                 else if (assignment.Target is MemberAccessExpression member
                     && member.Target is IdentifierExpression targetIdentifier)

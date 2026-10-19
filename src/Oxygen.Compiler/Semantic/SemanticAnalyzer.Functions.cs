@@ -41,7 +41,8 @@ public sealed partial class SemanticAnalyzer
     {
         _declaredVariables.Clear();
         _definitelyNullVariables.Clear();
-        var scope = new Scope(null, MarkVariableUsed);
+        var globals = GlobalScopeOf(moduleName);
+        var scope = new Scope(globals, MarkVariableUsed);
         var className = function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..];
         if (_classesByName.TryGetValue(className, out var ownerClass))
         {
@@ -50,7 +51,7 @@ public sealed partial class SemanticAnalyzer
                     ? type
                     : SemanticType.GenericParameter(parameter))
                 .ToArray();
-            scope = new Scope(null, MarkVariableUsed,
+            scope = new Scope(globals, MarkVariableUsed,
                 SemanticType.Class(ownerClass.Name, ownerTypeArguments.Length == 0 ? null : ownerTypeArguments));
             foreach (var field in ownerClass.Fields)
                 scope.Declare(field.Name, new VariableSymbol(SubstituteGenericType(field.Type, _genericTypes),
@@ -61,7 +62,7 @@ public sealed partial class SemanticAnalyzer
         var parameterScope = new Scope(scope, MarkVariableUsed);
         // A constructor's initializer runs before the object's fields are initialized, so its arguments see the
         // parameters but neither the fields nor `this`.
-        var initializerScope = new Scope(null, MarkVariableUsed,
+        var initializerScope = new Scope(globals, MarkVariableUsed,
             thisError: "'this' cannot be used in a constructor initializer");
         foreach (var parameter in function.Parameters)
         {

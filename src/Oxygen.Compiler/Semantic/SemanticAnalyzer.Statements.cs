@@ -707,7 +707,9 @@ public sealed partial class SemanticAnalyzer
     private SemanticType AssignmentTargetType(IdentifierExpression target, Scope scope,
         IDictionary<Expression, SemanticType> expressionTypes)
     {
-        var type = scope.Lookup(target.Name, target.Location).Type;
+        var symbol = scope.Lookup(target.Name, target.Location);
+        RecordGlobalReference(target, symbol);
+        var type = symbol.Type;
         expressionTypes[target] = type;
         return type;
     }

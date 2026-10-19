@@ -58,6 +58,7 @@ public sealed partial class Parser
             var classes = new List<ClassDeclaration>();
             var interfaces = new List<InterfaceDeclaration>();
             var functions = new List<FunctionDeclaration>();
+            var globals = new List<GlobalVariableDeclaration>();
             while (!Check(TokenKind.EndOfFile))
             {
                 if (IsEnumDeclarationStart())
@@ -70,6 +71,8 @@ public sealed partial class Parser
                     classes.Add(ParseClass());
                 else if (IsInterfaceDeclarationStart())
                     interfaces.Add(ParseInterface());
+                else if (IsGlobalVariableStart())
+                    globals.Add(ParseGlobalVariable());
                 else
                     functions.Add(ParseFunction());
             }
@@ -81,7 +84,8 @@ public sealed partial class Parser
                 Enums = enums,
                 Unions = unions,
                 Classes = classes,
-                Interfaces = interfaces
+                Interfaces = interfaces,
+                Globals = globals
             };
         }
         catch (ParseException exception)
@@ -119,6 +123,7 @@ public sealed partial class Parser
         }
 
         var functions = new List<FunctionDeclaration>();
+        var globals = new List<GlobalVariableDeclaration>();
         var location = Current.Location;
 
         while (!Check(TokenKind.EndOfFile))
@@ -135,6 +140,8 @@ public sealed partial class Parser
                     classes.Add(ParseClass());
                 else if (IsInterfaceDeclarationStart())
                     interfaces.Add(ParseInterface());
+                else if (IsGlobalVariableStart())
+                    globals.Add(ParseGlobalVariable());
                 else
                     functions.Add(ParseFunction());
             }
@@ -159,7 +166,8 @@ public sealed partial class Parser
             ,
             Classes = classes
             ,
-            Interfaces = interfaces
+            Interfaces = interfaces,
+            Globals = globals
         }, diagnostics.Diagnostics);
     }
 
@@ -843,6 +851,38 @@ public sealed partial class Parser
 
         Consume(TokenKind.Semicolon, "Expected ';' after variable declaration.");
         return new VariableDeclarationStatement(type, name, isConst, initializer, location);
+    }
+
+    // A global variable is `[const] Type name` followed by '=' or ';'. A function is `Type name` followed by '(' or '<',
+    // so the token after the name tells them apart.
+    private bool IsGlobalVariableStart()
+    {
+        var start = _position;
+        try
+        {
+            Match(TokenKind.Const);
+            ParseType(allowInferred: false);
+            return Check(TokenKind.Identifier) && Peek(1).Kind is TokenKind.Equals or TokenKind.Semicolon;
+        }
+        catch (ParseException)
+        {
+            return false;
+        }
+        finally
+        {
+            _position = start;
+        }
+    }
+
+    private GlobalVariableDeclaration ParseGlobalVariable()
+    {
+        var location = Current.Location;
+        var isConst = Match(TokenKind.Const);
+        var type = ParseType(allowInferred: false);
+        var name = Consume(TokenKind.Identifier, "Expected a global variable name.").Lexeme;
+        Expression? initializer = Match(TokenKind.Equals) ? ParseExpression() : null;
+        Consume(TokenKind.Semicolon, "Expected ';' after global variable declaration.");
+        return new GlobalVariableDeclaration(type, name, isConst, initializer, location);
     }
 
     private ReturnStatement ParseReturn()

@@ -12,6 +12,7 @@ public sealed partial class SemanticAnalyzer
     private SemanticType ReadIdentifier(IdentifierExpression identifier, Scope scope)
     {
         var symbol = scope.Lookup(identifier.Name, identifier.Location);
+        RecordGlobalReference(identifier, symbol);
         if (symbol.Declaration is VariableDeclarationStatement declaration)
         {
             CheckAssigned(declaration, identifier.Name, identifier.Location);

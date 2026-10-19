@@ -29,7 +29,16 @@ public sealed record CompilationUnit(
     public IReadOnlyList<UnionDeclaration> Unions { get; init; } = [];
     public IReadOnlyList<ClassDeclaration> Classes { get; init; } = [];
     public IReadOnlyList<InterfaceDeclaration> Interfaces { get; init; } = [];
+    public IReadOnlyList<GlobalVariableDeclaration> Globals { get; init; } = [];
 }
+
+// A module-level variable. Without an initializer it starts as zero. Its initializer must be a constant.
+public sealed record GlobalVariableDeclaration(
+    TypeSyntax Type,
+    string Name,
+    bool IsConst,
+    Expression? Initializer,
+    SourceLocation Location) : SyntaxNode(Location);
 
 public sealed record UnionCaseDeclaration(
     string Name,

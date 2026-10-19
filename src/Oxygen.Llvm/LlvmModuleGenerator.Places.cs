@@ -24,7 +24,7 @@ public sealed partial class LlvmModuleGenerator
         switch (target)
         {
             case IdentifierExpression identifier:
-                return MemoryPlace(builder, type, storage[identifier.Name], identifier.Name);
+                return MemoryPlace(builder, type, VariableAddress(identifier, storage, model), identifier.Name);
             case IndexExpression index:
                 return MemoryPlace(builder, type,
                     EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions), "element");

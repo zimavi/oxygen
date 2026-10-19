@@ -1745,6 +1745,86 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void GlobalVariableIsReadAndAssignedByItsFunctions()
+    {
+        var model = Analyze(
+            "i32 counter = 1; void bump() { counter = counter + 1; } i32 main() { bump(); return counter; }");
+
+        Assert.NotNull(model);
+        Assert.Equal("counter", Assert.Single(model.Globals).Name);
+    }
+
+    [Fact]
+    public void LocalVariableShadowsAGlobalOfTheSameName()
+    {
+        var model = Analyze("i32 value = 1; i32 main() { i32 value = 2; return value; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ConstGlobalCannotBeAssigned()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("const i32 limit = 5; i32 main() { limit = 6; return 0; }"));
+
+        Assert.Contains("Cannot assign to const variable 'limit'", exception.Message);
+    }
+
+    [Fact]
+    public void ConstGlobalNeedsAnInitializer()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("const i32 limit; i32 main() { return 0; }"));
+
+        Assert.Contains("Const global variable 'limit' needs an initializer", exception.Message);
+    }
+
+    [Fact]
+    public void GlobalInitializerThatIsNotAConstantIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 first = 1; i32 second = first; i32 main() { return 0; }"));
+
+        Assert.Contains("must be initialized with a literal or an integer constant expression", exception.Message);
+    }
+
+    [Fact]
+    public void GlobalInitializerThatDoesNotFitItsTypeIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("u8 small = 300; i32 main() { return 0; }"));
+
+        Assert.Contains("Cannot initialize 'small' with i32; expected u8", exception.Message);
+    }
+
+    [Fact]
+    public void GlobalOfANonPrimitiveTypeIsRejectedForNow()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("string text = \"hi\"; i32 main() { return 0; }"));
+
+        Assert.Contains("only numeric and bool globals are supported", exception.Message);
+    }
+
+    [Fact]
+    public void GlobalNameIsDeclaredOncePerModule()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 value = 1; i32 value = 2; i32 main() { return 0; }"));
+
+        Assert.Contains("A global variable named 'value' is already declared", exception.Message);
+    }
+
+    [Fact]
+    public void IntegerConstantInitializesAFloatGlobal()
+    {
+        var model = Analyze("f64 scale = 2; f32 ratio = -0.5f32; i32 main() { return 0; }");
+
+        Assert.Equal(2, model.Globals.Count);
+    }
+
+    [Fact]
     public void StatementAfterBreakIsReportedAsUnreachable()
     {
         var result = AnalyzeWithDiagnostics(

@@ -19,6 +19,11 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
         expression switch
         {
+            // A module-level variable is checked first: a stale local value of the same name must not shadow it.
+            IdentifierExpression identifier when model.GlobalReferences.ContainsKey(identifier) => builder.BuildLoad2(
+                ToLlvmType(model.ExpressionTypes[identifier], model),
+                VariableAddress(identifier, storage, model),
+                identifier.Name),
             IdentifierExpression identifier when values.TryGetValue(identifier.Name, out var value) => value,
             IdentifierExpression identifier => builder.BuildLoad2(
                 ToLlvmType(model.ExpressionTypes[identifier], model),

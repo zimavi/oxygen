@@ -549,6 +549,31 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesModuleLevelVariablesAlongsideFunctions()
+    {
+        var unit = Parse(
+            "i32 counter = 10; const i32 limit = 100; i32 zeroed; i32 main() { return 0; }");
+
+        Assert.Equal(3, unit.Globals.Count);
+        Assert.Equal("counter", unit.Globals[0].Name);
+        Assert.False(unit.Globals[0].IsConst);
+        Assert.Equal(10, int.Parse(Assert.IsType<IntegerLiteralExpression>(unit.Globals[0].Initializer).Lexeme));
+        Assert.True(unit.Globals[1].IsConst);
+        Assert.Null(unit.Globals[2].Initializer);
+        Assert.Single(unit.Functions);
+        Assert.Equal("main", unit.Functions[0].Name);
+    }
+
+    [Fact]
+    public void FunctionWithAGlobalLikeHeaderIsStillAFunction()
+    {
+        var unit = Parse("i32 value(i32 x) { return x; }");
+
+        Assert.Empty(unit.Globals);
+        Assert.Single(unit.Functions);
+    }
+
+    [Fact]
     public void ParsesConstructorInitializersWithThisAndBase()
     {
         var unit = Parse(
