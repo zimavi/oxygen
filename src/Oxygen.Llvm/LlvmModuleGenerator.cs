@@ -97,7 +97,7 @@ public sealed partial class LlvmModuleGenerator
             _runtimeTypeInfoType = _context.GetStructType(
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type,
                     _context.Int32Type, LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
-                    _context.Int32Type], false);
+                    _context.Int32Type, LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false);
             _constructors.Clear();
             _destructors.Clear();
             _virtualSlotCount = concreteClasses.Select(cls => GetVirtualMethods(cls, model).Count)

@@ -578,7 +578,7 @@ public sealed class LlvmTests
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
-        const string destructor = "call void @_Ox_v0_m7program_d3Box";
+        const string destructor = "%dispatch.destructor = load";
 
         Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
     }
@@ -607,7 +607,7 @@ public sealed class LlvmTests
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
-        const string destructor = "call void @_Ox_v0_m7program_d3Box";
+        const string destructor = "%dispatch.destructor = load";
 
         Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
         Assert.Contains("@_Ox_v0_m7program_f4make", ir);
@@ -621,7 +621,7 @@ public sealed class LlvmTests
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
-        const string destructor = "call void @_Ox_v0_m7program_d3Box";
+        const string destructor = "%dispatch.destructor = load";
 
         Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
         Assert.Contains("define void @_Ox_v0_m7program_f7consume_p1", ir);

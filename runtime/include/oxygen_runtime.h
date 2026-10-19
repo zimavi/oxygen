@@ -61,6 +61,8 @@ typedef struct oxygen_runtime_type_info
     uint32_t flags;
     const struct oxygen_runtime_type_info *parent;
     uint32_t message_offset;
+    /* The most derived destructor for this type, or NULL. Releasing an object calls it through its runtime type. */
+    void (*destructor)(void *object);
 } oxygen_runtime_type_info;
 
 void __oxygen_runtime_initialize(void);

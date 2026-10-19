@@ -370,6 +370,38 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void DeletingABaseTypedReferenceRunsTheDerivedDestructor()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            class Base {
+                ~Base() {
+                    io.print("base");
+                }
+            }
+
+            class Derived : Base {
+                ~Derived() {
+                    io.print("derived");
+                }
+            }
+
+            i32 main() {
+                Base item = new Derived();
+                delete item;
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("derived", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
     public void SizeOfIncludesPadding()
     {
         NativeProgram.RequireNativeToolchain();

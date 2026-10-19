@@ -493,10 +493,7 @@ public sealed partial class LlvmModuleGenerator
                 var allocated = values.TryGetValue(owned.Name, out var directAllocated)
                     ? directAllocated
                     : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
-                if (_destructors.TryGetValue(owned.Type.StructName!, out var allocatedDestructor))
-                    builder.BuildCall2(allocatedDestructor.FunctionType, allocatedDestructor, [allocated]);
-                builder.BuildCall2(_oxygenFree.FunctionType, _oxygenFree,
-                    [builder.BuildBitCast(allocated, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "free.memory")]);
+                EmitDestroyAndFree(builder, allocated);
                 continue;
             }
             if (!owned.Type.IsClass || !_destructors.TryGetValue(owned.Type.StructName!, out var destructor))

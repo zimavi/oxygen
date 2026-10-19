@@ -109,6 +109,41 @@ public sealed partial class LlvmModuleGenerator
                     (uint)FieldOffset(cls!, model, messageField.index), "message.address"),
                 _context.Int32Type, "message.offset");
         builder.BuildStore(messageOffset, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 4, "type.message.offset"));
+        // Releasing an object of this type calls the nearest destructor in its class chain, or nothing when there is none.
+        builder.BuildStore(FindDestructor(typeName, model) ?? LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
+            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 5, "type.destructor"));
+    }
+
+    // The destructor that releases an object of `typeName`: the nearest one in its class chain, or null when there is none.
+    private static LLVMValueRef? FindDestructor(string typeName, SemanticModel model)
+    {
+        for (var cls = model.Classes.GetValueOrDefault(typeName); cls is not null;
+             cls = cls.BaseTypeName is null ? null : model.Classes.GetValueOrDefault(cls.BaseTypeName))
+            if (_destructors.TryGetValue(cls.Name, out var destructor))
+                return destructor;
+        return null;
+    }
+
+    // Releases the object `reference` points to through its runtime type. The destructor stored in its type information
+    // runs first, so a reference typed as a base class still runs the derived destructor; then the memory is freed.
+    private static void EmitDestroyAndFree(LLVMBuilderRef builder, LLVMValueRef reference)
+    {
+        var pointerType = LLVMTypeRef.CreatePointer(_context.Int8Type, 0);
+        var function = builder.InsertBlock.Parent;
+        var typeInfo = builder.BuildLoad2(pointerType, reference, "dispatch.type.info");
+        var destructorSlot = builder.BuildStructGEP2(_runtimeTypeInfoType, typeInfo, 5, "dispatch.destructor.slot");
+        var destructor = builder.BuildLoad2(pointerType, destructorSlot, "dispatch.destructor");
+        var hasDestructor = builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, destructor,
+            LLVMValueRef.CreateConstNull(pointerType), "dispatch.has.destructor");
+        var call = function.AppendBasicBlock("destroy.call");
+        var release = function.AppendBasicBlock("destroy.release");
+        builder.BuildCondBr(hasDestructor, call, release);
+        builder.PositionAtEnd(call);
+        builder.BuildCall2(LLVMTypeRef.CreateFunction(_context.VoidType, [pointerType], false), destructor, [reference]);
+        builder.BuildBr(release);
+        builder.PositionAtEnd(release);
+        builder.BuildCall2(_oxygenFree.FunctionType, _oxygenFree,
+            [builder.BuildBitCast(reference, pointerType, "free.memory")]);
     }
 
     private static LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName)
