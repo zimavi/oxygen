@@ -80,17 +80,14 @@ public sealed partial class SemanticAnalyzer
                 return null;
         }
 
-        if (expectedReturnType is not null)
-        {
-            if (!ContainsGenericType(generic.Declaration.ReturnType, generic.DeclaredGenericParameters))
-            {
-                if (generic.ReturnType != expectedReturnType)
-                    return null;
-            }
-            else if (!TryInferGenericType(generic.Declaration.ReturnType, expectedReturnType,
-                         generic.DeclaredGenericParameters, substitutions))
-                return null;
-        }
+        // The expected type only infers a type parameter that the arguments left open, such as the T of `T make<T>()`. It never
+        // rejects a candidate: a concrete return type that differs is reported when the value is used, and it does not choose
+        // between overloads.
+        if (expectedReturnType is not null && substitutions.Count < generic.DeclaredGenericParameters.Count
+            && ContainsGenericType(generic.Declaration.ReturnType, generic.DeclaredGenericParameters)
+            && !TryInferGenericType(generic.Declaration.ReturnType, expectedReturnType,
+                generic.DeclaredGenericParameters, substitutions))
+            return null;
         return substitutions.Count == generic.DeclaredGenericParameters.Count ? substitutions : null;
     }
 

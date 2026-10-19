@@ -8,46 +8,6 @@ namespace Oxygen.Compiler.Semantic;
 // Types: resolving type syntax, generic type parameters and struct layout.
 public sealed partial class SemanticAnalyzer
 {
-    private sealed class SemanticTypeComparer : IEqualityComparer<SemanticType>
-    {
-        public static SemanticTypeComparer Instance { get; } = new();
-
-        public bool Equals(SemanticType? left, SemanticType? right)
-        {
-            if (ReferenceEquals(left, right))
-                return true;
-            if (left is null || right is null
-                || left.Kind != right.Kind
-                || left.Primitive != right.Primitive
-                || left.StructName != right.StructName
-                || left.EnumName != right.EnumName
-                || left.GenericParameterName != right.GenericParameterName
-                || left.ArrayLength != right.ArrayLength)
-                return false;
-            if (!Equals(left.Pointee, right.Pointee) || !Equals(left.ElementType, right.ElementType))
-                return false;
-            return (left.TypeArguments ?? []).SequenceEqual(right.TypeArguments ?? [], this);
-        }
-
-        public int GetHashCode(SemanticType type)
-        {
-            var hash = new HashCode();
-            hash.Add(type.Kind);
-            hash.Add(type.Primitive);
-            hash.Add(type.StructName);
-            hash.Add(type.EnumName);
-            hash.Add(type.GenericParameterName);
-            hash.Add(type.ArrayLength);
-            if (type.Pointee is not null)
-                hash.Add(GetHashCode(type.Pointee));
-            if (type.ElementType is not null)
-                hash.Add(GetHashCode(type.ElementType));
-            foreach (var argument in type.TypeArguments ?? [])
-                hash.Add(GetHashCode(argument));
-            return hash.ToHashCode();
-        }
-    }
-
     private SemanticType ResolveType(TypeSyntax syntax)
     {
         if (syntax.IsInferred)

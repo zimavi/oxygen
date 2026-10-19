@@ -198,23 +198,15 @@ public sealed partial class SemanticAnalyzer
                 .Select(candidate => (candidate, substitutions: InferGenericSubstitutions(candidate, argumentTypes, expectedType)))
                 .Where(item => item.substitutions is not null)
                 .ToList();
-            var inferredMatches = expectedType is not null
-                ? inferred.Where(item =>
-                {
-                    var returnType = SubstituteGenericType(item.candidate.ReturnType, item.substitutions!);
-                    return returnType == expectedType;
-                }).ToList()
-                : inferred;
             // Specializations made by other calls are not candidates: the type arguments inferred here select the
-            // one specialization this call uses. Otherwise an argument such as a float literal, which fits both f32
-            // and f64, would match two specializations of the same generic.
+            // specializations this call considers. Each generic overload the arguments fit is a candidate, and the ranking
+            // below chooses among them. The expected return type does not choose, so overloads tied on their arguments
+            // are ambiguous.
             overloads = overloads.Where(overload => !overload.IsSpecialized).ToList();
-            if (inferredMatches.Count == 1)
+            foreach (var match in inferred)
             {
-                var specialized = SpecializeFunction(inferredMatches[0].candidate, inferredMatches[0].substitutions!, functions,
-                    call.Location);
-                AnalyzeSpecialization(specialized, inferredMatches[0].candidate, functions, imports, expressionTypes,
-                    resolvedCalls);
+                var specialized = SpecializeFunction(match.candidate, match.substitutions!, functions, call.Location);
+                AnalyzeSpecialization(specialized, match.candidate, functions, imports, expressionTypes, resolvedCalls);
                 overloads = overloads.Append(specialized).ToList();
             }
         }

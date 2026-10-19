@@ -1023,6 +1023,28 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void StructurallyEqualGenericTypesAreEqualWhenBuiltSeparately()
+    {
+        // The type arguments are lists, so a record's default equality would compare them by reference.
+        var first = SemanticType.Class("Box", [SemanticType.FromPrimitive(PrimitiveType.I32)]);
+        var second = SemanticType.Class("Box", [SemanticType.FromPrimitive(PrimitiveType.I32)]);
+
+        Assert.True(first == second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+    }
+
+    [Fact]
+    public void GenericOverloadsTiedOnTheirArgumentsAreAmbiguousAndTheExpectedTypeDoesNotChooseBetweenThem()
+    {
+        // Both fit the arguments equally well. Only their return types differ, and the return type never selects an overload.
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 f<T>(T x, i32 y) { return 1; } i64 f<T>(i32 x, T y) { return 2; } " +
+            "i32 main() { i32 r = f(1, 2); return r; }"));
+
+        Assert.Contains("ambiguous", exception.Message);
+    }
+
+    [Fact]
     public void RejectsASwitchCaseThatBreaksBeforeALaterCaseReturns()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze(

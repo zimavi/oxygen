@@ -27,6 +27,13 @@ public sealed record SemanticType(
     public int ArrayLength { get; init; }
     public SemanticType? ElementType { get; init; }
     public IReadOnlyList<SemanticType>? TypeArguments { get; init; }
+
+    // Equality is structural, so `==` on types works wherever they were built. The default record equality would compare the
+    // type-argument lists by reference.
+    public bool Equals(SemanticType? other) => SemanticTypeComparer.Instance.Equals(this, other);
+
+    public override int GetHashCode() => SemanticTypeComparer.Instance.GetHashCode(this);
+
     public static SemanticType String => new(SemanticTypeKind.String, null);
 
     public static SemanticType FromPrimitive(PrimitiveType primitive) => new(SemanticTypeKind.Primitive, primitive);
@@ -86,4 +93,45 @@ public sealed record SemanticType(
         TypeArguments is { Count: > 0 }
             ? $"{name}<{string.Join(", ", TypeArguments)}>"
             : name;
+}
+
+// Structural equality of semantic types. Type arguments are lists, so they are compared by content, not by reference.
+internal sealed class SemanticTypeComparer : IEqualityComparer<SemanticType>
+{
+    public static SemanticTypeComparer Instance { get; } = new();
+
+    public bool Equals(SemanticType? left, SemanticType? right)
+    {
+        if (ReferenceEquals(left, right))
+            return true;
+        if (left is null || right is null
+            || left.Kind != right.Kind
+            || left.Primitive != right.Primitive
+            || left.StructName != right.StructName
+            || left.EnumName != right.EnumName
+            || left.GenericParameterName != right.GenericParameterName
+            || left.ArrayLength != right.ArrayLength)
+            return false;
+        if (!Equals(left.Pointee, right.Pointee) || !Equals(left.ElementType, right.ElementType))
+            return false;
+        return (left.TypeArguments ?? []).SequenceEqual(right.TypeArguments ?? [], this);
+    }
+
+    public int GetHashCode(SemanticType type)
+    {
+        var hash = new HashCode();
+        hash.Add(type.Kind);
+        hash.Add(type.Primitive);
+        hash.Add(type.StructName);
+        hash.Add(type.EnumName);
+        hash.Add(type.GenericParameterName);
+        hash.Add(type.ArrayLength);
+        if (type.Pointee is not null)
+            hash.Add(GetHashCode(type.Pointee));
+        if (type.ElementType is not null)
+            hash.Add(GetHashCode(type.ElementType));
+        foreach (var argument in type.TypeArguments ?? [])
+            hash.Add(GetHashCode(argument));
+        return hash.ToHashCode();
+    }
 }
