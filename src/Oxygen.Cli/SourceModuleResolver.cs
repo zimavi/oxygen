@@ -13,7 +13,12 @@ internal sealed record ResolvedSourceModules(
 
 internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
 {
-    public ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots)
+    public ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots) =>
+        Resolve(roots, Environment.GetEnvironmentVariable("OXYGEN_PATH"));
+
+    // Every program needs the standard library: std.exception supplies the exception that null-reference checks throw.
+    // A missing standard library is therefore reported here rather than surfacing later in the backend.
+    internal ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots, string? oxygenPath)
     {
         var sources = new List<SourceText>();
         var units = new List<CompilationUnit>();
@@ -27,7 +32,30 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        foreach (var sourceDirectory in DiscoverSourceDirectories(rootDirectories))
+        var standardLibraries = FindStandardLibraries(rootDirectories, oxygenPath);
+        if (standardLibraries.Count == 0)
+        {
+            diagnostics.Add(
+                DiagnosticPhase.Toolchain,
+                DiagnosticSeverity.Error,
+                "The standard library was not found, so std.exception is unavailable. Set OXYGEN_PATH to the folder that contains stdlib.",
+                new SourceLocation(1, 1),
+                sourceName: roots.FirstOrDefault()?.Name);
+        }
+        else if (!standardLibraries.Any(directory => File.Exists(Path.Combine(directory, "exception.oxy"))))
+        {
+            diagnostics.Add(
+                DiagnosticPhase.Toolchain,
+                DiagnosticSeverity.Error,
+                $"The standard library in '{standardLibraries[0]}' has no exception.oxy, so std.exception is unavailable.",
+                new SourceLocation(1, 1),
+                sourceName: roots.FirstOrDefault()?.Name);
+        }
+
+        var sourceDirectories = rootDirectories.Concat(standardLibraries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (var sourceDirectory in sourceDirectories)
         {
             try
             {
@@ -104,10 +132,10 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
         return new ResolvedSourceModules(sources, units, diagnostics.Diagnostics);
     }
 
-    private static IEnumerable<string> DiscoverSourceDirectories(IReadOnlyList<string> rootDirectories)
+    // The stdlib folder found above each source root. OXYGEN_PATH names one only when no root has one above it.
+    private static List<string> FindStandardLibraries(IReadOnlyList<string> rootDirectories, string? oxygenPath)
     {
-        var directories = new HashSet<string>(rootDirectories, StringComparer.OrdinalIgnoreCase);
-        var projectStdlibFound = false;
+        var standardLibraries = new List<string>();
 
         foreach (var rootDirectory in rootDirectories)
         {
@@ -117,8 +145,9 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                 var standardLibraryDirectory = Path.Combine(directory.FullName, "stdlib");
                 if (Directory.Exists(standardLibraryDirectory))
                 {
-                    directories.Add(Path.GetFullPath(standardLibraryDirectory));
-                    projectStdlibFound = true;
+                    var fullPath = Path.GetFullPath(standardLibraryDirectory);
+                    if (!standardLibraries.Contains(fullPath, StringComparer.OrdinalIgnoreCase))
+                        standardLibraries.Add(fullPath);
                     break;
                 }
 
@@ -126,18 +155,17 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
             }
         }
 
-        var oxygenPath = Environment.GetEnvironmentVariable("OXYGEN_PATH");
-        if (!projectStdlibFound && !string.IsNullOrWhiteSpace(oxygenPath))
+        if (standardLibraries.Count == 0 && !string.IsNullOrWhiteSpace(oxygenPath))
         {
             var oxygenDirectory = new DirectoryInfo(Path.GetFullPath(oxygenPath));
             var standardLibraryDirectory = oxygenDirectory.Name.Equals("stdlib", StringComparison.OrdinalIgnoreCase)
                 ? oxygenDirectory.FullName
                 : Path.Combine(oxygenDirectory.FullName, "stdlib");
             if (Directory.Exists(standardLibraryDirectory))
-                directories.Add(Path.GetFullPath(standardLibraryDirectory));
+                standardLibraries.Add(Path.GetFullPath(standardLibraryDirectory));
         }
 
-        return directories;
+        return standardLibraries;
     }
 
     // Returns the path with symbolic links and junctions resolved in every component, so the same
