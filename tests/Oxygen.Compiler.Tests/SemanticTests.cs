@@ -1132,6 +1132,72 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RejectsDeletingAnObjectTwice()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); delete b; delete b; return 0; }"));
+
+        Assert.Contains("'b' is already deleted", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsReadingAVariableAfterItIsDeleted()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); delete b; return b.value; }"));
+
+        Assert.Contains("'b' was deleted and cannot be used", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsGivingADeletedVariableANewObject()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); delete b; b = new Box(); delete b; return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsDeletingANonClassValue()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { i32 x = 1; delete x; return 0; }"));
+
+        Assert.Contains("requires a reference to a class object", exception.Message);
+    }
+
+    [Fact]
+    public void WarnsWhenAnAllocationIsNeverFreed()
+    {
+        var tokenizer = new Tokenizer();
+        var tokens = tokenizer.TokenizeWithDiagnostics(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); return b.value; }",
+            "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+
+        var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer()
+            .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("Memory allocated for 'b' is never freed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DoesNotWarnWhenAnAllocationIsDeleted()
+    {
+        var tokenizer = new Tokenizer();
+        var tokens = tokenizer.TokenizeWithDiagnostics(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); i32 v = b.value; delete b; return v; }",
+            "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+
+        var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer()
+            .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Message.Contains("never freed", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));

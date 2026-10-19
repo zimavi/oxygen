@@ -120,7 +120,9 @@ public sealed partial class LlvmModuleGenerator
                         model.ExpressionTypes[declaration.Initializer], declaredType, model);
                 }
                 DeclareLocalSlot(builder, values, storage, declaration.Name, ToLlvmType(declaredType, model), declaredValue);
-                if (declaredType.IsClass)
+                // A stack object (or a value class) is destroyed at scope end. An object from `new` is not: its owner
+                // releases it with `delete`.
+                if (declaredType.IsClass && (IsValueClass(declaredType, model) || declaration.Initializer is ClassConstructionExpression))
                     _ownedScopes.Peek().Add(new OwnedLocal(declaration, declaration.Name, declaredType));
                 return false;
             case AssignmentStatement assignment:
@@ -648,6 +650,20 @@ public sealed partial class LlvmModuleGenerator
                 CleanupOwnedScopesTo(builder, values, storage, model, loop.ScopeDepth);
                 builder.BuildBr(loop.Continue);
                 return true;
+            case DeleteStatement deleteStatement:
+                {
+                    var target = EmitExpression(context, builder, deleteStatement.Target, values, storage, model, llvmFunctions);
+                    var targetType = model.ExpressionTypes[deleteStatement.Target];
+                    // The destructor runs first, while the object is still allocated; then its memory is released.
+                    if (_destructors.TryGetValue(targetType.StructName!, out var destructor))
+                        builder.BuildCall2(destructor.FunctionType, destructor, new[] { target }, (ReadOnlySpan<char>)string.Empty);
+                    builder.BuildCall2(_oxygenFree.FunctionType, _oxygenFree,
+                        new[] { builder.BuildBitCast(target, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "delete.memory") },
+                        (ReadOnlySpan<char>)string.Empty);
+                    if (deleteStatement.Target is IdentifierExpression deleted)
+                        RemoveOwned(deleted.Name);
+                    return false;
+                }
             case ThrowStatement throwStatement:
                 {
                     var thrown = EmitExpression(context, builder, throwStatement.Value, values, storage, model, llvmFunctions);

@@ -306,6 +306,10 @@ public sealed record ThrowStatement(
     Expression Value,
     SourceLocation Location) : Statement(Location);
 
+public sealed record DeleteStatement(
+    Expression Target,
+    SourceLocation Location) : Statement(Location);
+
 public sealed record CatchClause(
     TypeSyntax? ExceptionType,
     string? BindingName,

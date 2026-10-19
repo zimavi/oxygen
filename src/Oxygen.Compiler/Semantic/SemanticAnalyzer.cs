@@ -14,6 +14,11 @@ public sealed partial class SemanticAnalyzer
     private readonly HashSet<FunctionSymbol> _usedFunctions = [];
     private readonly List<VariableSymbol> _declaredVariables = [];
     private readonly HashSet<VariableDeclarationStatement> _escapingClassLocals = new(ReferenceEqualityComparer.Instance);
+    // Locals released by `delete`; locals whose value is read (not only used as the receiver of a member access); and
+    // whether the identifier being analyzed is only a receiver.
+    private readonly HashSet<VariableDeclarationStatement> _deletedLocals = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<VariableDeclarationStatement> _valueUses = new(ReferenceEqualityComparer.Instance);
+    private bool _receiverUse;
     private readonly Dictionary<ForInStatement, IteratorProtocol> _iteratorProtocols =
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<CallExpression, SemanticType> _callReceiverTypes =
@@ -132,6 +137,8 @@ public sealed partial class SemanticAnalyzer
         _usedFunctions.Clear();
         _declaredVariables.Clear();
         _escapingClassLocals.Clear();
+        _deletedLocals.Clear();
+        _valueUses.Clear();
         _iteratorProtocols.Clear();
         _callReceiverTypes.Clear();
         _receiverArgumentCalls.Clear();
@@ -1383,6 +1390,8 @@ public sealed partial class SemanticAnalyzer
                     ReportWarning(name, variable.Declaration.Location, length);
                 }
             }
+
+            WarnAboutUnfreedAllocations();
         }
     }
 
@@ -1819,6 +1828,9 @@ public sealed partial class SemanticAnalyzer
             case ReturnStatement returnStatement:
                 AnalyzeReturn(returnStatement, function, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return true;
+            case DeleteStatement deleteStatement:
+                AnalyzeDelete(deleteStatement, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                return false;
             case ThrowStatement throwStatement:
                 {
                     var thrownType = AnalyzeExpression(throwStatement.Value, scope, functions, moduleName, imports,
@@ -1968,9 +1980,15 @@ public sealed partial class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
-        var targetType = AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        // Assigning to a variable is not a use of it, so a deleted variable can be given a new value.
+        var targetType = assignment.Target is IdentifierExpression assignedIdentifier
+            ? AssignmentTargetType(assignedIdentifier, scope, expressionTypes)
+            : AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
             expectedType: targetType);
+        if (assignment.Target is IdentifierExpression reassigned
+            && scope.Lookup(reassigned.Name, reassigned.Location).Declaration is VariableDeclarationStatement reassignedDeclaration)
+            _deletedLocals.Remove(reassignedDeclaration);
         if (assignment.Operator != TokenKind.Equals)
         {
             if (targetType.IsPointer)
@@ -2131,6 +2149,76 @@ public sealed partial class SemanticAnalyzer
             expressionTypes[returnStatement.Value] = function.ReturnType;
     }
 
+    // Reads a variable. A deleted variable cannot be read, and reading its value (not only as a receiver) makes it escape.
+    private SemanticType ReadIdentifier(IdentifierExpression identifier, Scope scope)
+    {
+        var symbol = scope.Lookup(identifier.Name, identifier.Location);
+        if (symbol.Declaration is VariableDeclarationStatement declaration)
+        {
+            if (_deletedLocals.Contains(declaration))
+                throw Error($"'{identifier.Name}' was deleted and cannot be used", identifier.Location, identifier.Name.Length);
+            if (!_receiverUse)
+                _valueUses.Add(declaration);
+        }
+
+        return symbol.Type;
+    }
+
+    private SemanticType AssignmentTargetType(IdentifierExpression target, Scope scope,
+        IDictionary<Expression, SemanticType> expressionTypes)
+    {
+        var type = scope.Lookup(target.Name, target.Location).Type;
+        expressionTypes[target] = type;
+        return type;
+    }
+
+    // `delete target;` releases an object allocated with `new`: its destructor runs, then its memory is freed. Deleting a
+    // variable marks it deleted; deleting it again, or reading it afterwards, is an error. Only a class object can be deleted.
+    private void AnalyzeDelete(
+        DeleteStatement statement,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        SemanticType targetType;
+        if (statement.Target is IdentifierExpression identifier)
+        {
+            var symbol = scope.Lookup(identifier.Name, identifier.Location);
+            targetType = AssignmentTargetType(identifier, scope, expressionTypes);
+            if (symbol.Declaration is VariableDeclarationStatement declaration && IsOwnedClass(targetType))
+            {
+                if (_deletedLocals.Contains(declaration))
+                    throw Error($"'{identifier.Name}' is already deleted", identifier.Location, identifier.Name.Length);
+                _deletedLocals.Add(declaration);
+            }
+        }
+        else
+        {
+            targetType = AnalyzeExpression(statement.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        }
+
+        if (!IsOwnedClass(targetType))
+            throw Error($"'delete' requires a reference to a class object, got {targetType}", statement.Target.Location);
+    }
+
+    // A local that holds an object from `new` leaves scope without a `delete` and without escaping, so its memory is leaked.
+    private void WarnAboutUnfreedAllocations()
+    {
+        foreach (var variable in _declaredVariables)
+        {
+            if (variable.Declaration is not VariableDeclarationStatement { Initializer: NewExpression } declaration
+                || !IsOwnedClass(variable.Type)
+                || _deletedLocals.Contains(declaration)
+                || _escapingClassLocals.Contains(declaration)
+                || _valueUses.Contains(declaration))
+                continue;
+            ReportWarning($"Memory allocated for '{declaration.Name}' is never freed", declaration.Location, declaration.Name.Length);
+        }
+    }
+
     private SemanticType AnalyzeExpression(
         Expression expression,
         Scope scope,
@@ -2144,7 +2232,7 @@ public sealed partial class SemanticAnalyzer
     {
         var type = expression switch
         {
-            IdentifierExpression identifier => scope.Lookup(identifier.Name, identifier.Location).Type,
+            IdentifierExpression identifier => ReadIdentifier(identifier, scope),
             ThisExpression thisExpression => scope.LookupThis(thisExpression.Location),
             IntegerLiteralExpression integer => IntegerLiteralType(integer),
             FloatingPointLiteralExpression floating => SemanticType.FromPrimitive(ParseNumericLiteralType(floating.Lexeme, true)),
@@ -2320,7 +2408,11 @@ public sealed partial class SemanticAnalyzer
             return SemanticType.Enum(enumSymbol.Name);
         }
 
+        // A variable that is only the receiver of a member access is used, but its value does not escape.
+        var previousReceiver = _receiverUse;
+        _receiverUse = member.Target is IdentifierExpression;
         var targetType = AnalyzeExpression(member.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        _receiverUse = previousReceiver;
         if (targetType.IsClass)
         {
             var cls = _classesByName[targetType.StructName!];

@@ -658,6 +658,8 @@ public sealed partial class Parser
         }
         if (Match(TokenKind.Throw))
             return ParseThrow(Previous.Location);
+        if (Match(TokenKind.Delete))
+            return ParseDelete(Previous.Location);
 
         if (Match(TokenKind.If))
             return ParseIf(Previous.Location);
@@ -864,6 +866,14 @@ public sealed partial class Parser
 
         Consume(TokenKind.Semicolon, "Expected ';' after return statement.");
         return new ReturnStatement(value, token.Location);
+    }
+
+    // `delete target;` releases an object allocated with `new`: its destructor runs, then its memory is freed.
+    private DeleteStatement ParseDelete(SourceLocation location)
+    {
+        var target = ParseExpression();
+        Consume(TokenKind.Semicolon, "Expected ';' after delete target.");
+        return new DeleteStatement(target, location);
     }
 
     private ThrowStatement ParseThrow(SourceLocation location)

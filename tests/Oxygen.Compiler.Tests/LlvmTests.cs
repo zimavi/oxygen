@@ -574,7 +574,7 @@ public sealed class LlvmTests
     public void EmitsOneDestructorForAnInnerClassTransferredToAnOuterLocal()
     {
         var model = Analyze(
-            "class Box { ~Box() { } } i32 main() { Box outer = new Box(); { Box inner = new Box(); outer = inner; } return 0; }");
+            "class Box { ~Box() { } } i32 main() { Box outer = new Box(); { Box inner = new Box(); outer = inner; } delete outer; return 0; }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
@@ -587,7 +587,7 @@ public sealed class LlvmTests
     public void EmitsNestedDestructorsInReverseScopeOrder()
     {
         var model = Analyze(
-            "class Box { ~Box() { } } i32 main() { Box outer = new Box(); { Box inner = new Box(); } return 0; }");
+            "class Box { ~Box() { } } i32 main() { Box outer = Box(); { Box inner = Box(); } return 0; }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
@@ -603,7 +603,7 @@ public sealed class LlvmTests
     public void EmitsDestructorAfterReturnedClassOwnershipIsReceived()
     {
         var model = Analyze(
-            "class Box { ~Box() { } } Box make() { Box value = new Box(); return value; } i32 main() { Box result = make(); return 0; }");
+            "class Box { ~Box() { } } Box make() { Box value = new Box(); return value; } i32 main() { Box result = make(); delete result; return 0; }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
@@ -617,7 +617,7 @@ public sealed class LlvmTests
     public void TransfersClassArgumentOwnershipToTheCallee()
     {
         var model = Analyze(
-            "class Box { ~Box() { } } void consume(Box value) { return; } i32 main() { Box value = new Box(); consume(value); return 0; }");
+            "class Box { ~Box() { } } void consume(Box value) { return; } i32 main() { Box value = new Box(); consume(value); delete value; return 0; }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();

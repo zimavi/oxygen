@@ -20,6 +20,7 @@ public sealed class Tokenizer
             ["break"] = TokenKind.Break,
             ["continue"] = TokenKind.Continue,
             ["throw"] = TokenKind.Throw,
+            ["delete"] = TokenKind.Delete,
             ["try"] = TokenKind.Try,
             ["catch"] = TokenKind.Catch,
             ["finally"] = TokenKind.Finally,

@@ -18,6 +18,7 @@ public enum TokenKind
     Break,
     Continue,
     Throw,
+    Delete,
     Try,
     Catch,
     Finally,

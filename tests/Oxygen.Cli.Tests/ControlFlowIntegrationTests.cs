@@ -308,6 +308,35 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void DeleteRunsTheDestructorBeforeFreeingTheObject()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            class Box {
+                i32 value = 3;
+
+                ~Box() {
+                    io.print("destroyed");
+                }
+            }
+
+            i32 main() {
+                Box box = new Box();
+                io.print(box.value);
+                delete box;
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("3destroyed", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
     public void SizeOfIncludesPadding()
     {
         NativeProgram.RequireNativeToolchain();

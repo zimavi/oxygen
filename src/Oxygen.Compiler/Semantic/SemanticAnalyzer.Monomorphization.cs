@@ -552,6 +552,7 @@ public sealed partial class SemanticAnalyzer
                 .Concat(EnumerateExpressions(loop.Body)),
             ForInStatement loop => EnumerateExpressions(loop.Collection).Concat(EnumerateExpressions(loop.Body)),
             ThrowStatement @throw => EnumerateExpressions(@throw.Value),
+            DeleteStatement @delete => EnumerateExpressions(@delete.Target),
             TryStatement @try => EnumerateExpressions(@try.Body)
                 .Concat(@try.Catches.SelectMany(item => EnumerateExpressions(item.Body)))
                 .Concat(EnumerateExpressions(@try.Finally)),
@@ -718,6 +719,9 @@ public sealed partial class SemanticAnalyzer
                 break;
             case ThrowStatement @throw:
                 CollectExpressionSyntax(@throw.Value, parameters, add);
+                break;
+            case DeleteStatement @delete:
+                CollectExpressionSyntax(@delete.Target, parameters, add);
                 break;
             case TryStatement @try:
                 CollectBlockSyntax(@try.Body, parameters, add);
@@ -996,6 +1000,10 @@ public sealed partial class SemanticAnalyzer
                 VariableType = RewriteTypeSyntax(item.VariableType, substitutions, aggregateNames),
                 Collection = CloneExpression(item.Collection, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls),
                 Body = CloneStatement(item.Body, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
+            },
+            DeleteStatement item => item with
+            {
+                Target = CloneExpression(item.Target, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
             },
             ThrowStatement item => item with
             {

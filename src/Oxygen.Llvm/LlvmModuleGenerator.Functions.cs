@@ -329,7 +329,9 @@ public sealed partial class LlvmModuleGenerator
             parameter.Name = symbol.Parameters[index].Name;
             DeclareLocalSlot(builder, values, storage, symbol.Parameters[index].Name,
                 ToLlvmType(symbol.Parameters[index].Type, model), parameter);
-            if (symbol.Parameters[index].Type.IsClass)
+            // A parameter that is a class reference belongs to the caller. Only a value class parameter is a copy the
+            // function destroys.
+            if (symbol.Parameters[index].Type.IsClass && IsValueClass(symbol.Parameters[index].Type, model))
                 _ownedScopes.Peek().Add(new OwnedLocal(null, symbol.Parameters[index].Name, symbol.Parameters[index].Type));
         }
 

@@ -344,6 +344,7 @@ public sealed partial class SemanticAnalyzer
                 Body = Statement(item.Body)
             },
             ThrowStatement item => item with { Value = Expression(item.Value) },
+            DeleteStatement item => item with { Target = Expression(item.Target) },
             TryStatement item => item with
             {
                 Body = Block(item.Body),
