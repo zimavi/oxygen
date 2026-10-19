@@ -1287,6 +1287,56 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RejectsDeletingAgainAfterEveryPathDeletedTheObject()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); i32 c = 1; " +
+            "if (c == 1) { delete b; } else { delete b; } delete b; return 0; }"));
+
+        Assert.Contains("'b' is already deleted", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsReadingAfterOnlySomePathsDeletedTheObject()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); i32 c = 1; " +
+            "if (c == 1) { delete b; } i32 v = b.value; return v; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void AllowsReadingAfterABranchThatDeletedAndReturned()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); i32 c = 1; " +
+            "if (c == 1) { delete b; return 0; } i32 v = b.value; return v; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsReadingAfterEveryPathDeletedTheObject()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); i32 c = 1; " +
+            "if (c == 1) { delete b; } else { delete b; } return b.value; }"));
+
+        Assert.Contains("'b' was deleted and cannot be used", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsDeletingInALoopBodyWithoutAnErrorAfterTheLoop()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); i32 i = 0; " +
+            "while (i < 1) { delete b; i = i + 1; } return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));

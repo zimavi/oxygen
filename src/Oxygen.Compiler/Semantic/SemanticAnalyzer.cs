@@ -20,6 +20,8 @@ public sealed partial class SemanticAnalyzer
     // Locals released by `delete`; locals whose value is read (not only used as the receiver of a member access); and
     // whether the identifier being analyzed is only a receiver.
     private readonly HashSet<VariableDeclarationStatement> _deletedLocals = new(ReferenceEqualityComparer.Instance);
+    // Locals deleted on some path to the current point but not on every path.
+    private readonly HashSet<VariableDeclarationStatement> _maybeDeletedLocals = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VariableDeclarationStatement> _valueUses = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VariableDeclarationStatement> _autoFreedLocals = new(ReferenceEqualityComparer.Instance);
     private bool _receiverUse;
@@ -142,6 +144,7 @@ public sealed partial class SemanticAnalyzer
         _declaredVariables.Clear();
         _escapingClassLocals.Clear();
         _deletedLocals.Clear();
+        _maybeDeletedLocals.Clear();
         _autoFreedLocals.Clear();
         _valueUses.Clear();
         _iteratorProtocols.Clear();
@@ -1621,18 +1624,32 @@ public sealed partial class SemanticAnalyzer
                     thenScope = new Scope(scope, MarkVariableUsed);
                     thenScope.Declare(binding, new VariableSymbol(targetType, false, conditional.Condition, false));
                 }
+                var beforeBranches = SnapshotDeleteState();
                 var thenReturns = AnalyzeStatement(conditional.Then, thenScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                var afterThen = SnapshotDeleteState();
+                RestoreDeleteState(beforeBranches);
                 var elseReturns = conditional.Else is not null
                     && AnalyzeStatement(conditional.Else, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                var afterElse = SnapshotDeleteState();
+                // A branch that returns does not reach the code after the if, so only the other branch's deletions count.
+                if (thenReturns && !elseReturns)
+                    RestoreDeleteState(afterElse);
+                else if (elseReturns && !thenReturns)
+                    RestoreDeleteState(afterThen);
+                else if (!thenReturns && !elseReturns)
+                    RestoreDeleteState(JoinDeleteStates(afterThen, afterElse));
                 return conditional.Else is not null && thenReturns && elseReturns;
             case WhileStatement whileStatement:
                 var whileType = AnalyzeExpression(whileStatement.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 RequireBoolean(whileType, whileStatement.Condition.Location);
+                var beforeWhile = SnapshotDeleteState();
                 _loopDepth++;
                 _breakableDepth++;
                 AnalyzeStatement(whileStatement.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 _breakableDepth--;
                 _loopDepth--;
+                // The body may run zero times, so after the loop only what is deleted on both paths is definitely deleted.
+                RestoreDeleteState(JoinDeleteStates(beforeWhile, SnapshotDeleteState()));
                 return false;
             case ForStatement forStatement:
                 var loopScope = new Scope(scope, MarkVariableUsed);
@@ -1643,6 +1660,7 @@ public sealed partial class SemanticAnalyzer
                     var forType = AnalyzeExpression(forStatement.Condition, loopScope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                     RequireBoolean(forType, forStatement.Condition.Location);
                 }
+                var beforeFor = SnapshotDeleteState();
                 _loopDepth++;
                 _breakableDepth++;
                 AnalyzeStatement(forStatement.Body, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
@@ -1650,6 +1668,7 @@ public sealed partial class SemanticAnalyzer
                     AnalyzeStatement(forStatement.Increment, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 _breakableDepth--;
                 _loopDepth--;
+                RestoreDeleteState(JoinDeleteStates(beforeFor, SnapshotDeleteState()));
                 return false;
             case ForInStatement forInStatement:
                 {
@@ -2019,7 +2038,10 @@ public sealed partial class SemanticAnalyzer
             expectedType: targetType);
         if (assignment.Target is IdentifierExpression reassigned
             && scope.Lookup(reassigned.Name, reassigned.Location).Declaration is VariableDeclarationStatement reassignedDeclaration)
+        {
             _deletedLocals.Remove(reassignedDeclaration);
+            _maybeDeletedLocals.Remove(reassignedDeclaration);
+        }
         if (assignment.Operator != TokenKind.Equals)
         {
             if (targetType.IsPointer)
@@ -2180,6 +2202,32 @@ public sealed partial class SemanticAnalyzer
             expressionTypes[returnStatement.Value] = function.ReturnType;
     }
 
+    // The deletion state of the locals at one point in the analysis: deleted on every path, and deleted on some path.
+    private sealed record DeleteState(HashSet<VariableDeclarationStatement> Definite, HashSet<VariableDeclarationStatement> Maybe);
+
+    private DeleteState SnapshotDeleteState() =>
+        new(new HashSet<VariableDeclarationStatement>(_deletedLocals, ReferenceEqualityComparer.Instance),
+            new HashSet<VariableDeclarationStatement>(_maybeDeletedLocals, ReferenceEqualityComparer.Instance));
+
+    private void RestoreDeleteState(DeleteState state)
+    {
+        _deletedLocals.Clear();
+        _deletedLocals.UnionWith(state.Definite);
+        _maybeDeletedLocals.Clear();
+        _maybeDeletedLocals.UnionWith(state.Maybe);
+    }
+
+    // Where two paths meet: a local is deleted on every path only if it is deleted on both; it is deleted on some path if
+    // it is deleted on either.
+    private static DeleteState JoinDeleteStates(DeleteState first, DeleteState second)
+    {
+        var definite = new HashSet<VariableDeclarationStatement>(first.Definite.Where(second.Definite.Contains),
+            ReferenceEqualityComparer.Instance);
+        var maybe = new HashSet<VariableDeclarationStatement>(
+            first.Maybe.Concat(second.Maybe).Concat(first.Definite).Concat(second.Definite), ReferenceEqualityComparer.Instance);
+        return new DeleteState(definite, maybe);
+    }
+
     // Reads a variable. A deleted variable cannot be read, and reading its value (not only as a receiver) makes it escape.
     private SemanticType ReadIdentifier(IdentifierExpression identifier, Scope scope)
     {
@@ -2224,6 +2272,7 @@ public sealed partial class SemanticAnalyzer
                 if (_deletedLocals.Contains(declaration))
                     throw Error($"'{identifier.Name}' is already deleted", identifier.Location, identifier.Name.Length);
                 _deletedLocals.Add(declaration);
+                _maybeDeletedLocals.Add(declaration);
             }
         }
         else
@@ -2243,6 +2292,7 @@ public sealed partial class SemanticAnalyzer
         if (variable.Declaration is VariableDeclarationStatement { Initializer: NewExpression } found
             && IsOwnedClass(variable.Type)
             && !_deletedLocals.Contains(found)
+            && !_maybeDeletedLocals.Contains(found)
             && !_escapingClassLocals.Contains(found)
             && !_valueUses.Contains(found))
         {
