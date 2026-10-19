@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using LLVMSharp.Interop;
 using Oxygen.Compiler.Lexer;
 using Oxygen.Compiler.Parsing;
 using Oxygen.Compiler.Semantic;
@@ -867,6 +868,26 @@ public sealed class LlvmTests
         Assert.Contains("conditional.true", ir);
         Assert.Contains("conditional.false", ir);
         Assert.Contains("conditional.end", ir);
+    }
+
+    [Fact]
+    public void VerifierAcceptsAWellFormedModuleAndRejectsABlockWithoutATerminator()
+    {
+        using var context = LLVMContextRef.Create();
+        using var builder = context.CreateBuilder();
+        using var valid = context.CreateModuleWithName("valid");
+        var validFunction = valid.AddFunction("f", LLVMTypeRef.CreateFunction(context.VoidType, [], false));
+        builder.PositionAtEnd(validFunction.AppendBasicBlock("entry"));
+        builder.BuildRetVoid();
+
+        LlvmModuleVerifier.Verify(valid);
+
+        using var broken = context.CreateModuleWithName("broken");
+        broken.AddFunction("f", LLVMTypeRef.CreateFunction(context.VoidType, [], false))
+            .AppendBasicBlock("entry");
+
+        var exception = Assert.Throws<LlvmVerificationException>(() => LlvmModuleVerifier.Verify(broken));
+        Assert.Contains("does not have terminator", exception.Message);
     }
 
     private static SemanticModel Analyze(string source)

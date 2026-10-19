@@ -230,9 +230,7 @@ public sealed partial class LlvmModuleGenerator
 
             EmitNativeMain(context, builder, module, model, llvmFunctions);
 
-            // TryVerify returns true when the module is valid, so an invalid module is the one that must be rejected.
-            if (!module.TryVerify(LLVMVerifierFailureAction.LLVMReturnStatusAction, out var error))
-                throw new InvalidOperationException($"LLVM verification failed: {error}");
+            LlvmModuleVerifier.Verify(module);
 
             var metadata = new NativeModuleMetadata
             {

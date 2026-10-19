@@ -179,6 +179,13 @@ int RunBuild(System.CommandLine.ParseResult result)
     {
         generated = new LlvmModuleGenerator().Generate("program", semanticResult.Model!);
     }
+    catch (LlvmVerificationException exception)
+    {
+        // The IR was generated from a program that passed semantic analysis, so invalid IR is a compiler bug.
+        Console.Error.WriteLine("oxygenc: internal compiler error. This is a bug in the compiler, not in your program.");
+        Console.Error.WriteLine(exception.Message);
+        return ExitCodes.InternalError;
+    }
     catch (Exception exception) when (exception is PlatformNotSupportedException or InvalidOperationException)
     {
         var diagnostics = new DiagnosticBag();
