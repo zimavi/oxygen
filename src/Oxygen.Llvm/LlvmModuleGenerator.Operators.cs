@@ -104,12 +104,26 @@ public sealed partial class LlvmModuleGenerator
             return EmitShortCircuit(context, builder, expression, values, storage, model, llvmFunctions);
         var left = EmitExpression(context, builder, expression.Left, values, storage, model, llvmFunctions);
         var right = EmitExpression(context, builder, expression.Right, values, storage, model, llvmFunctions);
-        var leftType = model.ExpressionTypes[expression.Left];
-        var rightType = model.ExpressionTypes[expression.Right];
+        return EmitBinaryOperation(builder, expression.Operator, left, model.ExpressionTypes[expression.Left], right,
+            model.ExpressionTypes[expression.Right], model.ExpressionTypes[expression], model);
+    }
+
+    // The operation on two evaluated operands. The operand types decide the conversions and the signedness of comparisons
+    // and division; the result type decides pointer arithmetic and whether the operation is floating-point.
+    private LLVMValueRef EmitBinaryOperation(
+        LLVMBuilderRef builder,
+        TokenKind op,
+        LLVMValueRef left,
+        SemanticType leftType,
+        LLVMValueRef right,
+        SemanticType rightType,
+        SemanticType resultType,
+        SemanticModel model)
+    {
         if (leftType.Kind == SemanticTypeKind.String && rightType.Kind == SemanticTypeKind.String)
         {
             var equal = EmitStringEquality(builder, left, right);
-            return expression.Operator == TokenKind.BangEquals ? builder.BuildNot(equal, "string.not.equal") : equal;
+            return op == TokenKind.BangEquals ? builder.BuildNot(equal, "string.not.equal") : equal;
         }
         if (leftType != rightType && leftType.IsNumeric && rightType.IsNumeric)
         {
@@ -118,25 +132,25 @@ public sealed partial class LlvmModuleGenerator
             right = CoerceValue(builder, right, rightType, common, model);
         }
         if ((leftType.IsPointer || rightType.IsPointer)
-            && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
+            && op is TokenKind.EqualsEquals or TokenKind.BangEquals)
         {
-            var predicate = expression.Operator == TokenKind.EqualsEquals
+            var predicate = op == TokenKind.EqualsEquals
                 ? LLVMIntPredicate.LLVMIntEQ
                 : LLVMIntPredicate.LLVMIntNE;
             return builder.BuildICmp(predicate, left, right, "ptr.compare");
         }
-        if (model.ExpressionTypes[expression].IsPointer)
+        if (resultType.IsPointer)
         {
             var index = right;
-            index = ExtendIndexToInt64(builder, right, model.ExpressionTypes[expression.Right], "ptr.index");
-            var pointee = ToLlvmType(model.ExpressionTypes[expression].Pointee!, model);
-            return expression.Operator == TokenKind.Plus
+            index = ExtendIndexToInt64(builder, right, rightType, "ptr.index");
+            var pointee = ToLlvmType(resultType.Pointee!, model);
+            return op == TokenKind.Plus
                 ? builder.BuildGEP2(pointee, left, new LLVMValueRef[] { index }, (ReadOnlySpan<char>)"ptr.add")
                 : builder.BuildGEP2(pointee, left,
                     new LLVMValueRef[] { builder.BuildNeg(index, "ptr.neg") }, (ReadOnlySpan<char>)"ptr.sub");
         }
-        var isFloatingPoint = model.ExpressionTypes[expression].Primitive is PrimitiveType.F32 or PrimitiveType.F64;
-        if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals
+        var isFloatingPoint = resultType.Primitive is PrimitiveType.F32 or PrimitiveType.F64;
+        if (op is TokenKind.EqualsEquals or TokenKind.BangEquals
             or TokenKind.LessThan or TokenKind.LessThanOrEquals
             or TokenKind.GreaterThan or TokenKind.GreaterThanOrEquals)
         {
@@ -145,7 +159,7 @@ public sealed partial class LlvmModuleGenerator
                 || rightType.Primitive is PrimitiveType.F32 or PrimitiveType.F64;
             if (operandsAreFloatingPoint)
             {
-                var predicate = expression.Operator switch
+                var predicate = op switch
                 {
                     TokenKind.EqualsEquals => LLVMRealPredicate.LLVMRealOEQ,
                     // Unordered: NaN is not equal to anything, including itself.
@@ -158,7 +172,7 @@ public sealed partial class LlvmModuleGenerator
                 return builder.BuildFCmp(predicate, left, right, "fcmp");
             }
             var unsignedOperands = IsUnsignedInteger(leftType) || IsUnsignedInteger(rightType);
-            var intPredicate = expression.Operator switch
+            var intPredicate = op switch
             {
                 TokenKind.EqualsEquals => LLVMIntPredicate.LLVMIntEQ,
                 TokenKind.BangEquals => LLVMIntPredicate.LLVMIntNE,
@@ -169,11 +183,11 @@ public sealed partial class LlvmModuleGenerator
             };
             return builder.BuildICmp(intPredicate, left, right, "icmp");
         }
-        if (!isFloatingPoint && expression.Operator is TokenKind.Slash or TokenKind.Percent)
+        if (!isFloatingPoint && op is TokenKind.Slash or TokenKind.Percent)
             EmitIntegerDivisionChecks(builder, left, right, IsUnsignedInteger(leftType));
-        if (!isFloatingPoint && expression.Operator is TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan)
+        if (!isFloatingPoint && op is TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan)
             EmitShiftRangeCheck(builder, left, right);
-        return expression.Operator switch
+        return op switch
         {
             TokenKind.Plus when isFloatingPoint => builder.BuildFAdd(left, right, "fadd"),
             TokenKind.Minus when isFloatingPoint => builder.BuildFSub(left, right, "fsub"),
@@ -195,7 +209,7 @@ public sealed partial class LlvmModuleGenerator
             TokenKind.GreaterThanGreaterThan => IsUnsignedInteger(leftType)
                 ? builder.BuildLShr(left, right, "lshr")
                 : builder.BuildAShr(left, right, "ashr"),
-            _ => throw new InvalidOperationException($"Unsupported binary operator '{expression.Operator}'.")
+            _ => throw new InvalidOperationException($"Unsupported binary operator '{op}'.")
         };
     }
 

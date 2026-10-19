@@ -697,11 +697,7 @@ public sealed partial class Parser
         {
             var value = ParseExpression();
             Consume(TokenKind.Semicolon, "Expected ';' after assignment.");
-            return new AssignmentStatement(expression,
-                assignmentOperator == TokenKind.Equals
-                    ? value
-                    : new BinaryExpression(expression, CompoundOperator(assignmentOperator), value, expressionLocation),
-                expressionLocation);
+            return new AssignmentStatement(expression, value, expressionLocation, assignmentOperator);
         }
         Consume(TokenKind.Semicolon, "Expected ';' after expression.");
         return new ExpressionStatement(expression, expressionLocation);
@@ -816,23 +812,17 @@ public sealed partial class Parser
             && increment.Operator is TokenKind.PlusPlus or TokenKind.MinusMinus
             && increment.IsPostfix)
         {
-            var operatorKind = increment.Operator == TokenKind.PlusPlus ? TokenKind.Plus : TokenKind.Minus;
-            return new AssignmentStatement(
-                increment.Operand,
-                new BinaryExpression(increment.Operand, operatorKind,
-                    new IntegerLiteralExpression("1", increment.Location), increment.Location),
-                expressionLocation);
+            // x++ is x += 1, so the target is evaluated once like any compound assignment.
+            var operatorKind = increment.Operator == TokenKind.PlusPlus ? TokenKind.PlusEquals : TokenKind.MinusEquals;
+            return new AssignmentStatement(increment.Operand,
+                new IntegerLiteralExpression("1", increment.Location), expressionLocation, operatorKind);
         }
         if (TryConsumeAssignmentOperator(out var assignmentOperator))
         {
             var value = ParseExpression();
             if (isInitializer)
                 Consume(TokenKind.Semicolon, "Expected ';' after for initializer.");
-            return new AssignmentStatement(expression,
-                assignmentOperator == TokenKind.Equals
-                    ? value
-                    : new BinaryExpression(expression, CompoundOperator(assignmentOperator), value, expressionLocation),
-                expressionLocation);
+            return new AssignmentStatement(expression, value, expressionLocation, assignmentOperator);
         }
         if (isInitializer)
             Consume(TokenKind.Semicolon, "Expected ';' after for initializer.");
@@ -1329,21 +1319,6 @@ public sealed partial class Parser
 
         return false;
     }
-
-    private static TokenKind CompoundOperator(TokenKind operatorKind) => operatorKind switch
-    {
-        TokenKind.PlusEquals => TokenKind.Plus,
-        TokenKind.MinusEquals => TokenKind.Minus,
-        TokenKind.StarEquals => TokenKind.Star,
-        TokenKind.SlashEquals => TokenKind.Slash,
-        TokenKind.PercentEquals => TokenKind.Percent,
-        TokenKind.AmpersandEquals => TokenKind.Ampersand,
-        TokenKind.PipeEquals => TokenKind.Pipe,
-        TokenKind.CaretEquals => TokenKind.Caret,
-        TokenKind.LessThanLessThanEquals => TokenKind.LessThanLessThan,
-        TokenKind.GreaterThanGreaterThanEquals => TokenKind.GreaterThanGreaterThan,
-        _ => throw new InvalidOperationException($"'{operatorKind}' is not a compound assignment operator.")
-    };
 
     private bool IsType(TokenKind kind) => PrimitiveTypes.ContainsKey(kind) || kind == TokenKind.String;
 

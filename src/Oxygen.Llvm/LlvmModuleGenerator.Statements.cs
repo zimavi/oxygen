@@ -143,6 +143,10 @@ public sealed partial class LlvmModuleGenerator
                     RegisterUnwindLocal(builder, declaration, declaredType, declaredSlot);
                 }
                 return false;
+            case AssignmentStatement compound when CompoundAssignment.IsCompound(compound.Operator):
+                // The target is located before the value is evaluated, and it is evaluated once.
+                EmitCompoundAssignment(context, builder, compound, values, storage, model, llvmFunctions);
+                return false;
             case AssignmentStatement assignment:
                 var assigned = EmitExpression(context, builder, assignment.Value, values, storage, model, llvmFunctions);
                 if (assignment.Target is IdentifierExpression assignmentIdentifier

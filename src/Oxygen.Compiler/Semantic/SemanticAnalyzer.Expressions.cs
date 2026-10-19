@@ -465,6 +465,17 @@ public sealed partial class SemanticAnalyzer
     {
         var left = AnalyzeExpression(expression.Left, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         var right = AnalyzeExpression(expression.Right, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        return BinaryResultType(expression, left, right, expressionTypes);
+    }
+
+    // The type of a binary operation once its operands are analyzed. A compound assignment is validated with the same rules,
+    // applied to its target and value.
+    private SemanticType BinaryResultType(
+        BinaryExpression expression,
+        SemanticType left,
+        SemanticType right,
+        IDictionary<Expression, SemanticType> expressionTypes)
+    {
         CheckConstantIntegerOperation(expression, left, right);
         var isLogical = expression.Operator is TokenKind.AmpersandAmpersand or TokenKind.PipePipe;
         var isComparison = expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals

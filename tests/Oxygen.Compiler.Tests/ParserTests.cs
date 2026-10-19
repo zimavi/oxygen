@@ -522,7 +522,8 @@ public sealed class ParserTests
         var loop = Assert.IsType<ForStatement>(body[1]);
         var increment = Assert.IsType<AssignmentStatement>(loop.Increment);
         Assert.Equal("i", Assert.IsType<IdentifierExpression>(increment.Target).Name);
-        Assert.IsType<BinaryExpression>(increment.Value);
+        Assert.Equal(TokenKind.PlusEquals, increment.Operator);
+        Assert.Equal("1", Assert.IsType<IntegerLiteralExpression>(increment.Value).Lexeme);
         var inferred = Assert.IsType<VariableDeclarationStatement>(body[2]);
         Assert.True(inferred.Type.IsInferred);
     }
@@ -541,9 +542,10 @@ public sealed class ParserTests
         var after = Assert.IsType<VariableDeclarationStatement>(statements[2]);
         Assert.Equal(TokenKind.PlusPlus, Assert.IsType<UnaryExpression>(after.Initializer).Operator);
         var compound = Assert.IsType<AssignmentStatement>(statements[3]);
-        Assert.Equal(TokenKind.Plus, Assert.IsType<BinaryExpression>(compound.Value).Operator);
+        Assert.Equal(TokenKind.PlusEquals, compound.Operator);
+        Assert.Equal("2", Assert.IsType<IntegerLiteralExpression>(compound.Value).Lexeme);
         var shift = Assert.IsType<AssignmentStatement>(statements[4]);
-        Assert.Equal(TokenKind.LessThanLessThan, Assert.IsType<BinaryExpression>(shift.Value).Operator);
+        Assert.Equal(TokenKind.LessThanLessThanEquals, shift.Operator);
     }
 
     [Fact]

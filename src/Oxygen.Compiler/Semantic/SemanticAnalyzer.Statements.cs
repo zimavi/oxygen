@@ -526,8 +526,9 @@ public sealed partial class SemanticAnalyzer
         if (assignment.Operator != TokenKind.Equals && assignment.Target is IdentifierExpression compoundTarget
             && scope.Lookup(compoundTarget.Name, compoundTarget.Location).Declaration is VariableDeclarationStatement compoundDeclaration)
             CheckAssigned(compoundDeclaration, compoundTarget.Name, compoundTarget.Location);
+        var isCompound = CompoundAssignment.IsCompound(assignment.Operator);
         var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
-            expectedType: targetType);
+            expectedType: isCompound ? null : targetType);
         if (assignment.Target is IdentifierExpression reassigned
             && scope.Lookup(reassigned.Name, reassigned.Location).Declaration is VariableDeclarationStatement reassignedDeclaration)
         {
@@ -535,35 +536,43 @@ public sealed partial class SemanticAnalyzer
             _maybeDeletedLocals.Remove(reassignedDeclaration);
             _unassignedLocals.Remove(reassignedDeclaration);
         }
-        if (assignment.Operator != TokenKind.Equals)
+        if (isCompound)
         {
-            if (targetType.IsPointer)
-            {
-                if (assignment.Operator is not (TokenKind.PlusEquals or TokenKind.MinusEquals)
-                    || !valueType.IsInteger)
-                    throw Error($"Operator '{assignment.Operator}' is not valid for pointer operands", assignment.Location);
-            }
-            else if (targetType.IsInteger && valueType.IsInteger)
-            {
-                // All integer compound operators are valid.
-            }
-            else if (targetType.IsNumeric && valueType.IsNumeric
-                     && assignment.Operator is TokenKind.PlusEquals or TokenKind.MinusEquals
-                        or TokenKind.StarEquals or TokenKind.SlashEquals)
-            {
-            }
-            else
-            {
-                throw Error($"Operator '{assignment.Operator}' requires compatible operands", assignment.Location);
-            }
+            // x op= y is x = x op y. The operation is checked with the binary rules, on the target and the value, and its
+            // result must convert back to the target. The synthetic expression is not kept: the backend reads the target once.
+            if (assignment.Target is MemberAccessExpression compoundMember)
+                RequireCompoundMemberSupported(compoundMember, expressionTypes);
+            var operation = new BinaryExpression(assignment.Target, CompoundAssignment.BinaryOperator(assignment.Operator),
+                assignment.Value, assignment.Location);
+            valueType = BinaryResultType(operation, targetType, valueType, expressionTypes);
         }
-        else if (!CanAssign(targetType, assignment.Value, valueType))
+        if (!CanAssign(targetType, assignment.Value, valueType))
         {
             throw Error($"Cannot assign {valueType} to target of type {targetType}", assignment.Value.Location);
         }
 
         ValidateWritableTarget(assignment.Target, scope);
         TrackPointerAssignment(assignment, assignment.Value, valueType, scope);
+    }
+
+    // A compound assignment to a member needs the member's current value: a field, or a property of a class with a getter.
+    // Interface properties and properties of value classes are not supported yet.
+    private void RequireCompoundMemberSupported(MemberAccessExpression member, IDictionary<Expression, SemanticType> expressionTypes)
+    {
+        if (!expressionTypes.TryGetValue(member.Target, out var ownerType))
+            return;
+        if (ownerType.IsInterface)
+            throw Error("Compound assignment to an interface property is not supported", member.Location, member.MemberName.Length);
+        if (!ownerType.IsClass || !_classesByName.TryGetValue(ownerType.StructName!, out var owner))
+            return;
+        var property = owner.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+        if (property is null)
+            return;
+        if (owner.IsValue)
+            throw Error("Compound assignment to a property of a value class is not supported", member.Location, member.MemberName.Length);
+        if (!property.Declaration.Accessors.Any(accessor => accessor.Kind == PropertyAccessorKind.Get))
+            throw Error($"Compound assignment needs a readable property, but '{member.MemberName}' has no getter",
+                member.Location, member.MemberName.Length);
     }
 
     private void ValidateWritableTarget(Expression target, Scope scope)
