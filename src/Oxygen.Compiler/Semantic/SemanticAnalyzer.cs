@@ -171,7 +171,7 @@ public sealed partial class SemanticAnalyzer
         string? SourceNameAt(int unitIndex) =>
             sourceNames is not null && unitIndex < sourceNames.Count ? sourceNames[unitIndex] : null;
 
-        var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>();
+        var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>(ReferenceEqualityComparer.Instance);
         _functionSymbols = functions;
         for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
         {

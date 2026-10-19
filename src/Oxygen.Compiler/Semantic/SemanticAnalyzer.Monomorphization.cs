@@ -199,8 +199,9 @@ public sealed partial class SemanticAnalyzer
                 $"{baseName}__ox_{EncodeAggregateArguments(aggregate.TypeArguments!)}");
         }
 
-        var specializedMethods = new Dictionary<(FunctionDeclaration Declaration, string Owner), FunctionSymbol>();
-        var specializedDeclarations = new Dictionary<FunctionDeclaration, FunctionDeclaration>();
+        var specializedMethods = new Dictionary<(FunctionDeclaration Declaration, string Owner), FunctionSymbol>(
+            new DeclarationOwnerComparer());
+        var specializedDeclarations = new Dictionary<FunctionDeclaration, FunctionDeclaration>(ReferenceEqualityComparer.Instance);
         var newExpressionTypes = new Dictionary<Expression, SemanticType>(ReferenceEqualityComparer.Instance);
         foreach (var pair in expressionTypes)
             newExpressionTypes[pair.Key] = NormalizeAggregate(
@@ -356,6 +357,17 @@ public sealed partial class SemanticAnalyzer
         if (candidates.Length == 1)
             return candidates[0];
         return symbol;
+    }
+
+    // A specialized method is keyed by its declaration, compared by reference, and by the owner's specialized name.
+    private sealed class DeclarationOwnerComparer : IEqualityComparer<(FunctionDeclaration Declaration, string Owner)>
+    {
+        public bool Equals((FunctionDeclaration Declaration, string Owner) x, (FunctionDeclaration Declaration, string Owner) y) =>
+            ReferenceEquals(x.Declaration, y.Declaration) && string.Equals(x.Owner, y.Owner, StringComparison.Ordinal);
+
+        public int GetHashCode((FunctionDeclaration Declaration, string Owner) key) =>
+            HashCode.Combine(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(key.Declaration),
+                StringComparer.Ordinal.GetHashCode(key.Owner));
     }
 
 }
