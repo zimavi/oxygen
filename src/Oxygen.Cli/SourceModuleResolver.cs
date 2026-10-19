@@ -52,17 +52,15 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                 sourceName: roots.FirstOrDefault()?.Name);
         }
 
-        var sourceDirectories = rootDirectories.Concat(standardLibraries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        foreach (var sourceDirectory in sourceDirectories)
+        // The program's own folders are compiled as a whole. The standard library is not: its modules load on demand, below.
+        foreach (var sourceDirectory in rootDirectories)
         {
             try
             {
                 foreach (var path in Directory.EnumerateFiles(sourceDirectory, "*.oxy", SearchOption.AllDirectories)
                              .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
                 {
-                    if (visitedFiles.Contains(GetCanonicalPath(path)))
+                    if (visitedFiles.Contains(GetCanonicalPath(path)) || standardLibraries.Any(library => IsInside(path, library)))
                         continue;
 
                     try
@@ -91,6 +89,10 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
             }
         }
 
+        // std.exception is always loaded, because null-reference checks throw its NullReferenceException. Other standard
+        // modules load when a loaded module imports them.
+        EnqueueStandardModule(queued, diagnostics, standardLibraries, "exception.oxy");
+
         while (queued.Count > 0)
         {
             var source = queued.Dequeue();
@@ -109,7 +111,13 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
 
             sources.Add(source);
             units.Add(parsed.Unit);
-
+            foreach (var import in parsed.Unit.Imports)
+            {
+                // An import of std.a.b is the module file a/b.oxy in a standard library folder.
+                if (import.Name.StartsWith("std.", StringComparison.Ordinal))
+                    EnqueueStandardModule(queued, diagnostics, standardLibraries,
+                        import.Name["std.".Length..].Replace('.', Path.DirectorySeparatorChar) + ".oxy");
+            }
         }
 
         foreach (var pair in sources.Zip(units))
@@ -131,6 +139,39 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
 
         return new ResolvedSourceModules(sources, units, diagnostics.Diagnostics);
     }
+
+    // Queues the first standard library file with this relative path, if a standard library folder has one.
+    private static void EnqueueStandardModule(
+        Queue<SourceText> queued,
+        DiagnosticBag diagnostics,
+        IReadOnlyList<string> standardLibraries,
+        string relativePath)
+    {
+        var path = standardLibraries
+            .Select(library => Path.Combine(library, relativePath))
+            .FirstOrDefault(File.Exists);
+        if (path is null)
+            return;
+
+        try
+        {
+            queued.Enqueue(new SourceText(path, File.ReadAllText(path)));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            diagnostics.Add(
+                DiagnosticPhase.Toolchain,
+                DiagnosticSeverity.Error,
+                $"Unable to read source file '{path}': {exception.Message}",
+                new SourceLocation(1, 1),
+                sourceName: path);
+        }
+    }
+
+    private static bool IsInside(string path, string directory) =>
+        Path.GetFullPath(path).StartsWith(
+            Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase);
 
     // The stdlib folder found above each source root. OXYGEN_PATH names one only when no root has one above it.
     private static List<string> FindStandardLibraries(IReadOnlyList<string> rootDirectories, string? oxygenPath)

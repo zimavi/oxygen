@@ -41,6 +41,37 @@ public sealed class SourceModuleResolverTests : IDisposable
         Assert.Contains(resolved.Sources, text => Path.GetFileName(text.Name) == "exception.oxy");
     }
 
+    [Fact]
+    public void AProgramWithoutImportsLoadsOnlyStdException()
+    {
+        var source = new SourceText(Path.Combine(_directory, "main.oxy"), "i32 main() { return 0; }");
+
+        var resolved = Resolve([source], NativeProgram.RepositoryRoot);
+
+        Assert.Empty(resolved.Diagnostics);
+        Assert.Equal(["exception.oxy", "main.oxy"], StandardFileNames(resolved).Order());
+    }
+
+    [Fact]
+    public void ImportingAModuleLoadsItsImportsAndNothingUnrelated()
+    {
+        var source = new SourceText(Path.Combine(_directory, "main.oxy"),
+            "import std.io;\ni32 main() { return 0; }");
+
+        var resolved = Resolve([source], NativeProgram.RepositoryRoot);
+
+        Assert.Empty(resolved.Diagnostics);
+        var names = StandardFileNames(resolved);
+        Assert.Contains("io.oxy", names);
+        Assert.Contains("memory.oxy", names);
+        Assert.Contains("strings.oxy", names);
+        Assert.DoesNotContain("collection.oxy", names);
+    }
+
+    // The file names of every resolved source, so the tests can tell which standard modules were loaded.
+    private static List<string> StandardFileNames(ResolvedSourceModules resolved) =>
+        resolved.Sources.Select(source => Path.GetFileName(source.Name)).ToList();
+
     private static ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots, string? oxygenPath) =>
         new SourceModuleResolver(new Tokenizer(Log.Logger), Log.Logger).Resolve(roots, oxygenPath);
 }
