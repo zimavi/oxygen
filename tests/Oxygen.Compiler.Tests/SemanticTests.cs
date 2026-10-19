@@ -2105,6 +2105,20 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ErrorsInAClassFromAnotherFileAreAttributedToThatFile()
+    {
+        var library = new Parser(_tokenizer.Tokenize("class Broken : Missing { }"), Log.Logger).Parse();
+        var main = new Parser(_tokenizer.Tokenize("i32 main() { return 0; }"), Log.Logger).Parse();
+
+        var result = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics(
+            [main, library], ["main.oxy", "stdlib/exception.oxy"]);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Contains("'Missing' is not declared", diagnostic.Message);
+        Assert.Equal("stdlib/exception.oxy", diagnostic.SourceName);
+    }
+
+    [Fact]
     public void MemberAccessOnTheNullLiteralIsRejectedAsNullHavingNoMembers()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze(

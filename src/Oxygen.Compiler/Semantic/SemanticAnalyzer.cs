@@ -48,6 +48,8 @@ public sealed partial class SemanticAnalyzer
     // Each class's own fields as declared. _classesByName holds the full inherited list after GetClassFields runs, so
     // inheritance is computed from this table, which never changes.
     private readonly Dictionary<string, IReadOnlyList<ClassFieldSymbol>> _ownClassFields = new(StringComparer.Ordinal);
+    // The file that declares each class, so an error found while checking the class is reported in that file.
+    private readonly Dictionary<string, string?> _classSourceNames = new(StringComparer.Ordinal);
     private readonly Dictionary<string, InterfaceSymbol> _interfacesByName = new(StringComparer.Ordinal);
     private ClassSymbol? _currentOwnerClass;
     private bool _currentIsConstructor;
@@ -263,6 +265,7 @@ public sealed partial class SemanticAnalyzer
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
                 EnsureTypeNameAvailable(declaration.Name, declaration.Location);
                 ValidateClassAnnotations(declaration);
+                _classSourceNames[declaration.Name] = _sourceName;
                 _classesByName.Add(declaration.Name,
                     new ClassSymbol(declaration.Name, moduleName, declaration.BaseType,
                         declaration.Interfaces, [], [], [], declaration.Destructor, declaration, declaration.Visibility,
@@ -763,27 +766,27 @@ public sealed partial class SemanticAnalyzer
             if (classSymbol.IsValue)
             {
                 if (classSymbol.BaseTypeName is not null)
-                    throw Error($"Value class '{classSymbol.Name}' cannot inherit from another class",
+                    throw ClassError(classSymbol.Name, $"Value class '{classSymbol.Name}' cannot inherit from another class",
                         classSymbol.Declaration.Location);
                 if (classSymbol.InterfaceNames.Count != 0)
-                    throw Error($"Value class '{classSymbol.Name}' cannot implement interfaces",
+                    throw ClassError(classSymbol.Name, $"Value class '{classSymbol.Name}' cannot implement interfaces",
                         classSymbol.Declaration.Location);
                 if (classSymbol.Methods.Any(method => method.Declaration.IsVirtual || method.Declaration.IsOverride))
-                    throw Error($"Value class '{classSymbol.Name}' cannot declare virtual or override methods",
+                    throw ClassError(classSymbol.Name, $"Value class '{classSymbol.Name}' cannot declare virtual or override methods",
                         classSymbol.Declaration.Location);
                 if (classSymbol.DeclaredProperties.Any(property =>
                         property.Declaration.IsVirtual || property.Declaration.IsOverride))
-                    throw Error($"Value class '{classSymbol.Name}' cannot declare virtual or override properties",
+                    throw ClassError(classSymbol.Name, $"Value class '{classSymbol.Name}' cannot declare virtual or override properties",
                         classSymbol.Declaration.Location);
             }
             // A base name that is an interface is already part of InterfaceNames.
             if (classSymbol.BaseTypeName is not null
                 && !_classesByName.ContainsKey(classSymbol.BaseTypeName)
                 && !_interfacesByName.ContainsKey(classSymbol.BaseTypeName))
-                throw Error($"Base class '{classSymbol.BaseTypeName}' is not declared", classSymbol.Declaration.Location);
+                throw ClassError(classSymbol.Name, $"Base class '{classSymbol.BaseTypeName}' is not declared", classSymbol.Declaration.Location);
             foreach (var interfaceName in classSymbol.InterfaceNames)
                 if (!_interfacesByName.ContainsKey(interfaceName))
-                    throw Error($"Interface '{interfaceName}' is not declared", classSymbol.Declaration.Location);
+                    throw ClassError(classSymbol.Name, $"Interface '{interfaceName}' is not declared", classSymbol.Declaration.Location);
             var inherited = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
                 ? [] : GetClassMethods(classSymbol.BaseTypeName, []);
             var inheritedProperties = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
@@ -794,15 +797,15 @@ public sealed partial class SemanticAnalyzer
                 if (method.Declaration.IsOverride)
                 {
                     if (overridden is null)
-                        throw Error($"Method '{method.Name}' is marked 'override' but does not override a base method",
+                        throw ClassError(classSymbol.Name, $"Method '{method.Name}' is marked 'override' but does not override a base method",
                             method.Declaration.Location, method.Name.Length);
                     if (!overridden.Declaration.IsVirtual && !overridden.Declaration.IsOverride)
-                        throw Error($"Method '{method.Name}' cannot override non-virtual method '{overridden.Name}'",
+                        throw ClassError(classSymbol.Name, $"Method '{method.Name}' cannot override non-virtual method '{overridden.Name}'",
                             method.Declaration.Location, method.Name.Length);
                 }
                 else if (overridden is not null && (overridden.Declaration.IsVirtual || overridden.Declaration.IsOverride))
                 {
-                    throw Error($"Method '{method.Name}' overrides a virtual method and must be marked 'override'",
+                    throw ClassError(classSymbol.Name, $"Method '{method.Name}' overrides a virtual method and must be marked 'override'",
                         method.Declaration.Location, method.Name.Length);
                 }
             }
@@ -813,16 +816,16 @@ public sealed partial class SemanticAnalyzer
                 if (property.Declaration.IsOverride)
                 {
                     if (overridden is null)
-                        throw Error($"Property '{property.Name}' is marked 'override' but does not override a base property",
+                        throw ClassError(classSymbol.Name, $"Property '{property.Name}' is marked 'override' but does not override a base property",
                             property.Declaration.Location, property.Name.Length);
                     if (!overridden.Declaration.IsVirtual && !overridden.Declaration.IsOverride)
-                        throw Error($"Property '{property.Name}' cannot override a non-virtual property",
+                        throw ClassError(classSymbol.Name, $"Property '{property.Name}' cannot override a non-virtual property",
                             property.Declaration.Location, property.Name.Length);
                 }
                 else if (overridden is not null
                          && (overridden.Declaration.IsVirtual || overridden.Declaration.IsOverride))
                 {
-                    throw Error($"Property '{property.Name}' overrides a virtual property and must be marked 'override'",
+                    throw ClassError(classSymbol.Name, $"Property '{property.Name}' overrides a virtual property and must be marked 'override'",
                         property.Declaration.Location, property.Name.Length);
                 }
             }
@@ -833,18 +836,18 @@ public sealed partial class SemanticAnalyzer
                         .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type), SemanticTypeComparer.Instance)
                     && SemanticTypeComparer.Instance.Equals(method.ReturnType, contract.ReturnType)).ToList();
                 if (implementations.Count == 0)
-                    throw Error($"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
+                    throw ClassError(classSymbol.Name, $"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
                         classSymbol.Declaration.Location);
                 // Interface members are public, so the implementation that satisfies the contract must be public too.
                 if (!implementations.Any(method => method.Visibility == Visibility.Public))
-                    throw Error($"Interface method '{contract.Name}' must be implemented as public in class '{classSymbol.Name}'",
+                    throw ClassError(classSymbol.Name, $"Interface method '{contract.Name}' must be implemented as public in class '{classSymbol.Name}'",
                         classSymbol.Declaration.Location);
             }
             foreach (var contract in classSymbol.InterfaceNames.SelectMany(name => _interfacesByName[name].DeclaredProperties))
             {
                 var implementation = classSymbol.Fields.FirstOrDefault(field => field.Name == contract.Name);
                 if (implementation is null || !SemanticTypeComparer.Instance.Equals(implementation.Type, contract.Type))
-                    throw Error($"Class '{classSymbol.Name}' does not implement interface property '{contract.Name}'",
+                    throw ClassError(classSymbol.Name, $"Class '{classSymbol.Name}' does not implement interface property '{contract.Name}'",
                         classSymbol.Declaration.Location);
                 if (contract.Declaration.HasGetter
                     && !classSymbol.DeclaredProperties.Concat(
@@ -852,13 +855,13 @@ public sealed partial class SemanticAnalyzer
                                 ? baseClass.DeclaredProperties
                                 : [])
                         .Any(property => property.Name == contract.Name && property.Declaration.HasGetter))
-                    throw Error($"Class '{classSymbol.Name}' does not provide a getter for interface property '{contract.Name}'",
+                    throw ClassError(classSymbol.Name, $"Class '{classSymbol.Name}' does not provide a getter for interface property '{contract.Name}'",
                         classSymbol.Declaration.Location);
                 if ((contract.Declaration.HasSetter || contract.Declaration.HasInitializer)
                     && !classSymbol.DeclaredProperties.Any(property =>
                         property.Name == contract.Name
                         && (property.Declaration.HasSetter || property.Declaration.HasInitializer)))
-                    throw Error($"Class '{classSymbol.Name}' does not provide a setter for interface property '{contract.Name}'",
+                    throw ClassError(classSymbol.Name, $"Class '{classSymbol.Name}' does not provide a setter for interface property '{contract.Name}'",
                         classSymbol.Declaration.Location);
             }
         }
@@ -904,7 +907,7 @@ public sealed partial class SemanticAnalyzer
     private IReadOnlyList<ClassFieldSymbol> GetClassFields(string name, HashSet<string> active)
     {
         if (!active.Add(name))
-            throw Error($"Class inheritance cycle involving '{name}'", _classesByName[name].Declaration.Location);
+            throw ClassError(name, $"Class inheritance cycle involving '{name}'", _classesByName[name].Declaration.Location);
         var cls = _classesByName[name];
         var inherited = cls.BaseTypeName is not null && _classesByName.ContainsKey(cls.BaseTypeName)
             ? GetClassFields(cls.BaseTypeName, active)
@@ -928,7 +931,7 @@ public sealed partial class SemanticAnalyzer
                 fields[inheritedIndex] = field;
         }
         if (fields.GroupBy(field => field.Name, StringComparer.Ordinal).Any(group => group.Count() > 1))
-            throw Error($"Class '{name}' contains a field that hides an inherited field", cls.Declaration.Location);
+            throw ClassError(name, $"Class '{name}' contains a field that hides an inherited field", cls.Declaration.Location);
         return fields.ToArray();
     }
 
@@ -3884,6 +3887,15 @@ public sealed partial class SemanticAnalyzer
 
     private static SemanticException Error(string message, SourceLocation location, int length = 1) =>
         new(message, location, length);
+
+    // An error about a class belongs to the file that declares it, even when it is found in a phase that has no
+    // current source, such as the class hierarchy checks that run after all declarations are registered.
+    private SemanticException ClassError(string className, string message, SourceLocation location, int length = 1) =>
+        new(message, location, length)
+        {
+            IsSourceAttributed = true,
+            SourceName = _classSourceNames.GetValueOrDefault(className)
+        };
 
     private void MarkVariableUsed(VariableSymbol variable) => _usedVariables.Add(variable);
 
