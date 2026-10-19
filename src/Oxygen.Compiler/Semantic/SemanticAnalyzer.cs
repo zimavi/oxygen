@@ -2576,6 +2576,11 @@ public sealed partial class SemanticAnalyzer
             return SemanticType.Enum(enumSymbol.Name);
         }
 
+        // A null literal has no type that could have members, so the access can be rejected at compile time.
+        if (member.Target is NullLiteralExpression)
+            throw Error($"Cannot access member '{member.MemberName}' of the null literal, which has no members",
+                member.Location, member.MemberName.Length);
+
         // A variable that is only the receiver of a member access is used, but its value does not escape.
         var previousReceiver = _receiverUse;
         _receiverUse = member.Target is IdentifierExpression;

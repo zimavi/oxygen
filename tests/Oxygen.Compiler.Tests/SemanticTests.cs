@@ -2105,6 +2105,16 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void MemberAccessOnTheNullLiteralIsRejectedAsNullHavingNoMembers()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { i32 value; } i32 main() { return null.value; }"));
+
+        Assert.Contains("null literal", exception.Message);
+        Assert.Contains("'value'", exception.Message);
+    }
+
+    [Fact]
     public void InheritedFieldsAppearOnceInEveryDescendantOfAThreeLevelChain()
     {
         var model = Analyze(
