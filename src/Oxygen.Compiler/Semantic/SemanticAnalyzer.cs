@@ -78,6 +78,8 @@ public sealed partial class SemanticAnalyzer
     private readonly Dictionary<string, string?> _declarationSourceNames = new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, InterfaceSymbol> _interfacesByName = new(StringComparer.Ordinal);
+    // Suffixed literals that are the operand of a unary minus. They are range-checked once, with their sign.
+    private readonly HashSet<IntegerLiteralExpression> _negatedLiterals = new(ReferenceEqualityComparer.Instance);
 
     private ClassSymbol? _currentOwnerClass;
 

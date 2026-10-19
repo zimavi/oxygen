@@ -1497,6 +1497,90 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void SuffixedLiteralOutOfRangeForItsTypeIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { u8 x = 300u8; return 0; }"));
+
+        Assert.Contains("'300u8' does not fit in u8", exception.Message);
+    }
+
+    [Fact]
+    public void SuffixedLiteralAtTheLimitOfItsTypeIsAccepted()
+    {
+        var model = Analyze("i32 main() { u8 x = 255u8; return cast<i32>(x); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void NegatedSuffixedLiteralMayReachTheLowestSignedValue()
+    {
+        var model = Analyze("i32 main() { i8 x = -128i8; return cast<i32>(x); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void PositiveSuffixedLiteralOneAboveTheSignedLimitIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { i8 x = 128i8; return 0; }"));
+
+        Assert.Contains("'128i8' does not fit in i8", exception.Message);
+    }
+
+    [Fact]
+    public void ConstantZeroDivisorIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 1; return x / 0; }"));
+
+        Assert.Contains("Division by zero", exception.Message);
+    }
+
+    [Fact]
+    public void ConstantZeroRemainderIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 1; return x % 0; }"));
+
+        Assert.Contains("Division by zero", exception.Message);
+    }
+
+    [Fact]
+    public void ConstantFloatDivisionByZeroIsAcceptedBecauseItIsIeeeArithmetic()
+    {
+        var model = Analyze("i32 main() { f64 x = 1.0; f64 y = x / 0.0; return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ShiftCountAboveTheWidthOfTheOperandIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 1; return x << 40; }"));
+
+        Assert.Contains("Shift count 40 is out of range for i32", exception.Message);
+    }
+
+    [Fact]
+    public void NegativeShiftCountIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 1; return x >> -1; }"));
+
+        Assert.Contains("Shift count -1 is out of range for i32", exception.Message);
+    }
+
+    [Fact]
+    public void ShiftCountWithinAWiderOperandIsAccepted()
+    {
+        var model = Analyze("i32 main() { i64 y = 1; return cast<i32>(y << 40); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void StatementAfterBreakIsReportedAsUnreachable()
     {
         var result = AnalyzeWithDiagnostics(

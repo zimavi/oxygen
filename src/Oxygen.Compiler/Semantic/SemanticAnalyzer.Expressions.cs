@@ -377,6 +377,14 @@ public sealed partial class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
+        // A negated suffixed literal is range-checked with its sign, so -128i8 is accepted while 128i8 is not.
+        if (expression is { Operator: TokenKind.Minus, Operand: IntegerLiteralExpression negatedLiteral }
+            && negatedLiteral.Lexeme.TrimStart('0', '1', '2', '3', '4', '5', '6', '7', '8', '9').Length != 0)
+        {
+            _negatedLiterals.Add(negatedLiteral);
+            RequireLiteralFits("-" + negatedLiteral.Lexeme, -ParseIntegerLiteralDigits(negatedLiteral.Lexeme),
+                ParseNumericLiteralType(negatedLiteral.Lexeme, false), negatedLiteral.Location);
+        }
         var operandType = AnalyzeExpression(expression.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (expression.Operator == TokenKind.Ampersand)
         {
@@ -433,6 +441,19 @@ public sealed partial class SemanticAnalyzer
         return operandType;
     }
 
+    // Integer operations that always fail at run time with a constant operand are rejected here: division or remainder by
+    // the constant zero, and a shift count that is negative or not below the width of the shifted integer.
+    private static void CheckConstantIntegerOperation(BinaryExpression expression, SemanticType left, SemanticType right)
+    {
+        if (expression.Operator is TokenKind.Slash or TokenKind.Percent && left.IsInteger && right.IsInteger
+            && TryGetIntegerConstantValue(expression.Right, out var divisor) && divisor.IsZero)
+            throw Error("Division by zero", expression.Right.Location);
+        if (expression.Operator is TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan
+            && left.IsInteger && TryGetIntegerConstantValue(expression.Right, out var count)
+            && (count.Sign < 0 || count >= IntegerBitWidth(left.Primitive!.Value)))
+            throw Error($"Shift count {count} is out of range for {left}", expression.Right.Location);
+    }
+
     private SemanticType AnalyzeBinary(
         BinaryExpression expression,
         Scope scope,
@@ -444,6 +465,7 @@ public sealed partial class SemanticAnalyzer
     {
         var left = AnalyzeExpression(expression.Left, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         var right = AnalyzeExpression(expression.Right, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        CheckConstantIntegerOperation(expression, left, right);
         var isLogical = expression.Operator is TokenKind.AmpersandAmpersand or TokenKind.PipePipe;
         var isComparison = expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals
             or TokenKind.LessThan or TokenKind.LessThanOrEquals or TokenKind.GreaterThan
