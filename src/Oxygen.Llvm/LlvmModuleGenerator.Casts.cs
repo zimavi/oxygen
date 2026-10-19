@@ -40,10 +40,10 @@ public sealed partial class LlvmModuleGenerator
         if (targetType.IsNumeric && operandType.IsNumeric)
             return EmitNumericConversion(builder, operand, operandType, targetType, model);
         if (!targetType.IsEnum)
-            return operand;
+            return RequireSameRepresentation(operand, operandType, targetType, model);
 
         if (cast.Operand is IntegerLiteralExpression)
-            return operand;
+            return RequireSameRepresentation(operand, operandType, targetType, model);
 
         var enumSymbol = model.Enums[targetType.EnumName!];
         var enumLlvmType = ToLlvmType(targetType, model);
@@ -65,6 +65,21 @@ public sealed partial class LlvmModuleGenerator
         BuildNoThrowCall(builder, _enumCastFailure, [failureValue]);
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
+        return RequireSameRepresentation(operand, operandType, targetType, model);
+    }
+
+    // Semantic analysis admits only the cast pairs lowered above. The one case left to pass through is a value that
+    // already has the target's LLVM type, such as an enum and its underlying type. Any other pair is a compiler bug,
+    // so it is reported rather than turned into IR of the wrong type.
+    private static LLVMValueRef RequireSameRepresentation(
+        LLVMValueRef operand,
+        SemanticType operandType,
+        SemanticType targetType,
+        SemanticModel model)
+    {
+        if (operand.TypeOf != ToLlvmType(targetType, model))
+            throw new InvalidOperationException(
+                $"Internal compiler error: no lowering for cast from '{operandType}' to '{targetType}'.");
         return operand;
     }
 

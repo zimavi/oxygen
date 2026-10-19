@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using LLVMSharp.Interop;
+using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Lexer;
 using Oxygen.Compiler.Parsing;
 using Oxygen.Compiler.Semantic;
@@ -926,6 +927,22 @@ public sealed class LlvmTests
                 violations.Add(line);
         }
         return violations;
+    }
+
+    [Fact]
+    public void CastPairSemanticAnalysisDoesNotAdmitIsRejectedByTheBackend()
+    {
+        // Semantic analysis admits only the cast pairs the backend lowers. This forces an impossible one (i32 to bool)
+        // into the model to check that the backend reports it instead of passing the operand through.
+        var tokenizer = new Tokenizer(Log.Logger);
+        var unit = new Parser(tokenizer.Tokenize("i32 main() { return cast<i32>(1); }"), Log.Logger).Parse();
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([unit]);
+        var cast = (CastExpression)((ReturnStatement)unit.Functions[0].Body.Statements[0]).Value!;
+        ((Dictionary<Expression, SemanticType>)model.ExpressionTypes)[cast] =
+            SemanticType.FromPrimitive(PrimitiveType.Bool);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => new LlvmModuleGenerator().Generate("program", model));
+        Assert.Contains("no lowering for cast from 'i32' to 'bool'", exception.Message);
     }
 
     [Fact]
