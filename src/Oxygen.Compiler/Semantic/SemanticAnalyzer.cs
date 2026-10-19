@@ -58,6 +58,13 @@ public sealed partial class SemanticAnalyzer
     // The breakable depth of the switch whose case body is being analyzed, and whether a break has left that switch.
     private int _switchExitDepth = -1;
     private bool _breakReached;
+    // Definite assignment: the locals that may still be unassigned at the current point, and whether that point is reachable.
+    private readonly HashSet<VariableDeclarationStatement> _unassignedLocals = new(ReferenceEqualityComparer.Instance);
+    private bool _reachable = true;
+    // The state at each `break` of the innermost loop or switch being analyzed, one list per breakable statement.
+    private Stack<List<FlowState>> _breakStates = new();
+    // For each switch being analyzed: the state where its cases start, and the state where each case ends.
+    private Stack<(FlowState Start, List<FlowState> Ends)> _switchFlows = new();
     private Dictionary<FunctionDeclaration, FunctionSymbol>? _functionSymbols;
     private IReadOnlyDictionary<string, SemanticType> _genericTypes =
         new Dictionary<string, SemanticType>(StringComparer.Ordinal);
@@ -1374,6 +1381,28 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
         ConstructorDeclaration? constructor = null)
     {
+        // A generic instance is analysed when a call to it is analysed, which can be inside the flow of another body. The
+        // outer body's flow state is saved and restored, so the instance starts from a clean state.
+        var outerFlow = SaveAndResetFlowContext();
+        try
+        {
+            AnalyzeFunctionBody(function, functions, moduleName, imports, expressionTypes, resolvedCalls, constructor);
+        }
+        finally
+        {
+            RestoreFlowContext(outerFlow);
+        }
+    }
+
+    private void AnalyzeFunctionBody(
+        FunctionSymbol function,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        ConstructorDeclaration? constructor)
+    {
         _declaredVariables.Clear();
         _definitelyNullVariables.Clear();
         var scope = new Scope(null, MarkVariableUsed);
@@ -1612,7 +1641,11 @@ public sealed partial class SemanticAnalyzer
         var savedBreak = _breakReached;
         _switchExitDepth = _breakableDepth;
         _breakReached = false;
+        // A case can be entered directly, so every case starts from the state before the switch. Its end is recorded for the join.
+        var frame = _switchFlows.Peek();
+        RestoreFlow(frame.Start);
         var returns = analyzeBody();
+        frame.Ends.Add(SnapshotFlow());
         var breaks = _breakReached;
         _switchExitDepth = savedExitDepth;
         _breakReached = savedBreak;
@@ -1644,9 +1677,12 @@ public sealed partial class SemanticAnalyzer
                     thenScope.Declare(binding, new VariableSymbol(targetType, false, conditional.Condition, false));
                 }
                 var beforeBranches = SnapshotDeleteState();
+                var beforeFlow = SnapshotFlow();
                 var thenReturns = AnalyzeStatement(conditional.Then, thenScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 var afterThen = SnapshotDeleteState();
+                var afterThenFlow = SnapshotFlow();
                 RestoreDeleteState(beforeBranches);
+                RestoreFlow(beforeFlow);
                 var elseReturns = conditional.Else is not null
                     && AnalyzeStatement(conditional.Else, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 var afterElse = SnapshotDeleteState();
@@ -1657,17 +1693,22 @@ public sealed partial class SemanticAnalyzer
                     RestoreDeleteState(afterThen);
                 else if (!thenReturns && !elseReturns)
                     RestoreDeleteState(JoinDeleteStates(afterThen, afterElse));
+                RestoreFlow(JoinFlows(afterThenFlow, SnapshotFlow()));
                 return conditional.Else is not null && thenReturns && elseReturns;
             case WhileStatement whileStatement:
                 var whileType = AnalyzeExpression(whileStatement.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 RequireBoolean(whileType, whileStatement.Condition.Location);
                 var beforeWhile = BeginLoopDeletes();
+                var flowBeforeWhile = SnapshotFlow();
+                _breakStates.Push([]);
                 _loopDepth++;
                 _breakableDepth++;
                 AnalyzeStatement(whileStatement.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 _breakableDepth--;
                 _loopDepth--;
                 FinishLoopDeletes(beforeWhile);
+                RestoreFlow(AfterLoopFlow(flowBeforeWhile, _breakStates.Pop(),
+                    whileStatement.Condition is BooleanLiteralExpression { Value: true }));
                 return false;
             case ForStatement forStatement:
                 var loopScope = new Scope(scope, MarkVariableUsed);
@@ -1679,6 +1720,8 @@ public sealed partial class SemanticAnalyzer
                     RequireBoolean(forType, forStatement.Condition.Location);
                 }
                 var beforeFor = BeginLoopDeletes();
+                var flowBeforeFor = SnapshotFlow();
+                _breakStates.Push([]);
                 _loopDepth++;
                 _breakableDepth++;
                 AnalyzeStatement(forStatement.Body, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
@@ -1687,6 +1730,8 @@ public sealed partial class SemanticAnalyzer
                 _breakableDepth--;
                 _loopDepth--;
                 FinishLoopDeletes(beforeFor);
+                RestoreFlow(AfterLoopFlow(flowBeforeFor, _breakStates.Pop(),
+                    forStatement.Condition is null or BooleanLiteralExpression { Value: true }));
                 return false;
             case ForInStatement forInStatement:
                 {
@@ -1747,6 +1792,8 @@ public sealed partial class SemanticAnalyzer
                     forInScope.Declare(forInStatement.VariableName, variable);
                     _declaredVariables.Add(variable);
                     var beforeForIn = BeginLoopDeletes();
+                    var flowBeforeForIn = SnapshotFlow();
+                    _breakStates.Push([]);
                     _loopDepth++;
                     _breakableDepth++;
                     AnalyzeStatement(forInStatement.Body, forInScope, function, functions, moduleName, imports,
@@ -1754,11 +1801,14 @@ public sealed partial class SemanticAnalyzer
                     _breakableDepth--;
                     _loopDepth--;
                     FinishLoopDeletes(beforeForIn);
+                    RestoreFlow(AfterLoopFlow(flowBeforeForIn, _breakStates.Pop(), alwaysTrue: false));
                     return false;
                 }
             case SwitchStatement switchStatement:
                 {
                     var valueType = AnalyzeExpression(switchStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                    _switchFlows.Push((SnapshotFlow(), []));
+                    _breakStates.Push([]);
                     _breakableDepth++;
                     try
                     {
@@ -1876,6 +1926,15 @@ public sealed partial class SemanticAnalyzer
                     finally
                     {
                         _breakableDepth--;
+                        // After the switch: the end of every case that is reached, every break, and the state where no case
+                        // matches. A union switch that names every case has no such path.
+                        var (switchStart, caseEnds) = _switchFlows.Pop();
+                        var breaks = _breakStates.Pop();
+                        var exhaustive = switchStatement.Cases.Any(item => item.IsDefault) || valueType.IsUnion;
+                        var afterSwitch = exhaustive ? UnreachableFlow() : switchStart;
+                        foreach (var state in caseEnds.Concat(breaks))
+                            afterSwitch = JoinFlows(afterSwitch, state);
+                        RestoreFlow(afterSwitch);
                     }
                 }
             case BreakStatement breakStatement when _breakableDepth == 0:
@@ -1886,17 +1945,23 @@ public sealed partial class SemanticAnalyzer
                 // A break that leaves the switch being analyzed ends the case without falling into the next one.
                 if (_breakableDepth == _switchExitDepth)
                     _breakReached = true;
+                _breakStates.Peek().Add(SnapshotFlow());
+                _reachable = false;
                 return false;
             case ContinueStatement:
+                _reachable = false;
                 return false;
             case VariableDeclarationStatement declaration:
                 AnalyzeVariableDeclaration(declaration, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                if (declaration.Initializer is null)
+                    _unassignedLocals.Add(declaration);
                 return false;
             case AssignmentStatement assignment:
                 AnalyzeAssignment(assignment, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return false;
             case ReturnStatement returnStatement:
                 AnalyzeReturn(returnStatement, function, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                _reachable = false;
                 return true;
             case DeleteStatement deleteStatement:
                 AnalyzeDelete(deleteStatement, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
@@ -1908,12 +1973,15 @@ public sealed partial class SemanticAnalyzer
                     if (!IsExceptionType(thrownType))
                         throw Error($"Only exception class values can be thrown, got {thrownType}",
                             throwStatement.Value.Location);
+                    _reachable = false;
                     return true;
                 }
             case TryStatement tryStatement:
                 {
+                    var beforeTry = SnapshotFlow();
                     var tryReturns = AnalyzeBlock(tryStatement.Body, scope, function, functions, moduleName, imports,
                         expressionTypes, resolvedCalls);
+                    var afterCatches = SnapshotFlow();
                     var allCatchesReturn = true;
                     var catchAllSeen = false;
                     foreach (var (catchClause, index) in tryStatement.Catches.Select((item, index) => (item, index)))
@@ -1945,14 +2013,36 @@ public sealed partial class SemanticAnalyzer
                                 new VariableSymbol(catchType!, false, catchClause, false));
                         }
 
+                        // A catch can be entered from any point in the try body, so it starts from the state before the try.
+                        RestoreFlow(beforeTry);
                         var catchReturns = AnalyzeBlock(catchClause.Body, catchScope, function, functions, moduleName,
                             imports, expressionTypes, resolvedCalls);
                         allCatchesReturn &= catchReturns;
+                        afterCatches = JoinFlows(afterCatches, SnapshotFlow());
                     }
 
-                    var finallyReturns = tryStatement.Finally is not null
-                        && AnalyzeBlock(tryStatement.Finally, scope, function, functions, moduleName, imports,
+                    var finallyReturns = false;
+                    if (tryStatement.Finally is null)
+                    {
+                        RestoreFlow(afterCatches);
+                    }
+                    else
+                    {
+                        // The finally block also runs on the exceptional paths, so it starts from every state the try can leave.
+                        // Code after the try is reached only if the normal paths reach it.
+                        var finallyStart = new HashSet<VariableDeclarationStatement>(
+                            beforeTry.Unassigned.Concat(afterCatches.Unassigned), ReferenceEqualityComparer.Instance);
+                        RestoreFlow(new FlowState(finallyStart, beforeTry.Reachable));
+                        finallyReturns = AnalyzeBlock(tryStatement.Finally, scope, function, functions, moduleName, imports,
                             expressionTypes, resolvedCalls);
+                        var afterFinally = SnapshotFlow();
+                        // The normal path is the one that leaves the try: the finally block's assignments apply to it.
+                        var assignedByFinally = finallyStart.Where(declaration => !afterFinally.Unassigned.Contains(declaration));
+                        var normalAfter = afterCatches.Unassigned.Where(declaration => !assignedByFinally.Contains(declaration));
+                        RestoreFlow(new FlowState(
+                            new HashSet<VariableDeclarationStatement>(normalAfter, ReferenceEqualityComparer.Instance),
+                            afterCatches.Reachable && afterFinally.Reachable));
+                    }
                     return finallyReturns || (tryReturns && allCatchesReturn);
                 }
             case ExpressionStatement expressionStatement:
@@ -2054,6 +2144,10 @@ public sealed partial class SemanticAnalyzer
         var targetType = assignment.Target is IdentifierExpression assignedIdentifier
             ? AssignmentTargetType(assignedIdentifier, scope, expressionTypes)
             : AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        // A compound assignment reads its target before it writes it.
+        if (assignment.Operator != TokenKind.Equals && assignment.Target is IdentifierExpression compoundTarget
+            && scope.Lookup(compoundTarget.Name, compoundTarget.Location).Declaration is VariableDeclarationStatement compoundDeclaration)
+            CheckAssigned(compoundDeclaration, compoundTarget.Name, compoundTarget.Location);
         var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
             expectedType: targetType);
         if (assignment.Target is IdentifierExpression reassigned
@@ -2061,6 +2155,7 @@ public sealed partial class SemanticAnalyzer
         {
             _deletedLocals.Remove(reassignedDeclaration);
             _maybeDeletedLocals.Remove(reassignedDeclaration);
+            _unassignedLocals.Remove(reassignedDeclaration);
         }
         if (assignment.Operator != TokenKind.Equals)
         {
@@ -2245,6 +2340,78 @@ public sealed partial class SemanticAnalyzer
         RestoreDeleteState(JoinDeleteStates(beforeLoop, afterBody));
     }
 
+    // The assignment state at one point: the locals that may be unassigned on some path to it, and whether it is reached at all.
+    // A path that returns, throws, breaks or continues does not reach the code after it, so its state is not joined there.
+    private sealed record FlowState(HashSet<VariableDeclarationStatement> Unassigned, bool Reachable);
+
+    private FlowState SnapshotFlow() =>
+        new(new HashSet<VariableDeclarationStatement>(_unassignedLocals, ReferenceEqualityComparer.Instance), _reachable);
+
+    // The flow state of a body being analyzed, kept while another body is analyzed inside it.
+    private sealed record SavedFlowContext(
+        HashSet<VariableDeclarationStatement> Unassigned,
+        bool Reachable,
+        Stack<List<FlowState>> BreakStates,
+        Stack<(FlowState Start, List<FlowState> Ends)> SwitchFlows);
+
+    private SavedFlowContext SaveAndResetFlowContext()
+    {
+        var saved = new SavedFlowContext(
+            new HashSet<VariableDeclarationStatement>(_unassignedLocals, ReferenceEqualityComparer.Instance),
+            _reachable, _breakStates, _switchFlows);
+        _unassignedLocals.Clear();
+        _reachable = true;
+        _breakStates = new();
+        _switchFlows = new();
+        return saved;
+    }
+
+    private void RestoreFlowContext(SavedFlowContext saved)
+    {
+        _unassignedLocals.Clear();
+        _unassignedLocals.UnionWith(saved.Unassigned);
+        _reachable = saved.Reachable;
+        _breakStates = saved.BreakStates;
+        _switchFlows = saved.SwitchFlows;
+    }
+
+    private void RestoreFlow(FlowState state)
+    {
+        _unassignedLocals.Clear();
+        _unassignedLocals.UnionWith(state.Unassigned);
+        _reachable = state.Reachable;
+    }
+
+    private static FlowState UnreachableFlow() =>
+        new(new HashSet<VariableDeclarationStatement>(ReferenceEqualityComparer.Instance), false);
+
+    // Where two paths meet, a local is unassigned if it is unassigned on either path. An unreachable path adds nothing.
+    private static FlowState JoinFlows(FlowState first, FlowState second)
+    {
+        if (!first.Reachable)
+            return second;
+        if (!second.Reachable)
+            return first;
+        return new FlowState(new HashSet<VariableDeclarationStatement>(first.Unassigned.Concat(second.Unassigned),
+            ReferenceEqualityComparer.Instance), true);
+    }
+
+    private void CheckAssigned(VariableDeclarationStatement declaration, string name, SourceLocation location)
+    {
+        if (_unassignedLocals.Contains(declaration))
+            throw Error($"Variable '{name}' may be read before it is assigned", location, name.Length);
+    }
+
+    // After a loop: the path where the condition ends it, which does not exist when the condition is always true, joined with
+    // every break. The body's own end state does not count, because the body may run zero times.
+    private static FlowState AfterLoopFlow(FlowState beforeLoop, List<FlowState> breaks, bool alwaysTrue)
+    {
+        var after = alwaysTrue ? UnreachableFlow() : beforeLoop;
+        foreach (var state in breaks)
+            after = JoinFlows(after, state);
+        return after;
+    }
+
     // The deletion state of the locals at one point in the analysis: deleted on every path, and deleted on some path.
     private sealed record DeleteState(HashSet<VariableDeclarationStatement> Definite, HashSet<VariableDeclarationStatement> Maybe);
 
@@ -2277,6 +2444,7 @@ public sealed partial class SemanticAnalyzer
         var symbol = scope.Lookup(identifier.Name, identifier.Location);
         if (symbol.Declaration is VariableDeclarationStatement declaration)
         {
+            CheckAssigned(declaration, identifier.Name, identifier.Location);
             if (_deletedLocals.Contains(declaration))
                 throw Error($"'{identifier.Name}' was deleted and cannot be used", identifier.Location, identifier.Name.Length);
             if (!_receiverUse)

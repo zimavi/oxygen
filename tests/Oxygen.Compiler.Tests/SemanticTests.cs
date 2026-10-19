@@ -2105,6 +2105,101 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ReadingALocalBeforeAssigningItIsAnError()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { i32 x; return x; }"));
+
+        Assert.Contains("'x' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void AssigningALocalBeforeReadingItIsAccepted()
+    {
+        var model = Analyze("i32 main() { i32 x; x = 3; return x; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void AssignmentOnOnlyOneBranchLeavesTheLocalUnassigned()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x; if (true) { x = 1; } return x; }"));
+
+        Assert.Contains("'x' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void AssignmentOnEveryBranchIsAccepted()
+    {
+        var model = Analyze("i32 main() { i32 x; if (true) { x = 1; } else { x = 2; } return x; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ABranchThatReturnsDoesNotLeaveTheLocalUnassigned()
+    {
+        var model = Analyze("i32 main() { i32 x; if (true) { return 0; } else { x = 1; } return x; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void AWhileLoopBodyDoesNotAssignTheLocalAfterTheLoop()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x; while (false) { x = 1; } return x; }"));
+
+        Assert.Contains("'x' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void WhileTrueLeavesOnlyTheBreakPathsAfterTheLoop()
+    {
+        var model = Analyze("i32 main() { i32 x; while (true) { x = 1; break; } return x; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ASwitchWithoutDefaultLeavesTheLocalUnassignedAfterIt()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x; switch (1) { case 1: x = 1; } return x; }"));
+
+        Assert.Contains("'x' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void AssignmentInTheTryBodyCountsOnlyWhenNoCatchCanSkipIt()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Exception { } class Failure : Exception { } " +
+            "i32 main() { i32 x; try { x = 1; } catch (Failure error) { } return x; }"));
+
+        Assert.Contains("'x' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void AssignmentInTheTryBodyCountsWhenThereIsNoCatch()
+    {
+        var model = Analyze(
+            "class Exception { } " +
+            "i32 main() { i32 x; try { x = 1; } finally { } return x; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ASwitchWithDefaultAssignsOnEveryCase()
+    {
+        var model = Analyze("i32 main() { i32 x; switch (1) { case 1: x = 1; default: x = 2; } return x; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void ErrorsInAClassFromAnotherFileAreAttributedToThatFile()
     {
         var library = new Parser(_tokenizer.Tokenize("class Broken : Missing { }"), Log.Logger).Parse();

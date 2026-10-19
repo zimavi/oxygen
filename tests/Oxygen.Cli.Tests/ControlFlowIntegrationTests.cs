@@ -944,39 +944,6 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal(0, run.ExitCode);
         Assert.Equal("The member 'value' was written through a null class reference.", run.Output.Replace("\r\n", "\n"));
     }
-
-    [SkippableFact]
-    public void UninitializedLocalsHoldTheZeroValueOfTheirType()
-    {
-        NativeProgram.RequireNativeToolchain();
-
-        // Until definite assignment rejects reads of unassigned locals, the backend must not read undefined stack memory.
-        var run = BuildAndRun(
-            """
-            import std.io;
-            import std.exception;
-
-            class Box {
-                i32 value = 3;
-            }
-
-            i32 main() {
-                i32 number;
-                io.print(number);
-                Box box;
-                try {
-                    io.print(box.value);
-                } catch (NullReferenceException error) {
-                    io.print("null");
-                }
-                return 0;
-            }
-            """);
-
-        Assert.Equal(0, run.ExitCode);
-        Assert.Equal("0null", run.Output.Replace("\r\n", "\n"));
-    }
-
     [SkippableFact]
     public void OwnedLocalIsDestroyedWhenAnExceptionLeavesItsFunction()
     {
