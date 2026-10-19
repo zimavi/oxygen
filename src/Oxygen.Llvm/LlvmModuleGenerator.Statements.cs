@@ -122,6 +122,12 @@ public sealed partial class LlvmModuleGenerator
                     declaredValue = CoerceValue(builder, initializer,
                         model.ExpressionTypes[declaration.Initializer], declaredType, model);
                 }
+                else
+                {
+                    // Definite assignment (M2) will reject reads of an unassigned local. Until then the slot holds the zero
+                    // value of its type, so the backend never reads undefined stack memory.
+                    declaredValue = CreateZeroValue(declaredType, model);
+                }
                 var declaredSlot = DeclareLocalSlot(builder, values, storage, declaration.Name, ToLlvmType(declaredType, model), declaredValue);
                 if (model.DeletedLocals.Contains(declaration))
                 {
