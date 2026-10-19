@@ -15,7 +15,7 @@ public sealed class ExitCodeIntegrationTests : IDisposable
             Directory.Delete(_directory, recursive: true);
     }
 
-    [Fact]
+    [SkippableFact]
     public void MainReturnValueBecomesTheExitCode()
     {
         NativeProgram.RequireNativeToolchain();
@@ -25,7 +25,7 @@ public sealed class ExitCodeIntegrationTests : IDisposable
         Assert.Equal(42, run.ExitCode);
     }
 
-    [Fact]
+    [SkippableFact]
     public void LoopAndArithmeticProduceTheExpectedExitCode()
     {
         NativeProgram.RequireNativeToolchain();

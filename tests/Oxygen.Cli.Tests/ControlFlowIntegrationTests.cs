@@ -16,7 +16,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
             Directory.Delete(_directory, recursive: true);
     }
 
-    [Fact]
+    [SkippableFact]
     public void ShortCircuitOperatorsSkipTheRightOperandWhenTheLeftDecides()
     {
         NativeProgram.RequireNativeToolchain();
@@ -38,7 +38,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal(4, run.ExitCode);
     }
 
-    [Fact]
+    [SkippableFact]
     public void IntegerDivisionByZeroReportsAFailureInsteadOfContinuing()
     {
         NativeProgram.RequireNativeToolchain();
@@ -49,7 +49,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Contains("integer division by zero", run.Error);
     }
 
-    [Fact]
+    [SkippableFact]
     public void SignedDivisionOverflowIsReported()
     {
         NativeProgram.RequireNativeToolchain();
@@ -60,7 +60,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Contains("signed integer division overflowed", run.Error);
     }
 
-    [Fact]
+    [SkippableFact]
     public void ShiftCountOutOfRangeIsReported()
     {
         NativeProgram.RequireNativeToolchain();
@@ -71,7 +71,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Contains("shift count 40 is out of range", run.Error);
     }
 
-    [Fact]
+    [SkippableFact]
     public void IfWhoseArmsBothReturnRunsTheSelectedArm()
     {
         NativeProgram.RequireNativeToolchain();
@@ -81,7 +81,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal(7, run.ExitCode);
     }
 
-    [Fact]
+    [SkippableFact]
     public void InnerDeclarationShadowsWithoutChangingTheOuterLocal()
     {
         NativeProgram.RequireNativeToolchain();
@@ -91,7 +91,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal(1, run.ExitCode);
     }
 
-    [Fact]
+    [SkippableFact]
     public void StringSwitchMatchesOnlyTheWholeLabel()
     {
         NativeProgram.RequireNativeToolchain();
@@ -112,7 +112,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal(3, run.ExitCode);
     }
 
-    [Fact]
+    [SkippableFact]
     public void StringLiteralsKeepEmbeddedNulAndDecodeEscapes()
     {
         NativeProgram.RequireNativeToolchain();
@@ -132,7 +132,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("a\0b|tab\there \"q\" \\ é\n", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void FinallyRunsOnNormalCompletionAndBeforeAReturnLeavesTheTry()
     {
         NativeProgram.RequireNativeToolchain();
@@ -164,7 +164,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("F1BG", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void FinallyRunsAfterACaughtExceptionsCatchBody()
     {
         NativeProgram.RequireNativeToolchain();
@@ -196,7 +196,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("TCF", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void ReturnFromACatchBodyRunsFinallyFirst()
     {
         NativeProgram.RequireNativeToolchain();
@@ -231,7 +231,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("F5", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void UncaughtExceptionIsReportedWithItsMessage()
     {
         NativeProgram.RequireNativeToolchain();
@@ -257,7 +257,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Contains("Unhandled E: boom", run.Error);
     }
 
-    [Fact]
+    [SkippableFact]
     public void ReturnInsideAConstructorEndsTheConstructorBody()
     {
         NativeProgram.RequireNativeToolchain();
@@ -286,7 +286,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("3", run.Output);
     }
 
-    [Fact]
+    [SkippableFact]
     public void StringEqualityComparesBytesAndLength()
     {
         NativeProgram.RequireNativeToolchain();
@@ -307,7 +307,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal(1, run.ExitCode);
     }
 
-    [Fact]
+    [SkippableFact]
     public void DeleteRunsTheDestructorBeforeFreeingTheObject()
     {
         NativeProgram.RequireNativeToolchain();
@@ -336,7 +336,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("3destroyed", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void AutomaticFunctionFreesAnAllocationWhenItsScopeEnds()
     {
         NativeProgram.RequireNativeToolchain();
@@ -369,7 +369,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("3goneend", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void DeletingABaseTypedReferenceRunsTheDerivedDestructor()
     {
         NativeProgram.RequireNativeToolchain();
@@ -401,7 +401,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("derived", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void RuntimeCheckedDeleteReleasesAnObjectOnlyOnce()
     {
         NativeProgram.RequireNativeToolchain();
@@ -434,7 +434,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("dend", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void ScopeEndFreeSkipsAnObjectDeletedOnThatPath()
     {
         NativeProgram.RequireNativeToolchain();
@@ -471,7 +471,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("dadb", run.Output.Replace("\r\n", "\n"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void SizeOfIncludesPadding()
     {
         NativeProgram.RequireNativeToolchain();
@@ -491,7 +491,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal(16, run.ExitCode);
     }
 
-    [Fact]
+    [SkippableFact]
     public void UnsignedIntegersConvertToFloatingPointAsUnsignedValues()
     {
         NativeProgram.RequireNativeToolchain();

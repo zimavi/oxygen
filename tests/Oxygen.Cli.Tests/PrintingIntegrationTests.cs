@@ -12,7 +12,7 @@ public sealed class PrintingIntegrationTests : IDisposable
 
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 
-    [Fact]
+    [SkippableFact]
     public void PrintsPrimitiveStringAndUserValuesThroughTheStandardLibrary()
     {
         NativeProgram.RequireNativeToolchain();

@@ -5,9 +5,11 @@ namespace Oxygen.Cli.Tests;
 
 // Compiles and runs Oxygen programs against the repository's runtime and standard library. The tests that use it
 // need clang and the built runtime (runtime/build.ps1); they are skipped with the reason when those are missing.
+// Set OXYGEN_REQUIRE_NATIVE_TESTS=1 to fail instead of skipping, which CI does so a missing toolchain cannot pass silently.
 internal static class NativeProgram
 {
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(2);
+    private const string RequireNativeTestsVariable = "OXYGEN_REQUIRE_NATIVE_TESTS";
 
     // The repository root is the nearest ancestor of the test output folder that contains the solution file.
     public static string RepositoryRoot
@@ -22,21 +24,53 @@ internal static class NativeProgram
         }
     }
 
+    // runtime/build.ps1 writes the archive into a folder named after the platform.
     public static string RuntimeLibrary =>
-        Path.Combine(RepositoryRoot, "runtime", "build", "windows", "liboxygenrt.a");
+        Path.Combine(RepositoryRoot, "runtime", "build", OperatingSystem.IsWindows() ? "windows" : "linux", "liboxygenrt.a");
 
-    // Native tests run the compiler's apphost, which is only copied for Windows builds today.
-    public static string CompilerExecutable => Path.Combine(AppContext.BaseDirectory, "oxygenc.exe");
+    public static string CompilerExecutable =>
+        Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "oxygenc.exe" : "oxygenc");
 
-    // Call first in every native test. Throws SkipException, which xUnit reports as skipped rather than passed or failed.
+    // Call first in every native test. Skips the test with the reason when the toolchain is missing, or fails it
+    // when OXYGEN_REQUIRE_NATIVE_TESTS=1.
     public static void RequireNativeToolchain()
     {
-        if (!OperatingSystem.IsWindows())
-            throw Xunit.Sdk.SkipException.ForSkip("Native integration tests currently target Windows x64 only.");
-        if (!File.Exists(CompilerExecutable))
-            throw Xunit.Sdk.SkipException.ForSkip($"Compiler apphost not found at '{CompilerExecutable}'.");
+        var missing = FindMissingToolchainPart();
+        if (missing is null)
+            return;
+
+        if (Environment.GetEnvironmentVariable(RequireNativeTestsVariable) == "1")
+            Assert.Fail($"Native tests are required but unavailable: {missing}");
+        throw new SkipException(missing);
+    }
+
+    private static string? FindMissingToolchainPart()
+    {
         if (!File.Exists(RuntimeLibrary))
-            throw Xunit.Sdk.SkipException.ForSkip($"Runtime not built: '{RuntimeLibrary}' (run runtime/build.ps1).");
+            return $"Runtime archive not found at '{RuntimeLibrary}'.";
+        if (!File.Exists(CompilerExecutable))
+            return $"Compiler executable not found at '{CompilerExecutable}'.";
+        if (FindOnPath("clang") is null)
+            return "clang was not found on PATH.";
+        return null;
+    }
+
+    // Looks for an executable on PATH, adding .exe on Windows, the same way the native build starts clang.
+    private static string? FindOnPath(string name)
+    {
+        var fileNames = OperatingSystem.IsWindows() ? new[] { name + ".exe", name } : new[] { name };
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+                continue;
+            foreach (var fileName in fileNames)
+            {
+                var candidate = Path.Combine(directory.Trim('"'), fileName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+        return null;
     }
 
     // Compiles `source` as main.oxy in `directory` against the runtime, then runs the executable.
