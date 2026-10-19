@@ -507,6 +507,16 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ManualIterCallIsRejectedUntilCallResultsAreOwned()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Iter { } class Values { Iter iter() { return new Iter(); } } " +
+            "i32 main() { Values v = new Values(); var it = v.iter(); return 0; }"));
+
+        Assert.Contains("Calling iter() by hand is not supported yet", exception.Message);
+    }
+
+    [Fact]
     public void ResolvesForInIteratorProtocol()
     {
         var model = Analyze(

@@ -60,7 +60,7 @@ public sealed partial class SemanticAnalyzer
             BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             ConditionalExpression conditional => AnalyzeConditional(
                 conditional, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
-            CallExpression call => AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid),
+            CallExpression call => AnalyzeCallExpression(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid),
             ClassConstructionExpression creation => AnalyzeClassConstructionExpression(
                 creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             NewExpression creation => AnalyzeNewExpression(

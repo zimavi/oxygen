@@ -8,6 +8,28 @@ namespace Oxygen.Compiler.Semantic;
 // Calls: overload resolution and the call expression.
 public sealed partial class SemanticAnalyzer
 {
+    // A manual iter() call is rejected. Its result is an object that no variable frees: a local takes it without setting
+    // its drop flag, which is set only for `new`, so the object would leak. For-in calls iter() itself and is not affected.
+    // This is a temporary guard, removed once ownership covers interfaces and call results.
+    private SemanticType AnalyzeCallExpression(
+        CallExpression call,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        SemanticType? expectedType,
+        bool allowVoid)
+    {
+        var type = AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid);
+        if (resolvedCalls.TryGetValue(call, out var callee) && callee.Name == "iter" && callee.Parameters.Count == 0
+            && (callee.ReturnType.IsClass || callee.ReturnType.IsInterface))
+            throw Error("Calling iter() by hand is not supported yet, because its result would never be freed; iterate with for-in instead",
+                call.Location);
+        return type;
+    }
+
     private SemanticType AnalyzeCall(
         CallExpression call,
         Scope scope,
