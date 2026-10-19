@@ -9,8 +9,12 @@ extern void deallocate(void* pointer);
 @extern("oxygen_realloc")
 extern void* reallocate(void* pointer, u64 size);
 
+// The byte size of count elements, which stops the program if it overflows.
+@extern("oxygen_array_size")
+extern u64 arrayBytes(u64 count, u64 elementSize);
+
 public T* alloc<T>(u64 count) {
-    return cast<T*>(allocate(count * sizeof<T>()));
+    return cast<T*>(allocate(arrayBytes(count, sizeof<T>())));
 }
 
 public void free<T>(T* pointer) {
@@ -18,5 +22,5 @@ public void free<T>(T* pointer) {
 }
 
 public T* realloc<T>(T* pointer, u64 count) {
-    return cast<T*>(reallocate(cast<void*>(pointer), count * sizeof<T>()));
+    return cast<T*>(reallocate(cast<void*>(pointer), arrayBytes(count, sizeof<T>())));
 }
