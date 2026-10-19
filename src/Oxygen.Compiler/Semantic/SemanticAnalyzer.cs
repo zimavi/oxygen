@@ -13,6 +13,9 @@ public sealed partial class SemanticAnalyzer
     private readonly HashSet<VariableSymbol> _definitelyNullVariables = [];
     private readonly HashSet<FunctionSymbol> _usedFunctions = [];
     private readonly List<VariableSymbol> _declaredVariables = [];
+
+    // The memory mode of functions that carry no memory annotation (set by the `--manual-memory` compiler flag).
+    public MemoryMode DefaultMemoryMode { get; set; } = MemoryMode.Automatic;
     private readonly HashSet<VariableDeclarationStatement> _escapingClassLocals = new(ReferenceEqualityComparer.Instance);
     // Locals released by `delete`; locals whose value is read (not only used as the receiver of a member access); and
     // whether the identifier being analyzed is only a receiver.
@@ -1041,7 +1044,21 @@ public sealed partial class SemanticAnalyzer
             declaration.Visibility,
             CInterop: ParseCInterop(declaration),
             GenericParameters: declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(),
-            IsExternal: declaration.IsExternalDeclaration);
+            IsExternal: declaration.IsExternalDeclaration,
+            Memory: ResolveMemoryMode(declaration));
+    }
+
+    // `@manual_memory` and `@auto_memory` select a function's memory mode; without either, the compiler default applies.
+    private MemoryMode ResolveMemoryMode(FunctionDeclaration declaration)
+    {
+        var manual = declaration.DeclaredAnnotations.Any(annotation => annotation.Name == "manual_memory");
+        var automatic = declaration.DeclaredAnnotations.Any(annotation => annotation.Name == "auto_memory");
+        if (manual && automatic)
+            throw Error($"Function '{declaration.Name}' cannot be both @manual_memory and @auto_memory", declaration.Location,
+                declaration.Name.Length);
+        if (manual)
+            return MemoryMode.Manual;
+        return automatic ? MemoryMode.Automatic : DefaultMemoryMode;
     }
 
     private static CInteropFunctionMetadata? ParseCInterop(FunctionDeclaration declaration)
@@ -1074,6 +1091,11 @@ public sealed partial class SemanticAnalyzer
                     }
                     if (!string.Equals(callingConvention, "c", StringComparison.Ordinal))
                         throw Error($"Unsupported calling convention '{callingConvention}'", annotation.Location);
+                    break;
+                case "manual_memory":
+                case "auto_memory":
+                    if (annotation.Arguments.Count != 0)
+                        throw Error($"Annotation '@{annotation.Name}' does not accept arguments", annotation.Location);
                     break;
                 case "packed":
                     if (annotation.Arguments.Count != 0)

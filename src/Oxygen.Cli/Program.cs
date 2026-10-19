@@ -45,6 +45,10 @@ var debugOption = new Option<bool>("--debug")
 {
     Description = "Generate debug symbols and use the debug runtime"
 };
+var manualMemoryOption = new Option<bool>("--manual-memory", "-mm")
+{
+    Description = "Manual memory mode for every function (C++ style): lifetimes are tracked and leaks are reported, and objects are freed only by delete"
+};
 var warningsAsErrorsOption = new Option<bool>("--warnings-as-errors")
 {
     Description = "Treat semantic warnings as errors"
@@ -77,6 +81,7 @@ var buildCommand = new Command("build", "Build the project")
     clangOption,
     debugOption,
     warningsAsErrorsOption,
+    manualMemoryOption,
     optimizationOption,
     jobsOption,
     runtimeOption,
@@ -152,6 +157,9 @@ int RunBuild(System.CommandLine.ParseResult result)
         }
     }
     var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
+        {
+            DefaultMemoryMode = result.GetValue(manualMemoryOption) ? MemoryMode.Manual : MemoryMode.Automatic
+        }
         .AnalyzeWithDiagnostics(
             compilationUnits,
             sources.Select(source => (string?)source.Name).ToList(),

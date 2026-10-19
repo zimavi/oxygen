@@ -107,6 +107,14 @@ public sealed record CInteropFunctionMetadata(
     string? ExternalName = null,
     string CallingConvention = "c");
 
+// How a function frees heap objects. Automatic functions free objects when their lifetime ends; manual functions track
+// lifetimes and report leaks, and free objects only through `delete`.
+public enum MemoryMode
+{
+    Automatic,
+    Manual
+}
+
 public sealed record FunctionSymbol(
     string Name,
     SemanticType ReturnType,
@@ -118,7 +126,8 @@ public sealed record FunctionSymbol(
     bool IsExternal = false,
     CInteropFunctionMetadata? CInterop = null,
     IReadOnlyList<string>? GenericParameters = null,
-    IReadOnlyList<SemanticType>? SpecializationArguments = null)
+    IReadOnlyList<SemanticType>? SpecializationArguments = null,
+    MemoryMode Memory = MemoryMode.Automatic)
 {
     public string QualifiedName => $"{ModuleName}.{Name}";
     public IReadOnlyList<string> DeclaredGenericParameters => GenericParameters ?? [];

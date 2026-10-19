@@ -1216,6 +1216,44 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void FunctionsUseAutomaticMemoryByDefault()
+    {
+        var model = Analyze("i32 f() { return 0; } i32 main() { return f(); }");
+
+        Assert.Equal(MemoryMode.Automatic, model.Functions.Values.Single(function => function.Name == "f").Memory);
+    }
+
+    [Fact]
+    public void ManualMemoryAnnotationMarksOnlyItsFunction()
+    {
+        var model = Analyze("@manual_memory i32 f() { return 0; } i32 main() { return f(); }");
+
+        Assert.Equal(MemoryMode.Manual, model.Functions.Values.Single(function => function.Name == "f").Memory);
+        Assert.Equal(MemoryMode.Automatic, model.Functions.Values.Single(function => function.Name == "main").Memory);
+    }
+
+    [Fact]
+    public void AutoMemoryAnnotationOverridesAManualDefault()
+    {
+        var model = new SemanticAnalyzer(Log.Logger) { DefaultMemoryMode = MemoryMode.Manual }.Analyze(
+        [
+            Parse("@auto_memory i32 f() { return 0; } i32 main() { return f(); }")
+        ]);
+
+        Assert.Equal(MemoryMode.Automatic, model.Functions.Values.Single(function => function.Name == "f").Memory);
+        Assert.Equal(MemoryMode.Manual, model.Functions.Values.Single(function => function.Name == "main").Memory);
+    }
+
+    [Fact]
+    public void RejectsAFunctionMarkedWithBothMemoryAnnotations()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "@manual_memory @auto_memory i32 f() { return 0; } i32 main() { return 0; }"));
+
+        Assert.Contains("cannot be both @manual_memory and @auto_memory", exception.Message);
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));
