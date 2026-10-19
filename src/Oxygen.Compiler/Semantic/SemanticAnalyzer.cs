@@ -34,6 +34,9 @@ public sealed partial class SemanticAnalyzer
     private bool _currentIsConstructor;
     private int _loopDepth;
     private int _breakableDepth;
+    // The breakable depth of the switch whose case body is being analyzed, and whether a break has left that switch.
+    private int _switchExitDepth = -1;
+    private bool _breakReached;
     private Dictionary<FunctionDeclaration, FunctionSymbol>? _functionSymbols;
     private IReadOnlyDictionary<string, SemanticType> _genericTypes =
         new Dictionary<string, SemanticType>(StringComparer.Ordinal);
@@ -445,8 +448,8 @@ public sealed partial class SemanticAnalyzer
                     functionsByName.Add(key, overloads);
                 }
 
-                if (overloads.Any(existing => HasSameParameterTypes(existing, symbol)
-                    && existing.ReturnType == symbol.ReturnType))
+                // Overloads are told apart by parameter types only; a return type never distinguishes them.
+                if (overloads.Any(existing => HasSameParameterTypes(existing, symbol)))
                 {
                     ReportOrThrow(
                         diagnostics,
@@ -1539,6 +1542,21 @@ public sealed partial class SemanticAnalyzer
         return hasReturn;
     }
 
+    // Whether entering a switch case returns on every path. A case that breaks out of the switch does not fall into the
+    // next case, so only a case that neither returns nor breaks inherits the next case's answer.
+    private bool CaseReturns(Func<bool> analyzeBody, bool nextCaseReturns)
+    {
+        var savedExitDepth = _switchExitDepth;
+        var savedBreak = _breakReached;
+        _switchExitDepth = _breakableDepth;
+        _breakReached = false;
+        var returns = analyzeBody();
+        var breaks = _breakReached;
+        _switchExitDepth = savedExitDepth;
+        _breakReached = savedBreak;
+        return returns || (!breaks && nextCaseReturns);
+    }
+
     private bool AnalyzeStatement(
         Statement statement,
         Scope scope,
@@ -1688,8 +1706,9 @@ public sealed partial class SemanticAnalyzer
                                     caseScope.Declare(item.BindingName, new VariableSymbol(
                                         SubstituteGenericType(unionCase.PayloadType!, unionSubstitutions),
                                         false, item, false));
-                                var bodyReturns = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
-                                caseReturns[index] = bodyReturns || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                                caseReturns[index] = CaseReturns(
+                                    () => AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                                    index + 1 < caseReturns.Length && caseReturns[index + 1]);
                             }
                             if (seen.Count != union.Cases.Count)
                                 throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
@@ -1718,17 +1737,21 @@ public sealed partial class SemanticAnalyzer
                                     {
                                         var caseScope = new Scope(scope, MarkVariableUsed);
                                         caseScope.Declare(item.BindingName, new VariableSymbol(targetType, false, item, false));
-                                        caseReturns[index] = AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                        caseReturns[index] = CaseReturns(
+                                            () => AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                                            index + 1 < caseReturns.Length && caseReturns[index + 1]);
                                     }
                                     else
                                     {
-                                        caseReturns[index] = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                                        caseReturns[index] = CaseReturns(
+                                            () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                                            index + 1 < caseReturns.Length && caseReturns[index + 1]);
                                     }
-                                    caseReturns[index] |= index + 1 < caseReturns.Length && caseReturns[index + 1];
                                     continue;
                                 }
-                                caseReturns[index] = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls)
-                                    || (index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                                caseReturns[index] = CaseReturns(
+                                    () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                                    index + 1 < caseReturns.Length && caseReturns[index + 1]);
                             }
                             return caseReturns.Length > 0 && caseReturns[0];
                         }
@@ -1764,10 +1787,10 @@ public sealed partial class SemanticAnalyzer
                                     throw Error("Duplicate switch case value", item.Location);
                             }
 
-                            var bodyReturns = AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports,
-                                expressionTypes, resolvedCalls);
-                            caseReturnsForValue[index] = bodyReturns
-                                || (index + 1 < caseReturnsForValue.Length && caseReturnsForValue[index + 1]);
+                            caseReturnsForValue[index] = CaseReturns(
+                                () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports,
+                                    expressionTypes, resolvedCalls),
+                                index + 1 < caseReturnsForValue.Length && caseReturnsForValue[index + 1]);
                         }
                         return hasDefault && caseReturnsForValue.Length > 0 && caseReturnsForValue[0];
                     }
@@ -1781,6 +1804,10 @@ public sealed partial class SemanticAnalyzer
             case ContinueStatement continueStatement when _loopDepth == 0:
                 throw Error("'continue' is only valid inside a loop", continueStatement.Location);
             case BreakStatement:
+                // A break that leaves the switch being analyzed ends the case without falling into the next one.
+                if (_breakableDepth == _switchExitDepth)
+                    _breakReached = true;
+                return false;
             case ContinueStatement:
                 return false;
             case VariableDeclarationStatement declaration:
@@ -2883,21 +2910,22 @@ public sealed partial class SemanticAnalyzer
                 call.Location);
         }
 
-        var matches = candidates
-            .Where(function => function.Parameters
-                .Select((parameter, index) => CanAssign(parameter.Type, call.Arguments[index], argumentTypes[index]))
-                .All(match => match))
+        // The closest candidates win: each is ranked by its worst argument conversion, and only those tied for the best
+        // rank remain. The return type never selects an overload.
+        var ranked = candidates
+            .Select(function => (function, cost: CandidateCost(function, call, argumentTypes)))
+            .Where(item => item.cost is not null)
+            .Select(item => (item.function, cost: item.cost!.Value))
             .ToList();
-        if (expectedType is not null)
-        {
-            var exactExpected = matches.Where(candidate => candidate.ReturnType == expectedType).ToList();
-            if (exactExpected.Count == 1)
-                matches = exactExpected;
-        }
+        var matches = ranked.Count == 0
+            ? new List<FunctionSymbol>()
+            : ranked.Where(item => item.cost.CompareTo(ranked.Min(other => other.cost)) == 0)
+                .Select(item => item.function)
+                .ToList();
         if (matches.Select(match => match.ModuleName).Distinct(StringComparer.Ordinal).Count() > 1)
             throw Error($"Function '{call.Name}' is ambiguous; use a module prefix", call.Location, call.Name.Length);
         if (matches.Count > 1)
-            throw Error($"Function '{call.Name}' is ambiguous; provide an expected return type", call.Location, call.Name.Length);
+            throw Error($"Function '{call.Name}' is ambiguous: no overload is closer than the others", call.Location, call.Name.Length);
         if (matches.Count == 0)
         {
             if (candidates.Count == 1)
@@ -2930,24 +2958,106 @@ public sealed partial class SemanticAnalyzer
         return function.ReturnType;
     }
 
-    private bool CanAssign(SemanticType target, Expression value, SemanticType actual)
+    private bool CanAssign(SemanticType target, Expression value, SemanticType actual) =>
+        ConversionCostOf(target, value, actual) is not null;
+
+    // How far an implicit conversion is from an exact match; smaller is closer. The fields are compared in order: any
+    // conversion loses to an exact match; a conversion within one kind (integer to integer, float to float) beats one
+    // that crosses kinds; a narrowing conversion (only ever of a fitting constant) loses to a widening one; and a class
+    // or interface is closer the fewer steps up the hierarchy it takes to reach it.
+    private readonly record struct ConversionCost(int NotExact, int CrossKind, int Narrowing, int Distance)
+        : IComparable<ConversionCost>
+    {
+        public static readonly ConversionCost Exact = new(0, 0, 0, 0);
+
+        public int CompareTo(ConversionCost other) =>
+            (NotExact, CrossKind, Narrowing, Distance).CompareTo((other.NotExact, other.CrossKind, other.Narrowing, other.Distance));
+    }
+
+    // The cost of implicitly converting an argument to a parameter type, or null when no implicit conversion exists.
+    private ConversionCost? ConversionCostOf(SemanticType target, Expression value, SemanticType actual)
     {
         if (SemanticTypeComparer.Instance.Equals(target, actual))
-            return true;
+            return ConversionCost.Exact;
         if (target.IsUnion && actual.IsUnion
             && target.EnumName == actual.EnumName
             && ((actual.TypeArguments is null || actual.TypeArguments.Count == 0)
                 || SemanticTypeComparer.Instance.Equals(target, actual)))
-            return true;
+            return ConversionCost.Exact;
         if (target.IsPointer && actual.IsNumeric && TryGetConstantInteger(value, out var nullValue) && nullValue == 0)
-            return true;
+            return ConversionCost.Exact;
         if (IsReferenceCast(actual, target, out var implicitConversion) && implicitConversion)
-            return true;
+            return new ConversionCost(1, 0, 0, HierarchyDistance(actual.StructName!, target.StructName!));
         if (!target.IsNumeric || !actual.IsNumeric)
-            return false;
+            return null;
+
+        var crossKind = IsFloatingPointType(actual) != IsFloatingPointType(target) ? 1 : 0;
         if (IsImplicitlySafeNumericConversion(actual, target))
-            return true;
-        return TryGetConstantNumber(value, out var constant) && IsRepresentable(constant, target);
+            return new ConversionCost(1, crossKind, 0, 0);
+        // A float value never becomes an integer implicitly, not even when it is a constant.
+        if (IsFloatingPointType(actual) && !IsFloatingPointType(target))
+            return null;
+        if (!TryGetConstantNumber(value, out var constant) || !IsRepresentable(constant, target))
+            return null;
+        return new ConversionCost(1, crossKind, NumericBitWidth(target) < NumericBitWidth(actual) ? 1 : 0, 0);
+    }
+
+    // The number of steps from a class up to an ancestor class or interface: base classes and implemented interfaces
+    // each count as one step. An interface reached through a base class is further than that base class.
+    private int HierarchyDistance(string sourceName, string targetName)
+    {
+        var frontier = new List<string> { sourceName };
+        var seen = new HashSet<string>(StringComparer.Ordinal) { sourceName };
+        for (var depth = 0; frontier.Count > 0; depth++)
+        {
+            if (frontier.Contains(targetName, StringComparer.Ordinal))
+                return depth;
+            var next = new List<string>();
+            foreach (var name in frontier)
+            {
+                if (!_classesByName.TryGetValue(name, out var cls))
+                    continue;
+                IEnumerable<string> parents = cls.BaseTypeName is null
+                    ? cls.InterfaceNames
+                    : cls.InterfaceNames.Prepend(cls.BaseTypeName);
+                foreach (var parent in parents)
+                    if (seen.Add(parent))
+                        next.Add(parent);
+            }
+
+            frontier = next;
+        }
+
+        return int.MaxValue;
+    }
+
+    private static bool IsFloatingPointType(SemanticType type) =>
+        type.Primitive is PrimitiveType.F32 or PrimitiveType.F64;
+
+    private static int NumericBitWidth(SemanticType type) =>
+        type.Primitive switch
+        {
+            PrimitiveType.F32 => 32,
+            PrimitiveType.F64 => 64,
+            { } primitive => IntegerBitWidth(primitive),
+            null => throw new InvalidOperationException($"Type '{type}' is not numeric.")
+        };
+
+    // The cost of the whole call for one candidate: its worst argument, so a candidate is only as close as its furthest
+    // argument. Returns null when some argument has no implicit conversion to its parameter.
+    private ConversionCost? CandidateCost(FunctionSymbol function, CallExpression call, IReadOnlyList<SemanticType> argumentTypes)
+    {
+        var worst = ConversionCost.Exact;
+        for (var index = 0; index < argumentTypes.Count; index++)
+        {
+            var cost = ConversionCostOf(function.Parameters[index].Type, call.Arguments[index], argumentTypes[index]);
+            if (cost is null)
+                return null;
+            if (cost.Value.CompareTo(worst) > 0)
+                worst = cost.Value;
+        }
+
+        return worst;
     }
 
     private bool IsOwnedClass(SemanticType type) =>
@@ -3028,6 +3138,10 @@ public sealed partial class SemanticAnalyzer
             return true;
         if (source.Primitive is not ({ } sourcePrimitive) || target.Primitive is not ({ } targetPrimitive))
             return false;
+        // An integer converts to a float without loss when the float's significand holds every value of the integer:
+        // 24 bits for f32 (up to 16-bit integers) and 53 bits for f64 (up to 32-bit integers).
+        if (IsInteger(sourcePrimitive) && (targetPrimitive is PrimitiveType.F32 or PrimitiveType.F64))
+            return IntegerBitWidth(sourcePrimitive) <= (targetPrimitive == PrimitiveType.F64 ? 32 : 16);
         if (!IsInteger(sourcePrimitive) || !IsInteger(targetPrimitive))
             return false;
 
@@ -3035,9 +3149,10 @@ public sealed partial class SemanticAnalyzer
         var targetBits = IntegerBitWidth(targetPrimitive);
         var sourceUnsigned = IsUnsigned(sourcePrimitive);
         var targetUnsigned = IsUnsigned(targetPrimitive);
-        return sourceUnsigned == targetUnsigned
-            ? targetBits >= sourceBits
-            : targetBits > sourceBits;
+        if (sourceUnsigned == targetUnsigned)
+            return targetBits >= sourceBits;
+        // Only an unsigned value fits a wider signed type; a negative signed value never fits an unsigned type.
+        return sourceUnsigned && targetBits > sourceBits;
     }
 
     private static bool IsInteger(PrimitiveType type) =>

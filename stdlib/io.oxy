@@ -86,7 +86,7 @@ void write_exact_integer(f64 value) {
         }
         step = step + 1;
     }
-    i8* text = memory.alloc<i8>(count + 1);
+    i8* text = memory.alloc<i8>(cast<u64>(count + 1));
     i32 position = 0;
     while (position < count) {
         text[position] = cast<i8>(48 + cast<i32>(digits[count - 1 - position]));
