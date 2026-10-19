@@ -135,7 +135,10 @@ public sealed partial class SemanticAnalyzer
                         var iter = iterCandidates[0];
                         var iterCall = new CallExpression($"{collectionClass.Name}.iter", [],
                             forInStatement.Collection.Location);
-                        var iteratorType = iter.ReturnType;
+                        // The declared signatures use the generic parameters of their classes. The type arguments of this
+                        // collection and of its iterator are substituted into them, so the element type is concrete.
+                        var iteratorType = SubstituteGenericType(iter.ReturnType,
+                            TypeArgumentSubstitutions(collectionClass, collectionType));
                         if (!iteratorType.IsClass || !_classesByName.TryGetValue(iteratorType.StructName!, out var iteratorClass))
                             throw Error("Iterator 'iter()' must return an iterator class", iterCall.Location);
                         // The receiver for next() is represented by the iterator value
@@ -146,12 +149,17 @@ public sealed partial class SemanticAnalyzer
                             throw Error($"Iterator class '{iteratorClass.Name}' must declare exactly one next() method",
                                 forInStatement.Collection.Location);
                         var next = nextCandidates[0];
-                        var option = next.ReturnType;
+                        var option = SubstituteGenericType(next.ReturnType,
+                            TypeArgumentSubstitutions(iteratorClass, iteratorType));
                         if (!option.IsUnion || !string.Equals(option.EnumName, "Option", StringComparison.Ordinal)
                             || option.TypeArguments is not { Count: 1 })
                             throw Error("Iterator next() must return Option<T> with the iteration element type",
                                 forInStatement.Collection.Location);
                         iterationElement = option.TypeArguments[0];
+                        // Monomorphization specializes the recorded iter() call for the collection's type arguments, and the
+                        // protocol's methods with it.
+                        resolvedCalls[iterCall] = iter;
+                        _callReceiverTypes[iterCall] = collectionType;
                         _iteratorProtocols[forInStatement] = new IteratorProtocol(
                             forInStatement.Collection, iterCall, iter, next, iterationElement, option);
                         _usedFunctions.Add(iter);
@@ -574,6 +582,12 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Compound assignment needs a readable property, but '{member.MemberName}' has no getter",
                 member.Location, member.MemberName.Length);
     }
+
+    // The substitutions that map a generic class's declared type parameters to the arguments of one of its concrete uses.
+    private static Dictionary<string, SemanticType> TypeArgumentSubstitutions(ClassSymbol cls, SemanticType use) =>
+        cls.DeclaredTypeParameters
+            .Zip(use.TypeArguments ?? [], (name, argument) => (name, argument))
+            .ToDictionary(pair => pair.name, pair => pair.argument, StringComparer.Ordinal);
 
     private void ValidateWritableTarget(Expression target, Scope scope)
     {

@@ -281,6 +281,18 @@ public sealed partial class SemanticAnalyzer
             newResolvedCalls[pair.Key] = ResolveSpecializedCall(pair.Key, symbol, expressionTypes, aggregateNames,
                 specializedMethods);
         }
+        // A for-in protocol names the iter() call and the next() method of its iterator. Both are specialized for the concrete
+        // iterator type that the specialized iter() returns.
+        foreach (var (loop, protocol) in _iteratorProtocols.ToArray())
+        {
+            var iter = newResolvedCalls[protocol.IterCall];
+            var iteratorOwner = iter.ReturnType.StructName;
+            var next = iteratorOwner is not null
+                && specializedMethods.TryGetValue((protocol.Next.Declaration, iteratorOwner), out var specializedNext)
+                ? specializedNext
+                : protocol.Next;
+            _iteratorProtocols[loop] = protocol with { Iter = iter, Next = next };
+        }
 
         expressionTypes.Clear();
         foreach (var pair in newExpressionTypes)
