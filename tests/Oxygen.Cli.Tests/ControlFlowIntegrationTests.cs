@@ -620,6 +620,78 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void BreakInsideACatchBodyLeavesTheLoop()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class E : Exception {
+                E(string message) : base(message) {
+                }
+            }
+
+            i32 main() {
+                i32 i = 0;
+                while (i < 3) {
+                    i = i + 1;
+                    try {
+                        throw new E("x");
+                    } catch (E error) {
+                        io.print("c");
+                        break;
+                    }
+                }
+                io.print("end");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("cend", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void ContinueInsideACatchBodyRunsFinallyBeforeTheNextIteration()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class E : Exception {
+                E(string message) : base(message) {
+                }
+            }
+
+            i32 main() {
+                i32 i = 0;
+                while (i < 3) {
+                    i = i + 1;
+                    try {
+                        throw new E("x");
+                    } catch (E error) {
+                        io.print("c");
+                        continue;
+                    } finally {
+                        io.print("f");
+                    }
+                }
+                io.print("end");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("cfcfcfend", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
     public void TemporariesInsideALoopDoNotGrowTheStackWithoutOptimization()
     {
         NativeProgram.RequireNativeToolchain();
