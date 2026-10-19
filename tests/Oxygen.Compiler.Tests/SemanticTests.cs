@@ -1773,6 +1773,25 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ConstLocalNeedsAnInitializer()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { const i32 x; return 0; }"));
+
+        Assert.Contains("Const variable 'x' needs an initializer", exception.Message);
+    }
+
+    [Fact]
+    public void PartOfAConstValueTypeCannotBeAssigned()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "@value class Inner { i32 x; } @value class Outer { Inner inner; } " +
+            "i32 main() { const Outer o = Outer(); o.inner.x = 5; return 0; }"));
+
+        Assert.Contains("Cannot assign to a part of const variable 'o'", exception.Message);
+    }
+
+    [Fact]
     public void ConstGlobalCannotBeAssigned()
     {
         var exception = Assert.Throws<SemanticException>(() =>

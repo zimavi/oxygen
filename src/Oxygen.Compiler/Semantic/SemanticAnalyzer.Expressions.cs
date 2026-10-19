@@ -440,7 +440,7 @@ public sealed partial class SemanticAnalyzer
         {
             if (!IsAddressable(expression.Operand, scope))
                 throw Error($"The '{expression.Operator}' operator requires an addressable operand", expression.Location);
-            ValidateWritableTarget(expression.Operand, scope);
+            ValidateWritableTarget(expression.Operand, scope, expressionTypes);
             if (!operandType.IsInteger && !operandType.IsPointer)
                 throw Error($"The '{expression.Operator}' operator requires an integer or pointer operand", expression.Location);
             return operandType;

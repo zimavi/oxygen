@@ -480,6 +480,8 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Variable '{declaration.Name}' is already declared in this scope", declaration.Location, declaration.Name.Length);
         }
 
+        if (declaration.IsConst && declaration.Initializer is null)
+            throw Error($"Const variable '{declaration.Name}' needs an initializer", declaration.Location, declaration.Name.Length);
         var initializerType = declaration.Initializer is null
             ? (SemanticType?)null
             : AnalyzeExpression(declaration.Initializer, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
@@ -559,7 +561,7 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Cannot assign {valueType} to target of type {targetType}", assignment.Value.Location);
         }
 
-        ValidateWritableTarget(assignment.Target, scope);
+        ValidateWritableTarget(assignment.Target, scope, expressionTypes);
         TrackPointerAssignment(assignment, assignment.Value, valueType, scope);
     }
 
@@ -589,7 +591,23 @@ public sealed partial class SemanticAnalyzer
             .Zip(use.TypeArguments ?? [], (name, argument) => (name, argument))
             .ToDictionary(pair => pair.name, pair => pair.argument, StringComparer.Ordinal);
 
-    private void ValidateWritableTarget(Expression target, Scope scope)
+    // A const variable is immutable in every part that an assignment reaches through members and elements. The walk stops at a
+    // pointer, which is the explicit way to mutate through another object.
+    private void RequireMutableChain(Expression target, Scope scope, IDictionary<Expression, SemanticType> expressionTypes)
+    {
+        var current = target;
+        while (current is MemberAccessExpression or IndexExpression)
+        {
+            var inner = current is MemberAccessExpression member ? member.Target : ((IndexExpression)current).Target;
+            if (expressionTypes.TryGetValue(inner, out var innerType) && innerType.IsPointer)
+                return;
+            if (inner is IdentifierExpression identifier && scope.Lookup(identifier.Name, identifier.Location).IsConst)
+                throw Error($"Cannot assign to a part of const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
+            current = inner;
+        }
+    }
+
+    private void ValidateWritableTarget(Expression target, Scope scope, IDictionary<Expression, SemanticType> expressionTypes)
     {
         if (target is IdentifierExpression identifier)
         {
@@ -623,6 +641,7 @@ public sealed partial class SemanticAnalyzer
         {
             throw Error("Assignment target is not addressable", target.Location);
         }
+        RequireMutableChain(target, scope, expressionTypes);
     }
 
     private void ValidatePropertyWrite(MemberAccessExpression member, Scope scope)
