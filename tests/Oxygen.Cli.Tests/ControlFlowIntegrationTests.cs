@@ -851,6 +851,101 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void AssignmentThroughAMemberOfAMemberStoresTheField()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                i32 value = 3;
+            }
+
+            class Holder {
+                Box inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                holder.inner = new Box();
+                holder.inner.value = 5;
+                io.print(holder.inner.value);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("5", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void AssignmentToAPropertyThroughAMemberOfAMemberCallsTheSetter()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                public i32 Value { get; set; }
+            }
+
+            class Holder {
+                Box inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                holder.inner = new Box();
+                holder.inner.Value = 9;
+                io.print(holder.inner.Value);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("9", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void AssignmentThroughAMemberOfANullMemberRaisesNullReferenceException()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                i32 value = 3;
+            }
+
+            class Holder {
+                Box inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                try {
+                    holder.inner.value = 5;
+                } catch (NullReferenceException error) {
+                    io.print(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("The member 'value' was written through a null class reference.", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
     public void BreakInsideACatchBodyLeavesTheLoop()
     {
         NativeProgram.RequireNativeToolchain();

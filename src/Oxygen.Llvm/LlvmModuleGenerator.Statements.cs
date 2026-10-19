@@ -179,38 +179,15 @@ public sealed partial class LlvmModuleGenerator
                     if (targetType.IsClass)
                     {
                         var cls = model.Classes[targetType.StructName!];
-                        var property = cls.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == member.MemberName);
-                        if (property is not null)
+                        var isProperty = cls.DeclaredProperties.Any(candidate => candidate.Name == member.MemberName);
+                        if (cls.IsValue && !isProperty)
                         {
-                            var setter = _propertyAccessors[(cls.Name, property.Name, PropertyAccessorKind.Set)];
-                            var setterType = ToLlvmFunctionType(setter, model);
-                            var receiver = values.TryGetValue(targetIdentifier.Name, out var directReceiver)
-                                ? directReceiver
-                                : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
-                            if (!cls.IsValue)
-                                EmitNullReferenceCheck(builder, receiver, member.MemberName, "written", model, llvmFunctions);
-                            var targetFunction = llvmFunctions[setter];
-                            if (property.Declaration.IsVirtual || property.Declaration.IsOverride)
-                            {
-                                var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
-                                    .First(pair => pair.candidate == setter).index;
-                                var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
-                                    (uint)slot + 1, "property.vtable.slot");
-                                targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
-                                    slotAddress, "property.vtable.target");
-                            }
-                            EmitCallOrInvoke(builder, setterType, targetFunction,
-                                [receiver, CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                                    property.Type, model)], string.Empty);
-                            return false;
-                        }
-                        var fieldIndex = cls.Fields
-                            .Select((field, index) => (field, index))
-                            .First(pair => pair.field.Name == member.MemberName).index;
-                        var coerced = CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                            model.ExpressionTypes[assignment.Target], model);
-                        if (cls.IsValue)
-                        {
+                            // A field of a value class is stored into the variable's own value.
+                            var fieldIndex = cls.Fields
+                                .Select((field, index) => (field, index))
+                                .First(pair => pair.field.Name == member.MemberName).index;
+                            var coerced = CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                                model.ExpressionTypes[assignment.Target], model);
                             var current = builder.BuildLoad2(ToLlvmType(targetType, model),
                                 storage[targetIdentifier.Name], targetIdentifier.Name);
                             var updated = builder.BuildInsertValue(current, coerced, (uint)fieldIndex, "value.update");
@@ -218,13 +195,12 @@ public sealed partial class LlvmModuleGenerator
                         }
                         else
                         {
-                            var objectValue = values.TryGetValue(targetIdentifier.Name, out var direct)
+                            var receiver = values.TryGetValue(targetIdentifier.Name, out var direct)
                                 ? direct
                                 : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
-                            EmitNullReferenceCheck(builder, objectValue, member.MemberName, "written", model, llvmFunctions);
-                            var address = builder.BuildStructGEP2(_classTypes[targetType.StructName!], objectValue,
-                                (uint)FieldOffset(cls, model, fieldIndex), $"field.{member.MemberName}");
-                            builder.BuildStore(coerced, address);
+                            EmitClassMemberStore(builder, cls, receiver, member, assigned,
+                                model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target],
+                                model, llvmFunctions);
                         }
                     }
                     else
@@ -266,6 +242,17 @@ public sealed partial class LlvmModuleGenerator
                     var address = storage["this." + thisMember.MemberName];
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                         model.ExpressionTypes[assignment.Target], model), address);
+                }
+                else if (assignment.Target is MemberAccessExpression nestedMember
+                    && model.ExpressionTypes[nestedMember.Target].IsClass
+                    && !IsValueClass(model.ExpressionTypes[nestedMember.Target], model))
+                {
+                    // The object is any expression of class type, such as holder.inner in holder.inner.value = v. It is
+                    // evaluated once, then the member is stored as for a variable.
+                    var objectType = model.ExpressionTypes[nestedMember.Target];
+                    var receiver = EmitExpression(context, builder, nestedMember.Target, values, storage, model, llvmFunctions);
+                    EmitClassMemberStore(builder, model.Classes[objectType.StructName!], receiver, nestedMember, assigned,
+                        model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target], model, llvmFunctions);
                 }
                 else if (assignment.Target is UnaryExpression { Operator: TokenKind.Star, Operand: var operand })
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
