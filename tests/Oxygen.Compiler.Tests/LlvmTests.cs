@@ -996,8 +996,8 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Single(ir.Split('\n').Where(line => line.StartsWith("declare ", StringComparison.Ordinal)
-            && line.Contains("@memcmp(", StringComparison.Ordinal)));
+        Assert.Single(ir.Split('\n'), line => line.StartsWith("declare ", StringComparison.Ordinal)
+            && line.Contains("@memcmp(", StringComparison.Ordinal));
     }
 
     [Fact]
