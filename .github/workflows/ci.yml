@@ -24,10 +24,17 @@ jobs:
 
       - name: Build the Windows runtime archive
         shell: pwsh
-        run: ./runtime/build.ps1
+        run: |
+          ./runtime/build.ps1
+          if (-not (Test-Path runtime/build/windows/liboxygenrt.a)) {
+            throw "runtime/build/windows/liboxygenrt.a was not produced."
+          }
 
       - name: Build solution
         run: dotnet build Oxygen.slnx --configuration Release
 
       - name: Run tests
+        # Native tests skip when the toolchain is missing locally; CI must run them, so a missing toolchain fails.
+        env:
+          OXYGEN_REQUIRE_NATIVE_TESTS: '1'
         run: dotnet test Oxygen.slnx --configuration Release --no-build
