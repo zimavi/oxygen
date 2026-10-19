@@ -188,9 +188,10 @@ public sealed partial class LlvmModuleGenerator
     private static LLVMTypeRef ClassPointerType(string name) =>
         LLVMTypeRef.CreatePointer(_classTypes[name], 0);
 
-    // An extern that names the same C symbol shares this declaration. A different signature would make the calls
-    // disagree with it, and LLVM would silently rename a second declaration, so that is rejected instead.
-    private static LLVMValueRef GetOrDeclareRuntimeFunction(
+    // Every native symbol the module declares goes through here: runtime functions, the native entry point, externs and
+    // Oxygen functions. A name that already exists is reused only with the same signature. LLVM would otherwise rename
+    // the new declaration (memcmp.1, main.8), and calls would reach a symbol that does not exist.
+    private static LLVMValueRef DeclareNativeFunction(
         LLVMModuleRef module,
         string nativeName,
         LLVMTypeRef functionType)
@@ -200,7 +201,7 @@ public sealed partial class LlvmModuleGenerator
             return module.AddFunction(nativeName, functionType);
         if (existing.FunctionType != functionType)
             throw new InvalidOperationException(
-                $"Native symbol '{nativeName}' is declared with a signature that conflicts with the runtime's.");
+                $"Native symbol '{nativeName}' is declared twice with different signatures.");
         return existing;
     }
 

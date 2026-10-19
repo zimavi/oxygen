@@ -179,10 +179,10 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var runtimeInitializeType = LLVMTypeRef.CreateFunction(_context.VoidType, [], false);
-        var runtimeInitialize = module.AddFunction("__oxygen_runtime_initialize", runtimeInitializeType);
+        var runtimeInitialize = DeclareNativeFunction(module, "__oxygen_runtime_initialize", runtimeInitializeType);
         var argvType = LLVMTypeRef.CreatePointer(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), 0);
         var nativeMainType = LLVMTypeRef.CreateFunction(_context.Int32Type, [_context.Int32Type, argvType], false);
-        var nativeMain = module.AddFunction("main", nativeMainType);
+        var nativeMain = DeclareNativeFunction(module, "main", nativeMainType);
         if (_usesExceptions)
             nativeMain.PersonalityFn = _personality;
         nativeMain.GetParam(0).Name = "argc";
@@ -191,7 +191,7 @@ public sealed partial class LlvmModuleGenerator
         var entry = nativeMain.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
         builder.BuildCall2(runtimeInitializeType, runtimeInitialize, []);
-        var registerType = module.AddFunction(
+        var registerType = DeclareNativeFunction(module, 
             "__oxygen_runtime_register_type",
             LLVMTypeRef.CreateFunction(_context.VoidType,
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),

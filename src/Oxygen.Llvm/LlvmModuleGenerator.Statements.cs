@@ -13,7 +13,7 @@ public sealed partial class LlvmModuleGenerator
     {
         if (_exceptionPointer.Handle == IntPtr.Zero)
         {
-            _exceptionPointer = _module.AddFunction(
+            _exceptionPointer = DeclareNativeFunction(_module, 
                 "llvm.eh.exceptionpointer.p0",
                 LLVMTypeRef.CreateFunction(
                     LLVMTypeRef.CreatePointer(_context.Int8Type, 0),

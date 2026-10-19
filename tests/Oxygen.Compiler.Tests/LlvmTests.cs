@@ -929,6 +929,48 @@ public sealed class LlvmTests
     }
 
     [Fact]
+    public void ExternWithTheSameSignatureAsARuntimeFunctionSharesItsDeclaration()
+    {
+        var model = Analyze(
+            """
+            @extern("memcmp") extern i32 compare(i8* left, i8* right, u64 count);
+            i32 main() { return 0; }
+            """);
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Single(ir.Split('\n').Where(line => line.StartsWith("declare ", StringComparison.Ordinal)
+            && line.Contains("@memcmp(", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void ExternNamedLikeARuntimeFunctionWithADifferentSignatureIsRejectedNotRenamed()
+    {
+        var model = Analyze(
+            """
+            @extern("__oxygen_runtime_initialize") extern i32 initialize(i32 value);
+            i32 main() { return 0; }
+            """);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => new LlvmModuleGenerator().Generate("program", model));
+        Assert.Contains("'__oxygen_runtime_initialize'", exception.Message);
+    }
+
+    [Fact]
+    public void ExternNamedMainWithADifferentSignatureIsRejectedNotRenamed()
+    {
+        var model = Analyze(
+            """
+            @extern("main") extern i32 entry(i32 value);
+            i32 main() { return 0; }
+            """);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => new LlvmModuleGenerator().Generate("program", model));
+        Assert.Contains("'main'", exception.Message);
+    }
+
+    [Fact]
     public void VerifierAcceptsAWellFormedModuleAndRejectsABlockWithoutATerminator()
     {
         using var context = LLVMContextRef.Create();

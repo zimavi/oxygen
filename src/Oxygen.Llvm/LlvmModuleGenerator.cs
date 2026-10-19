@@ -125,10 +125,9 @@ public sealed partial class LlvmModuleGenerator
             {
                 var functionType = ToLlvmFunctionType(symbol, model);
                 var name = OxygenNameMangler.Mangle(symbol.ModuleName, symbol);
-                // Externals that name the same C symbol (for example from_c_string in two stdlib modules) share one
-                // declaration; LLVM would otherwise rename the second one and leave the call unresolved.
-                var existing = symbol.IsExternal ? module.GetNamedFunction(name) : default;
-                llvmFunctions[symbol] = existing.Handle != IntPtr.Zero ? existing : module.AddFunction(name, functionType);
+                // Externals that name the same C symbol with the same signature (from_c_string in two stdlib modules)
+                // share one declaration.
+                llvmFunctions[symbol] = DeclareNativeFunction(module, name, functionType);
             }
             foreach (var iface in concreteInterfaces)
             {
@@ -139,42 +138,42 @@ public sealed partial class LlvmModuleGenerator
             }
             var allocType = LLVMTypeRef.CreateFunction(
                 LLVMTypeRef.CreatePointer(_context.Int8Type, 0), [_context.Int64Type], false);
-            _oxygenAlloc = GetOrDeclareRuntimeFunction(
+            _oxygenAlloc = DeclareNativeFunction(
                 module, "oxygen_alloc", allocType);
             var freeType = LLVMTypeRef.CreateFunction(_context.VoidType,
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false);
-            _oxygenFree = GetOrDeclareRuntimeFunction(
+            _oxygenFree = DeclareNativeFunction(
                 module, "oxygen_free", freeType);
-            _memcmp = GetOrDeclareRuntimeFunction(module, "memcmp",
+            _memcmp = DeclareNativeFunction(module, "memcmp",
                 LLVMTypeRef.CreateFunction(_context.Int32Type,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                         LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false));
-            _personality = module.AddFunction(_usesWindowsSeh ? "__C_specific_handler" : "__gxx_personality_v0",
+            _personality = DeclareNativeFunction(module, _usesWindowsSeh ? "__C_specific_handler" : "__gxx_personality_v0",
                 _usesWindowsSeh
                     ? LLVMTypeRef.CreateFunction(_context.Int32Type, [], true)
                     : LLVMTypeRef.CreateFunction(_context.Int32Type,
                         [_context.Int32Type, _context.Int32Type, _context.Int64Type,
                             LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                             LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
-            _exceptionThrow = module.AddFunction("__oxygen_runtime_throw_object",
+            _exceptionThrow = DeclareNativeFunction(module, "__oxygen_runtime_throw_object",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
-            _exceptionObject = module.AddFunction("__oxygen_runtime_exception_object",
+            _exceptionObject = DeclareNativeFunction(module, "__oxygen_runtime_exception_object",
                 LLVMTypeRef.CreateFunction(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
-            _exceptionEndCatch = module.AddFunction("__oxygen_runtime_end_catch",
+            _exceptionEndCatch = DeclareNativeFunction(module, "__oxygen_runtime_end_catch",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
-            _exceptionRethrow = module.AddFunction("__oxygen_runtime_rethrow",
+            _exceptionRethrow = DeclareNativeFunction(module, "__oxygen_runtime_rethrow",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
-            _exceptionUnhandled = module.AddFunction("__oxygen_runtime_unhandled_object",
+            _exceptionUnhandled = DeclareNativeFunction(module, "__oxygen_runtime_unhandled_object",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
-            _tracePush = module.AddFunction("__oxygen_runtime_trace_push",
+            _tracePush = DeclareNativeFunction(module, "__oxygen_runtime_trace_push",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                         LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type,
                         _context.Int32Type], false));
-            _tracePop = module.AddFunction("__oxygen_runtime_trace_pop",
+            _tracePop = DeclareNativeFunction(module, "__oxygen_runtime_trace_pop",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             foreach (var cls in concreteClasses)
             {
@@ -183,32 +182,32 @@ public sealed partial class LlvmModuleGenerator
                     var type = LLVMTypeRef.CreateFunction(_context.VoidType,
                         new[] { LLVMTypeRef.CreatePointer(_classTypes[cls.Name], 0) }
                             .Concat(ctor.Parameters.Select(p => ToLlvmType(p.Type, model))).ToArray(), false);
-                    _constructors[ConstructorKey(cls, ctor)] = module.AddFunction(
+                    _constructors[ConstructorKey(cls, ctor)] = DeclareNativeFunction(module, 
                         OxygenNameMangler.MangleConstructor(cls.ModuleName, cls, ctor), type);
                 }
 
                 if (cls.Destructor is not null)
-                    _destructors[cls.Name] = module.AddFunction(
+                    _destructors[cls.Name] = DeclareNativeFunction(module, 
                         OxygenNameMangler.MangleDestructor(cls.ModuleName, cls),
                         LLVMTypeRef.CreateFunction(_context.VoidType,
                             [LLVMTypeRef.CreatePointer(_classTypes[cls.Name], 0)], false));
             }
             var boundsFailureType = LLVMTypeRef.CreateFunction(
                 _context.VoidType, [_context.Int64Type, _context.Int64Type], false);
-            _arrayBoundsFailure = module.AddFunction("__oxygen_runtime_array_bounds_failure", boundsFailureType);
-            _enumCastFailure = module.AddFunction(
+            _arrayBoundsFailure = DeclareNativeFunction(module, "__oxygen_runtime_array_bounds_failure", boundsFailureType);
+            _enumCastFailure = DeclareNativeFunction(module, 
                 "__oxygen_runtime_enum_cast_failure",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [_context.Int64Type], false));
-            _arithmeticFailure = module.AddFunction(
+            _arithmeticFailure = DeclareNativeFunction(module, 
                 "__oxygen_runtime_arithmetic_failure",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [_context.Int32Type, _context.Int64Type], false));
-            _isInstance = GetOrDeclareRuntimeFunction(
+            _isInstance = DeclareNativeFunction(
                 module,
                 "__oxygen_runtime_is_instance",
                 LLVMTypeRef.CreateFunction(_context.Int8Type,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), LLVMTypeRef.CreatePointer(_context.Int8Type, 0)],
                     false));
-            _invalidCast = GetOrDeclareRuntimeFunction(
+            _invalidCast = DeclareNativeFunction(
                 module,
                 "__oxygen_runtime_invalid_cast",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
