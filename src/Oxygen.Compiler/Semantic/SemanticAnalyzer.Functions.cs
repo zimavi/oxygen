@@ -80,8 +80,10 @@ public sealed partial class SemanticAnalyzer
             AnalyzeConstructorInitializer(constructor, _currentOwnerClass, initializerScope, functions, moduleName,
                 imports, expressionTypes, resolvedCalls);
         }
-        var hasReturn = AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
-        if (!function.ReturnType.IsVoid && !hasReturn)
+        AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        // A non-void function must not reach its end. Reachability follows every path, including switch fall-through,
+        // breaks and loops that never end, so it decides this rather than whether the last statement returns.
+        if (!function.ReturnType.IsVoid && _reachable)
         {
             throw Error($"Function '{function.Name}' must return a value", function.Declaration.Location);
         }

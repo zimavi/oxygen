@@ -1497,6 +1497,50 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void TypeSwitchWithoutDefaultMustStillReturnOnTheFallThroughPath()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Base { } class Child : Base { } " +
+            "i32 f(Base b) { switch (b) { case is Child c: return 1; } } i32 main() { return 0; }"));
+
+        Assert.Contains("must return a value", exception.Message);
+    }
+
+    [Fact]
+    public void SwitchWhoseLastCaseFallsOutStillNeedsAReturn()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 f(i32 x) { switch (x) { case 1: return 1; case 2: x = 2; } } i32 main() { return 0; }"));
+
+        Assert.Contains("must return a value", exception.Message);
+    }
+
+    [Fact]
+    public void WhileTrueWhoseBodyReturnsNeedsNoReturnAfterIt()
+    {
+        var model = Analyze("i32 f() { while (true) { return 1; } } i32 main() { return f(); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void WhileTrueWithoutBreakNeedsNoReturnAfterIt()
+    {
+        var model = Analyze("i32 f() { while (true) { } } i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void WhileTrueWithABreakStillNeedsAReturnAfterIt()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 f() { while (true) { break; } } i32 main() { return 0; }"));
+
+        Assert.Contains("must return a value", exception.Message);
+    }
+
+    [Fact]
     public void SuffixedLiteralOutOfRangeForItsTypeIsRejected()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { u8 x = 300u8; return 0; }"));

@@ -10,7 +10,7 @@ public sealed partial class SemanticAnalyzer
 {
     // Whether entering a switch case returns on every path. A case that breaks out of the switch does not fall into the
     // next case, so only a case that neither returns nor breaks inherits the next case's answer.
-    private bool CaseReturns(Func<bool> analyzeBody, bool nextCaseReturns)
+    private bool CaseReturns(Func<bool> analyzeBody, bool nextCaseReturns, int caseIndex)
     {
         var savedExitDepth = _switchExitDepth;
         var savedBreak = _breakReached;
@@ -20,7 +20,7 @@ public sealed partial class SemanticAnalyzer
         var frame = _switchFlows.Peek();
         RestoreFlow(frame.Start);
         var returns = analyzeBody();
-        frame.Ends.Add(SnapshotFlow());
+        frame.Ends.Add((caseIndex, SnapshotFlow()));
         var breaks = _breakReached;
         _switchExitDepth = savedExitDepth;
         _breakReached = savedBreak;
@@ -212,7 +212,7 @@ public sealed partial class SemanticAnalyzer
                                         false, item, false));
                                 caseReturns[index] = CaseReturns(
                                     () => AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
-                                    index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                                    index + 1 < caseReturns.Length && caseReturns[index + 1], index);
                             }
                             if (seen.Count != union.Cases.Count)
                                 throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
@@ -243,19 +243,19 @@ public sealed partial class SemanticAnalyzer
                                         caseScope.Declare(item.BindingName, new VariableSymbol(targetType, false, item, false));
                                         caseReturns[index] = CaseReturns(
                                             () => AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
-                                            index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                                            index + 1 < caseReturns.Length && caseReturns[index + 1], index);
                                     }
                                     else
                                     {
                                         caseReturns[index] = CaseReturns(
                                             () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
-                                            index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                                            index + 1 < caseReturns.Length && caseReturns[index + 1], index);
                                     }
                                     continue;
                                 }
                                 caseReturns[index] = CaseReturns(
                                     () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
-                                    index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                                    index + 1 < caseReturns.Length && caseReturns[index + 1], index);
                             }
                             return caseReturns.Length > 0 && caseReturns[0];
                         }
@@ -294,7 +294,7 @@ public sealed partial class SemanticAnalyzer
                             caseReturnsForValue[index] = CaseReturns(
                                 () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports,
                                     expressionTypes, resolvedCalls),
-                                index + 1 < caseReturnsForValue.Length && caseReturnsForValue[index + 1]);
+                                index + 1 < caseReturnsForValue.Length && caseReturnsForValue[index + 1], index);
                         }
                         return hasDefault && caseReturnsForValue.Length > 0 && caseReturnsForValue[0];
                     }
@@ -307,7 +307,10 @@ public sealed partial class SemanticAnalyzer
                         var breaks = _breakStates.Pop();
                         var exhaustive = switchStatement.Cases.Any(item => item.IsDefault) || valueType.IsUnion;
                         var afterSwitch = exhaustive ? UnreachableFlow() : switchStart;
-                        foreach (var state in caseEnds.Concat(breaks))
+                        // Only the last case leaves the switch by falling out of it. An earlier case that ends reachable falls
+                        // into the next case, which is already covered.
+                        var lastCase = switchStatement.Cases.Count - 1;
+                        foreach (var state in caseEnds.Where(entry => entry.Index == lastCase).Select(entry => entry.State).Concat(breaks))
                             afterSwitch = JoinFlows(afterSwitch, state);
                         RestoreFlow(afterSwitch);
                     }

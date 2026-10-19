@@ -103,7 +103,7 @@ public sealed partial class SemanticAnalyzer
     private Stack<List<FlowState>> _breakStates = new();
 
     // For each switch being analyzed: the state where its cases start, and the state where each case ends.
-    private Stack<(FlowState Start, List<FlowState> Ends)> _switchFlows = new();
+    private Stack<(FlowState Start, List<(int Index, FlowState State)> Ends)> _switchFlows = new();
 
     private Dictionary<FunctionDeclaration, FunctionSymbol>? _functionSymbols;
 

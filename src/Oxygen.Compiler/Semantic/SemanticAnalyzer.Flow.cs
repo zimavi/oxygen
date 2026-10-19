@@ -20,7 +20,7 @@ public sealed partial class SemanticAnalyzer
         HashSet<VariableDeclarationStatement> Unassigned,
         bool Reachable,
         Stack<List<FlowState>> BreakStates,
-        Stack<(FlowState Start, List<FlowState> Ends)> SwitchFlows);
+        Stack<(FlowState Start, List<(int Index, FlowState State)> Ends)> SwitchFlows);
 
     private SavedFlowContext SaveAndResetFlowContext()
     {
