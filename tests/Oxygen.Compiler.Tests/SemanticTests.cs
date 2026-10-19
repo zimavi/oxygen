@@ -1337,6 +1337,26 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AllowsReadingAfterAForInBodyThatDeletedTheObject()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); " +
+            "i32[2] values = {1, 2}; for (var x in values) { delete b; } return b.value; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ChecksAtRunTimeADeleteInALoopBodyThatRepeats()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); i32 i = 0; " +
+            "while (i < 2) { delete b; i = i + 1; } return 0; }");
+
+        Assert.Single(model.RuntimeCheckedDeletes);
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));

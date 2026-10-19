@@ -25,6 +25,8 @@ public sealed partial class SemanticAnalyzer
     // Every local that is deleted somewhere, and the deletes that may run after the object was already deleted.
     private readonly HashSet<VariableDeclarationStatement> _deletedAnywhere = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<DeleteStatement> _runtimeCheckedDeletes = new(ReferenceEqualityComparer.Instance);
+    // For each loop being analyzed, the deletes in its body. A body runs again, so those deletes can repeat.
+    private readonly Stack<List<(DeleteStatement Statement, VariableDeclarationStatement Declaration)>> _loopDeletes = new();
     private readonly HashSet<VariableDeclarationStatement> _valueUses = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VariableDeclarationStatement> _autoFreedLocals = new(ReferenceEqualityComparer.Instance);
     private bool _receiverUse;
@@ -150,6 +152,7 @@ public sealed partial class SemanticAnalyzer
         _maybeDeletedLocals.Clear();
         _deletedAnywhere.Clear();
         _runtimeCheckedDeletes.Clear();
+        _loopDeletes.Clear();
         _autoFreedLocals.Clear();
         _valueUses.Clear();
         _iteratorProtocols.Clear();
@@ -1649,14 +1652,13 @@ public sealed partial class SemanticAnalyzer
             case WhileStatement whileStatement:
                 var whileType = AnalyzeExpression(whileStatement.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 RequireBoolean(whileType, whileStatement.Condition.Location);
-                var beforeWhile = SnapshotDeleteState();
+                var beforeWhile = BeginLoopDeletes();
                 _loopDepth++;
                 _breakableDepth++;
                 AnalyzeStatement(whileStatement.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 _breakableDepth--;
                 _loopDepth--;
-                // The body may run zero times, so after the loop only what is deleted on both paths is definitely deleted.
-                RestoreDeleteState(JoinDeleteStates(beforeWhile, SnapshotDeleteState()));
+                FinishLoopDeletes(beforeWhile);
                 return false;
             case ForStatement forStatement:
                 var loopScope = new Scope(scope, MarkVariableUsed);
@@ -1667,7 +1669,7 @@ public sealed partial class SemanticAnalyzer
                     var forType = AnalyzeExpression(forStatement.Condition, loopScope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                     RequireBoolean(forType, forStatement.Condition.Location);
                 }
-                var beforeFor = SnapshotDeleteState();
+                var beforeFor = BeginLoopDeletes();
                 _loopDepth++;
                 _breakableDepth++;
                 AnalyzeStatement(forStatement.Body, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
@@ -1675,7 +1677,7 @@ public sealed partial class SemanticAnalyzer
                     AnalyzeStatement(forStatement.Increment, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 _breakableDepth--;
                 _loopDepth--;
-                RestoreDeleteState(JoinDeleteStates(beforeFor, SnapshotDeleteState()));
+                FinishLoopDeletes(beforeFor);
                 return false;
             case ForInStatement forInStatement:
                 {
@@ -1735,12 +1737,14 @@ public sealed partial class SemanticAnalyzer
                             null, forInStatement.Location), false);
                     forInScope.Declare(forInStatement.VariableName, variable);
                     _declaredVariables.Add(variable);
+                    var beforeForIn = BeginLoopDeletes();
                     _loopDepth++;
                     _breakableDepth++;
                     AnalyzeStatement(forInStatement.Body, forInScope, function, functions, moduleName, imports,
                         expressionTypes, resolvedCalls);
                     _breakableDepth--;
                     _loopDepth--;
+                    FinishLoopDeletes(beforeForIn);
                     return false;
                 }
             case SwitchStatement switchStatement:
@@ -2209,6 +2213,29 @@ public sealed partial class SemanticAnalyzer
             expressionTypes[returnStatement.Value] = function.ReturnType;
     }
 
+    // A loop body starts a list of its deletes; the deletion state before the loop is kept for the join after it.
+    private DeleteState BeginLoopDeletes()
+    {
+        _loopDeletes.Push([]);
+        return SnapshotDeleteState();
+    }
+
+    private void FinishLoopDeletes(DeleteState beforeLoop)
+    {
+        var afterBody = SnapshotDeleteState();
+        var bodyDeletes = _loopDeletes.Pop();
+        // A delete in the body runs again on the next iteration. If the body leaves its local deleted, that delete may repeat,
+        // so it is checked at run time.
+        foreach (var (statement, declaration) in bodyDeletes)
+            if (afterBody.Definite.Contains(declaration) || afterBody.Maybe.Contains(declaration))
+                _runtimeCheckedDeletes.Add(statement);
+        if (_loopDeletes.Count > 0)
+            foreach (var entry in bodyDeletes)
+                _loopDeletes.Peek().Add(entry);
+        // The body may run zero times, so after the loop only what is deleted on both paths is definitely deleted.
+        RestoreDeleteState(JoinDeleteStates(beforeLoop, afterBody));
+    }
+
     // The deletion state of the locals at one point in the analysis: deleted on every path, and deleted on some path.
     private sealed record DeleteState(HashSet<VariableDeclarationStatement> Definite, HashSet<VariableDeclarationStatement> Maybe);
 
@@ -2282,6 +2309,8 @@ public sealed partial class SemanticAnalyzer
                 if (_maybeDeletedLocals.Contains(declaration))
                     _runtimeCheckedDeletes.Add(statement);
                 _deletedAnywhere.Add(declaration);
+                if (_loopDeletes.Count > 0)
+                    _loopDeletes.Peek().Add((statement, declaration));
                 _deletedLocals.Add(declaration);
                 _maybeDeletedLocals.Add(declaration);
             }
