@@ -620,6 +620,30 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void NullReferenceExceptionIsARuntimeExceptionThatCarriesItsMessage()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            i32 main() {
+                try {
+                    throw new NullReferenceException("no object");
+                } catch (RuntimeException error) {
+                    io.print(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("no object", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
     public void BreakInsideACatchBodyLeavesTheLoop()
     {
         NativeProgram.RequireNativeToolchain();

@@ -73,3 +73,14 @@ public class Exception {
         this.message = message;
     }
 }
+
+public class RuntimeException : Exception {
+    public RuntimeException() : base() {}
+    public RuntimeException(string message) : base(message) {}
+}
+
+// Raised when a member, virtual or interface call uses a class reference that is null.
+public class NullReferenceException : RuntimeException {
+    public NullReferenceException() : base() {}
+    public NullReferenceException(string message) : base(message) {}
+}
