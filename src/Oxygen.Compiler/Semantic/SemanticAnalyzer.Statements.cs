@@ -1,0 +1,733 @@
+using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Diagnostics;
+using Oxygen.Compiler.Lexer;
+using Serilog;
+
+namespace Oxygen.Compiler.Semantic;
+
+// Statements: declarations, assignments, returns, control flow and switch.
+public sealed partial class SemanticAnalyzer
+{
+    // Whether entering a switch case returns on every path. A case that breaks out of the switch does not fall into the
+    // next case, so only a case that neither returns nor breaks inherits the next case's answer.
+    private bool CaseReturns(Func<bool> analyzeBody, bool nextCaseReturns)
+    {
+        var savedExitDepth = _switchExitDepth;
+        var savedBreak = _breakReached;
+        _switchExitDepth = _breakableDepth;
+        _breakReached = false;
+        // A case can be entered directly, so every case starts from the state before the switch. Its end is recorded for the join.
+        var frame = _switchFlows.Peek();
+        RestoreFlow(frame.Start);
+        var returns = analyzeBody();
+        frame.Ends.Add(SnapshotFlow());
+        var breaks = _breakReached;
+        _switchExitDepth = savedExitDepth;
+        _breakReached = savedBreak;
+        return returns || (!breaks && nextCaseReturns);
+    }
+
+    private bool AnalyzeStatement(
+        Statement statement,
+        Scope scope,
+        FunctionSymbol function,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        switch (statement)
+        {
+            case BlockStatement block:
+                return AnalyzeBlock(block, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            case IfStatement conditional:
+                var conditionType = AnalyzeExpression(conditional.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                RequireBoolean(conditionType, conditional.Condition.Location);
+                var thenScope = scope;
+                if (conditional.Condition is IsExpression { BindingName: { } binding, TargetType: var targetSyntax })
+                {
+                    var targetType = ResolveType(targetSyntax);
+                    thenScope = new Scope(scope, MarkVariableUsed);
+                    thenScope.Declare(binding, new VariableSymbol(targetType, false, conditional.Condition, false));
+                }
+                var beforeBranches = SnapshotDeleteState();
+                var beforeFlow = SnapshotFlow();
+                var thenReturns = AnalyzeStatement(conditional.Then, thenScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                var afterThen = SnapshotDeleteState();
+                var afterThenFlow = SnapshotFlow();
+                RestoreDeleteState(beforeBranches);
+                RestoreFlow(beforeFlow);
+                var elseReturns = conditional.Else is not null
+                    && AnalyzeStatement(conditional.Else, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                var afterElse = SnapshotDeleteState();
+                // A branch that returns does not reach the code after the if, so only the other branch's deletions count.
+                if (thenReturns && !elseReturns)
+                    RestoreDeleteState(afterElse);
+                else if (elseReturns && !thenReturns)
+                    RestoreDeleteState(afterThen);
+                else if (!thenReturns && !elseReturns)
+                    RestoreDeleteState(JoinDeleteStates(afterThen, afterElse));
+                RestoreFlow(JoinFlows(afterThenFlow, SnapshotFlow()));
+                return conditional.Else is not null && thenReturns && elseReturns;
+            case WhileStatement whileStatement:
+                var whileType = AnalyzeExpression(whileStatement.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                RequireBoolean(whileType, whileStatement.Condition.Location);
+                var beforeWhile = BeginLoopDeletes();
+                var flowBeforeWhile = SnapshotFlow();
+                _breakStates.Push([]);
+                _loopDepth++;
+                _breakableDepth++;
+                AnalyzeStatement(whileStatement.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                _breakableDepth--;
+                _loopDepth--;
+                FinishLoopDeletes(beforeWhile);
+                RestoreFlow(AfterLoopFlow(flowBeforeWhile, _breakStates.Pop(),
+                    whileStatement.Condition is BooleanLiteralExpression { Value: true }));
+                return false;
+            case ForStatement forStatement:
+                var loopScope = new Scope(scope, MarkVariableUsed);
+                if (forStatement.Initializer is not null)
+                    AnalyzeStatement(forStatement.Initializer, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                if (forStatement.Condition is not null)
+                {
+                    var forType = AnalyzeExpression(forStatement.Condition, loopScope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                    RequireBoolean(forType, forStatement.Condition.Location);
+                }
+                var beforeFor = BeginLoopDeletes();
+                var flowBeforeFor = SnapshotFlow();
+                _breakStates.Push([]);
+                _loopDepth++;
+                _breakableDepth++;
+                AnalyzeStatement(forStatement.Body, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                if (forStatement.Increment is not null)
+                    AnalyzeStatement(forStatement.Increment, loopScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                _breakableDepth--;
+                _loopDepth--;
+                FinishLoopDeletes(beforeFor);
+                RestoreFlow(AfterLoopFlow(flowBeforeFor, _breakStates.Pop(),
+                    forStatement.Condition is null or BooleanLiteralExpression { Value: true }));
+                return false;
+            case ForInStatement forInStatement:
+                {
+                    if (!forInStatement.VariableType.IsInferred)
+                        throw Error("For-in iteration variables must use 'var'", forInStatement.VariableType.Location);
+                    var collectionType = AnalyzeExpression(forInStatement.Collection, scope, functions, moduleName,
+                        imports, expressionTypes, resolvedCalls);
+                    SemanticType iterationElement;
+                    if (collectionType.IsArray && collectionType.ElementType is not null)
+                    {
+                        // Fixed arrays use the intrinsic lowering path for now.
+                        // User-defined collections below must satisfy iter/next.
+                        iterationElement = collectionType.ElementType;
+                    }
+                    else if (!collectionType.IsClass
+                             || !_classesByName.TryGetValue(collectionType.StructName!, out var collectionClass))
+                        throw Error($"For-in requires a fixed array or iterator-protocol collection, got {collectionType}",
+                            forInStatement.Collection.Location);
+                    else
+                    {
+                        var iterCandidates = GetClassMethods(collectionClass.Name, [])
+                            .Where(method => method.Name == "iter" && method.Parameters.Count == 0).ToArray();
+                        if (iterCandidates.Length != 1)
+                            throw Error($"Collection class '{collectionClass.Name}' must declare exactly one iter() method",
+                                forInStatement.Collection.Location);
+                        var iter = iterCandidates[0];
+                        var iterCall = new CallExpression($"{collectionClass.Name}.iter", [],
+                            forInStatement.Collection.Location);
+                        var iteratorType = iter.ReturnType;
+                        if (!iteratorType.IsClass || !_classesByName.TryGetValue(iteratorType.StructName!, out var iteratorClass))
+                            throw Error("Iterator 'iter()' must return an iterator class", iterCall.Location);
+                        // The receiver for next() is represented by the iterator value
+                        // in the lowering; resolve the declared method directly here.
+                        var nextCandidates = GetClassMethods(iteratorClass.Name, [])
+                            .Where(method => method.Name == "next" && method.Parameters.Count == 0).ToArray();
+                        if (nextCandidates.Length != 1)
+                            throw Error($"Iterator class '{iteratorClass.Name}' must declare exactly one next() method",
+                                forInStatement.Collection.Location);
+                        var next = nextCandidates[0];
+                        var option = next.ReturnType;
+                        if (!option.IsUnion || !string.Equals(option.EnumName, "Option", StringComparison.Ordinal)
+                            || option.TypeArguments is not { Count: 1 })
+                            throw Error("Iterator next() must return Option<T> with the iteration element type",
+                                forInStatement.Collection.Location);
+                        iterationElement = option.TypeArguments[0];
+                        _iteratorProtocols[forInStatement] = new IteratorProtocol(
+                            forInStatement.Collection, iterCall, iter, next, iterationElement, option);
+                        _usedFunctions.Add(iter);
+                        _usedFunctions.Add(next);
+                    }
+                    var forInScope = new Scope(scope, MarkVariableUsed);
+                    if (forInScope.ContainsInCurrentScope(forInStatement.VariableName))
+                        throw Error($"Variable '{forInStatement.VariableName}' is already declared in this scope",
+                            forInStatement.Location, forInStatement.VariableName.Length);
+                    var variable = new VariableSymbol(iterationElement, false,
+                        new VariableDeclarationStatement(forInStatement.VariableType, forInStatement.VariableName, false,
+                            null, forInStatement.Location), false);
+                    forInScope.Declare(forInStatement.VariableName, variable);
+                    _declaredVariables.Add(variable);
+                    var beforeForIn = BeginLoopDeletes();
+                    var flowBeforeForIn = SnapshotFlow();
+                    _breakStates.Push([]);
+                    _loopDepth++;
+                    _breakableDepth++;
+                    AnalyzeStatement(forInStatement.Body, forInScope, function, functions, moduleName, imports,
+                        expressionTypes, resolvedCalls);
+                    _breakableDepth--;
+                    _loopDepth--;
+                    FinishLoopDeletes(beforeForIn);
+                    RestoreFlow(AfterLoopFlow(flowBeforeForIn, _breakStates.Pop(), alwaysTrue: false));
+                    return false;
+                }
+            case SwitchStatement switchStatement:
+                {
+                    var valueType = AnalyzeExpression(switchStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                    _switchFlows.Push((SnapshotFlow(), []));
+                    _breakStates.Push([]);
+                    _breakableDepth++;
+                    try
+                    {
+                        if (valueType.IsUnion)
+                        {
+                            var union = _unionsByName[valueType.EnumName!];
+                            var unionSubstitutions = union.DeclaredTypeParameters
+                                .Zip(valueType.TypeArguments ?? [], (name, type) => (name, type))
+                                .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
+                            var seen = new HashSet<string>(StringComparer.Ordinal);
+                            var caseReturns = new bool[switchStatement.Cases.Count];
+                            for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
+                            {
+                                var item = switchStatement.Cases[index];
+                                if (item.IsDefault || item.Value is not null)
+                                    throw Error("Union switches require named union cases", item.Location);
+                                if (item.CaseName is null || !seen.Add(item.CaseName)
+                                    || !union.CasesByName.TryGetValue(item.CaseName, out var unionCase))
+                                    throw Error($"Unknown or duplicate union case '{item.CaseName}'", item.Location);
+                                if ((item.BindingName is null) != (unionCase.PayloadType is null))
+                                    throw Error($"Union case '{item.CaseName}' {(unionCase.PayloadType is null ? "does not have" : "requires")} a payload binding", item.Location);
+                                var caseScope = new Scope(scope, MarkVariableUsed);
+                                if (item.BindingName is not null)
+                                    caseScope.Declare(item.BindingName, new VariableSymbol(
+                                        SubstituteGenericType(unionCase.PayloadType!, unionSubstitutions),
+                                        false, item, false));
+                                caseReturns[index] = CaseReturns(
+                                    () => AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                                    index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                            }
+                            if (seen.Count != union.Cases.Count)
+                                throw Error($"Switch must handle every case of union '{union.Name}'", switchStatement.Location);
+                            return caseReturns.Length > 0 && caseReturns[0];
+                        }
+
+                        if (switchStatement.Cases.Any(item => item.PatternType is not null))
+                        {
+                            if (!valueType.IsClass && !valueType.IsInterface)
+                                throw Error("Type-pattern switches require a class or interface value", switchStatement.Value.Location);
+                            var caseReturns = new bool[switchStatement.Cases.Count];
+                            for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
+                            {
+                                var item = switchStatement.Cases[index];
+                                if (item.IsDefault)
+                                {
+                                    if (item.PatternType is not null || item.BindingName is not null)
+                                        throw Error("Default switch cases cannot bind a value", item.Location);
+                                }
+                                else
+                                {
+                                    if (item.PatternType is null || item.Value is not null || item.CaseName is not null)
+                                        throw Error("Type-pattern switches require 'case is Type' labels", item.Location);
+                                    var targetType = AnalyzeTypePattern(item.PatternType, valueType, item.Location);
+                                    if (item.BindingName is not null)
+                                    {
+                                        var caseScope = new Scope(scope, MarkVariableUsed);
+                                        caseScope.Declare(item.BindingName, new VariableSymbol(targetType, false, item, false));
+                                        caseReturns[index] = CaseReturns(
+                                            () => AnalyzeStatement(item.Body, caseScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                                            index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                                    }
+                                    else
+                                    {
+                                        caseReturns[index] = CaseReturns(
+                                            () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                                            index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                                    }
+                                    continue;
+                                }
+                                caseReturns[index] = CaseReturns(
+                                    () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                                    index + 1 < caseReturns.Length && caseReturns[index + 1]);
+                            }
+                            return caseReturns.Length > 0 && caseReturns[0];
+                        }
+
+                        if (!IsSwitchComparable(valueType))
+                            throw Error($"Switch requires a comparable value, got {valueType}", switchStatement.Value.Location);
+                        var seenLabels = new HashSet<string>(StringComparer.Ordinal);
+                        var hasDefault = false;
+                        var caseReturnsForValue = new bool[switchStatement.Cases.Count];
+                        for (var index = switchStatement.Cases.Count - 1; index >= 0; index--)
+                        {
+                            var item = switchStatement.Cases[index];
+                            if (item.CaseName is not null || item.BindingName is not null)
+                                throw Error("Value switches require constant case labels", item.Location);
+                            if (item.IsDefault)
+                            {
+                                if (hasDefault)
+                                    throw Error("A switch can contain only one default case", item.Location);
+                                hasDefault = true;
+                            }
+                            else
+                            {
+                                if (item.Value is null)
+                                    throw Error("Switch case is missing a value", item.Location);
+                                var labelType = AnalyzeExpression(item.Value, scope, functions, moduleName, imports,
+                                    expressionTypes, resolvedCalls);
+                                if (!IsConstantSwitchLabel(item.Value, labelType, valueType)
+                                    || (labelType != valueType
+                                        && !(valueType.IsPointer && item.Value is NullLiteralExpression)
+                                        && !CanAssign(valueType, item.Value, labelType)))
+                                    throw Error($"Switch case value must be a constant comparable with {valueType}", item.Location);
+                                if (!seenLabels.Add(SwitchLabelKey(item.Value)))
+                                    throw Error("Duplicate switch case value", item.Location);
+                            }
+
+                            caseReturnsForValue[index] = CaseReturns(
+                                () => AnalyzeStatement(item.Body, scope, function, functions, moduleName, imports,
+                                    expressionTypes, resolvedCalls),
+                                index + 1 < caseReturnsForValue.Length && caseReturnsForValue[index + 1]);
+                        }
+                        return hasDefault && caseReturnsForValue.Length > 0 && caseReturnsForValue[0];
+                    }
+                    finally
+                    {
+                        _breakableDepth--;
+                        // After the switch: the end of every case that is reached, every break, and the state where no case
+                        // matches. A union switch that names every case has no such path.
+                        var (switchStart, caseEnds) = _switchFlows.Pop();
+                        var breaks = _breakStates.Pop();
+                        var exhaustive = switchStatement.Cases.Any(item => item.IsDefault) || valueType.IsUnion;
+                        var afterSwitch = exhaustive ? UnreachableFlow() : switchStart;
+                        foreach (var state in caseEnds.Concat(breaks))
+                            afterSwitch = JoinFlows(afterSwitch, state);
+                        RestoreFlow(afterSwitch);
+                    }
+                }
+            case BreakStatement breakStatement when _breakableDepth == 0:
+                throw Error("'break' is only valid inside a loop or switch", breakStatement.Location);
+            case ContinueStatement continueStatement when _loopDepth == 0:
+                throw Error("'continue' is only valid inside a loop", continueStatement.Location);
+            case BreakStatement:
+                // A break that leaves the switch being analyzed ends the case without falling into the next one.
+                if (_breakableDepth == _switchExitDepth)
+                    _breakReached = true;
+                _breakStates.Peek().Add(SnapshotFlow());
+                _reachable = false;
+                return false;
+            case ContinueStatement:
+                _reachable = false;
+                return false;
+            case VariableDeclarationStatement declaration:
+                AnalyzeVariableDeclaration(declaration, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                if (declaration.Initializer is null)
+                    _unassignedLocals.Add(declaration);
+                return false;
+            case AssignmentStatement assignment:
+                AnalyzeAssignment(assignment, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                return false;
+            case ReturnStatement returnStatement:
+                AnalyzeReturn(returnStatement, function, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                _reachable = false;
+                return true;
+            case DeleteStatement deleteStatement:
+                AnalyzeDelete(deleteStatement, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                return false;
+            case ThrowStatement throwStatement:
+                {
+                    var thrownType = AnalyzeExpression(throwStatement.Value, scope, functions, moduleName, imports,
+                        expressionTypes, resolvedCalls);
+                    if (!IsExceptionType(thrownType))
+                        throw Error($"Only exception class values can be thrown, got {thrownType}",
+                            throwStatement.Value.Location);
+                    _reachable = false;
+                    return true;
+                }
+            case TryStatement tryStatement:
+                {
+                    var beforeTry = SnapshotFlow();
+                    var tryReturns = AnalyzeBlock(tryStatement.Body, scope, function, functions, moduleName, imports,
+                        expressionTypes, resolvedCalls);
+                    var afterCatches = SnapshotFlow();
+                    var allCatchesReturn = true;
+                    var catchAllSeen = false;
+                    foreach (var (catchClause, index) in tryStatement.Catches.Select((item, index) => (item, index)))
+                    {
+                        SemanticType? catchType = null;
+                        if (catchClause.ExceptionType is not null)
+                        {
+                            if (catchAllSeen)
+                                throw Error("A typed catch cannot follow a catch-all clause", catchClause.Location);
+                            catchType = ResolveType(catchClause.ExceptionType);
+                            if (!IsExceptionType(catchType))
+                                throw Error($"Catch type '{catchType}' must be an exception class",
+                                    catchClause.ExceptionType.Location);
+                        }
+                        else
+                        {
+                            if (catchAllSeen)
+                                throw Error("A try statement cannot contain multiple catch-all clauses", catchClause.Location);
+                            catchAllSeen = true;
+                            if (index != tryStatement.Catches.Count - 1)
+                                throw Error("The catch-all clause must be last", catchClause.Location);
+                        }
+
+                        var catchScope = scope;
+                        if (catchClause.BindingName is not null)
+                        {
+                            catchScope = new Scope(scope, MarkVariableUsed);
+                            catchScope.Declare(catchClause.BindingName,
+                                new VariableSymbol(catchType!, false, catchClause, false));
+                        }
+
+                        // A catch can be entered from any point in the try body, so it starts from the state before the try.
+                        RestoreFlow(beforeTry);
+                        var catchReturns = AnalyzeBlock(catchClause.Body, catchScope, function, functions, moduleName,
+                            imports, expressionTypes, resolvedCalls);
+                        allCatchesReturn &= catchReturns;
+                        afterCatches = JoinFlows(afterCatches, SnapshotFlow());
+                    }
+
+                    var finallyReturns = false;
+                    if (tryStatement.Finally is null)
+                    {
+                        RestoreFlow(afterCatches);
+                    }
+                    else
+                    {
+                        // The finally block also runs on the exceptional paths, so it starts from every state the try can leave.
+                        // Code after the try is reached only if the normal paths reach it.
+                        var finallyStart = new HashSet<VariableDeclarationStatement>(
+                            beforeTry.Unassigned.Concat(afterCatches.Unassigned), ReferenceEqualityComparer.Instance);
+                        RestoreFlow(new FlowState(finallyStart, beforeTry.Reachable));
+                        finallyReturns = AnalyzeBlock(tryStatement.Finally, scope, function, functions, moduleName, imports,
+                            expressionTypes, resolvedCalls);
+                        var afterFinally = SnapshotFlow();
+                        // The normal path is the one that leaves the try: the finally block's assignments apply to it.
+                        var assignedByFinally = finallyStart.Where(declaration => !afterFinally.Unassigned.Contains(declaration));
+                        var normalAfter = afterCatches.Unassigned.Where(declaration => !assignedByFinally.Contains(declaration));
+                        RestoreFlow(new FlowState(
+                            new HashSet<VariableDeclarationStatement>(normalAfter, ReferenceEqualityComparer.Instance),
+                            afterCatches.Reachable && afterFinally.Reachable));
+                    }
+                    return finallyReturns || (tryReturns && allCatchesReturn);
+                }
+            case ExpressionStatement expressionStatement:
+                AnalyzeExpression(
+                    expressionStatement.Expression,
+                    scope,
+                    functions,
+                    moduleName,
+                    imports,
+                    expressionTypes,
+                    resolvedCalls,
+                    allowVoid: true);
+                return false;
+            default:
+                throw new InvalidOperationException($"Unsupported statement type {statement.GetType().Name}.");
+        }
+    }
+
+    private void RequireBoolean(SemanticType type, SourceLocation location)
+    {
+        if (type.Primitive != PrimitiveType.Bool || type.Kind != SemanticTypeKind.Primitive)
+            throw Error($"Loop and conditional conditions must be bool, got {type}", location);
+    }
+
+    private bool IsExceptionType(SemanticType type)
+    {
+        if (!type.IsClass || type.StructName is null || !_classesByName.ContainsKey(type.StructName))
+            return false;
+        return string.Equals(type.StructName, "Exception", StringComparison.Ordinal)
+               || IsClassDerivedFrom(type.StructName, "Exception");
+    }
+
+    private void AnalyzeVariableDeclaration(
+        VariableDeclarationStatement declaration,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        if (declaration.Type.IsInferred && declaration.Initializer is null)
+        {
+            throw Error($"Variable '{declaration.Name}' using 'var' requires an initializer", declaration.Location, declaration.Name.Length);
+        }
+
+        if (scope.ContainsInCurrentScope(declaration.Name))
+        {
+            throw Error($"Variable '{declaration.Name}' is already declared in this scope", declaration.Location, declaration.Name.Length);
+        }
+
+        var initializerType = declaration.Initializer is null
+            ? (SemanticType?)null
+            : AnalyzeExpression(declaration.Initializer, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+                expectedType: declaration.Type.IsInferred ? null : ResolveType(declaration.Type));
+        var type = declaration.Type.IsInferred
+            ? initializerType!
+            : ResolveType(declaration.Type);
+
+        if (type.IsVoid)
+        {
+            throw Error($"Variable '{declaration.Name}' cannot have type void", declaration.Location, declaration.Name.Length);
+        }
+
+        if (initializerType is { IsArray: true } && type.IsArray
+            && initializerType.ArrayLength != type.ArrayLength)
+        {
+            throw Error(
+                $"Array initializer for '{declaration.Name}' expects {type.ArrayLength} element(s), got {initializerType.ArrayLength}",
+                declaration.Initializer!.Location);
+        }
+
+        if (initializerType is not null && !CanAssign(type, declaration.Initializer!, initializerType))
+        {
+            throw Error(
+                $"Cannot initialize '{declaration.Name}' with {initializerType}; expected {type}",
+                declaration.Initializer!.Location);
+        }
+        if (declaration.Initializer is NullLiteralExpression && type.IsPointer)
+            expressionTypes[declaration.Initializer] = type;
+
+        var variable = new VariableSymbol(type, declaration.IsConst, declaration, false);
+        scope.Declare(declaration.Name, variable);
+        _declaredVariables.Add(variable);
+        if (type.IsPointer && declaration.Initializer is NullLiteralExpression)
+            _definitelyNullVariables.Add(variable);
+    }
+
+    private void AnalyzeAssignment(
+        AssignmentStatement assignment,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        // Assigning to a variable is not a use of it, so a deleted variable can be given a new value.
+        var targetType = assignment.Target is IdentifierExpression assignedIdentifier
+            ? AssignmentTargetType(assignedIdentifier, scope, expressionTypes)
+            : AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        // A compound assignment reads its target before it writes it.
+        if (assignment.Operator != TokenKind.Equals && assignment.Target is IdentifierExpression compoundTarget
+            && scope.Lookup(compoundTarget.Name, compoundTarget.Location).Declaration is VariableDeclarationStatement compoundDeclaration)
+            CheckAssigned(compoundDeclaration, compoundTarget.Name, compoundTarget.Location);
+        var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            expectedType: targetType);
+        if (assignment.Target is IdentifierExpression reassigned
+            && scope.Lookup(reassigned.Name, reassigned.Location).Declaration is VariableDeclarationStatement reassignedDeclaration)
+        {
+            _deletedLocals.Remove(reassignedDeclaration);
+            _maybeDeletedLocals.Remove(reassignedDeclaration);
+            _unassignedLocals.Remove(reassignedDeclaration);
+        }
+        if (assignment.Operator != TokenKind.Equals)
+        {
+            if (targetType.IsPointer)
+            {
+                if (assignment.Operator is not (TokenKind.PlusEquals or TokenKind.MinusEquals)
+                    || !valueType.IsInteger)
+                    throw Error($"Operator '{assignment.Operator}' is not valid for pointer operands", assignment.Location);
+            }
+            else if (targetType.IsInteger && valueType.IsInteger)
+            {
+                // All integer compound operators are valid.
+            }
+            else if (targetType.IsNumeric && valueType.IsNumeric
+                     && assignment.Operator is TokenKind.PlusEquals or TokenKind.MinusEquals
+                        or TokenKind.StarEquals or TokenKind.SlashEquals)
+            {
+            }
+            else
+            {
+                throw Error($"Operator '{assignment.Operator}' requires compatible operands", assignment.Location);
+            }
+        }
+        else if (!CanAssign(targetType, assignment.Value, valueType))
+        {
+            throw Error($"Cannot assign {valueType} to target of type {targetType}", assignment.Value.Location);
+        }
+
+        ValidateWritableTarget(assignment.Target, scope);
+        TrackPointerAssignment(assignment, assignment.Value, valueType, scope);
+    }
+
+    private void ValidateWritableTarget(Expression target, Scope scope)
+    {
+        if (target is IdentifierExpression identifier)
+        {
+            var variable = scope.Lookup(identifier.Name, identifier.Location);
+            if (variable.IsConst)
+                throw Error($"Cannot assign to const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
+        }
+        else if (target is MemberAccessExpression member)
+        {
+            if (member.Target is IdentifierExpression memberIdentifier
+                && scope.Lookup(memberIdentifier.Name, memberIdentifier.Location).IsConst)
+                throw Error($"Cannot assign to a field of const variable '{memberIdentifier.Name}'", target.Location,
+                    memberIdentifier.Name.Length);
+            var targetClass = member.Target is ThisExpression && _currentOwnerClass is not null
+                ? _currentOwnerClass
+                : member.Target is IdentifierExpression classIdentifier
+                    && scope.Lookup(classIdentifier.Name, classIdentifier.Location).Type.IsClass
+                    ? _classesByName[scope.Lookup(classIdentifier.Name, classIdentifier.Location).Type.StructName!]
+                    : null;
+            var field = targetClass?.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+            if (field is not null && field.IsConst && !_currentIsConstructor)
+                throw Error($"Cannot assign to const field '{field.Name}'", target.Location, field.Name.Length);
+            ValidatePropertyWrite(member, scope);
+        }
+        else if (target is IndexExpression index
+                 && index.Target is IdentifierExpression indexIdentifier
+                 && scope.Lookup(indexIdentifier.Name, indexIdentifier.Location).IsConst)
+            throw Error($"Cannot assign to an element of const variable '{indexIdentifier.Name}'", target.Location,
+                indexIdentifier.Name.Length);
+        else if (target is not (UnaryExpression { Operator: TokenKind.Star } or IndexExpression or MemberAccessExpression))
+        {
+            throw Error("Assignment target is not addressable", target.Location);
+        }
+    }
+
+    private void ValidatePropertyWrite(MemberAccessExpression member, Scope scope)
+    {
+        var targetClass = member.Target switch
+        {
+            ThisExpression when _currentOwnerClass is not null => _currentOwnerClass,
+            IdentifierExpression identifier when scope.Lookup(identifier.Name, identifier.Location).Type.IsClass
+                => _classesByName[scope.Lookup(identifier.Name, identifier.Location).Type.StructName!],
+            _ => null
+        };
+        if (targetClass is null)
+            return;
+        var property = FindProperty(targetClass, member.MemberName);
+        if (property is null)
+            return;
+        var accessor = property.Declaration.Accessors.FirstOrDefault(candidate =>
+            candidate.Kind == PropertyAccessorKind.Set)
+            ?? property.Declaration.Accessors.FirstOrDefault(candidate =>
+                candidate.Kind == PropertyAccessorKind.Init);
+        if (accessor is null)
+            throw Error($"Property '{property.Name}' is read-only", member.Location, property.Name.Length);
+        if (accessor.Kind == PropertyAccessorKind.Init && !_currentIsConstructor)
+            throw Error($"Property '{property.Name}' can only be assigned in a constructor", member.Location,
+                property.Name.Length);
+        EnsureAccessorVisible(property, accessor, member.Location);
+    }
+
+    private void TrackPointerAssignment(
+        AssignmentStatement assignment,
+        Expression value,
+        SemanticType valueType,
+        Scope scope)
+    {
+        if (assignment.Target is IdentifierExpression assignedIdentifier)
+        {
+            var variable = scope.Lookup(assignedIdentifier.Name, assignedIdentifier.Location);
+            if (IsOwnedClass(valueType) && assignment.Value is IdentifierExpression sourceIdentifier)
+            {
+                var source = scope.Lookup(sourceIdentifier.Name, sourceIdentifier.Location);
+                if (source.Declaration is VariableDeclarationStatement sourceDeclaration
+                    && scope.LookupDepth(assignedIdentifier.Name, assignedIdentifier.Location)
+                    > scope.LookupDepth(sourceIdentifier.Name, sourceIdentifier.Location))
+                    _escapingClassLocals.Add(sourceDeclaration);
+            }
+            if (variable.Type.IsPointer && assignment.Operator == TokenKind.Equals)
+            {
+                if (value is NullLiteralExpression)
+                    _definitelyNullVariables.Add(variable);
+                else
+                    _definitelyNullVariables.Remove(variable);
+            }
+        }
+    }
+
+    private void AnalyzeReturn(
+        ReturnStatement returnStatement,
+        FunctionSymbol function,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        if (returnStatement.Value is null)
+        {
+            if (!function.ReturnType.IsVoid)
+            {
+                throw Error($"Function '{function.Name}' must return a value of type {function.ReturnType}", returnStatement.Location);
+            }
+
+            return;
+        }
+
+        if (function.ReturnType.IsVoid)
+        {
+            throw Error($"Void function '{function.Name}' cannot return a value", returnStatement.Value.Location);
+        }
+
+        var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            expectedType: function.ReturnType);
+        if (IsOwnedClass(valueType) && returnStatement.Value is IdentifierExpression identifier
+            && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
+            _escapingClassLocals.Add(declaration);
+        if (!CanAssign(function.ReturnType, returnStatement.Value, valueType))
+        {
+            throw Error(
+                $"Cannot return {valueType} from function '{function.Name}'; expected {function.ReturnType}",
+                returnStatement.Value.Location);
+        }
+        if (returnStatement.Value is NullLiteralExpression && function.ReturnType.IsPointer)
+            expressionTypes[returnStatement.Value] = function.ReturnType;
+    }
+
+    private SemanticType AssignmentTargetType(IdentifierExpression target, Scope scope,
+        IDictionary<Expression, SemanticType> expressionTypes)
+    {
+        var type = scope.Lookup(target.Name, target.Location).Type;
+        expressionTypes[target] = type;
+        return type;
+    }
+
+    private static bool IsSwitchComparable(SemanticType type) =>
+        type.IsInteger || type.IsEnum || type.Kind == SemanticTypeKind.String
+        || type.Primitive == PrimitiveType.Bool || type.IsPointer;
+
+    private static bool IsConstantSwitchLabel(Expression expression, SemanticType labelType, SemanticType selectorType)
+    {
+        if (selectorType.IsEnum)
+            return expression is MemberAccessExpression && labelType == selectorType;
+        if (selectorType.IsInteger)
+            return labelType.IsInteger
+                && expression is (IntegerLiteralExpression or UnaryExpression or BinaryExpression);
+        if (selectorType.Primitive == PrimitiveType.Bool)
+            return labelType.Primitive == PrimitiveType.Bool && expression is BooleanLiteralExpression;
+        if (selectorType.Kind == SemanticTypeKind.String)
+            return labelType.Kind == SemanticTypeKind.String && expression is StringLiteralExpression;
+        return selectorType.IsPointer && expression is NullLiteralExpression;
+    }
+
+    private static string SwitchLabelKey(Expression expression)
+    {
+        return expression switch
+        {
+            IntegerLiteralExpression integer when TryGetConstantInteger(integer, out var value) => $"i:{value}",
+            BooleanLiteralExpression boolean => $"b:{boolean.Value}",
+            StringLiteralExpression literal => $"s:{literal.Lexeme}",
+            MemberAccessExpression member => $"e:{member.Target}.{member.MemberName}",
+            _ => expression.ToString() ?? string.Empty
+        };
+    }
+
+}

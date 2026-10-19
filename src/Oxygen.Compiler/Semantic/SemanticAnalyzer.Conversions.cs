@@ -1,0 +1,257 @@
+using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Diagnostics;
+using Oxygen.Compiler.Lexer;
+using Serilog;
+
+namespace Oxygen.Compiler.Semantic;
+
+// Conversions: implicit and explicit conversions, and the overload conversion cost.
+public sealed partial class SemanticAnalyzer
+{
+    private SemanticType AnalyzeCast(
+        CastExpression cast,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        var target = ResolveType(cast.TargetType);
+        var operand = AnalyzeExpression(cast.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            expectedType: target);
+        if (target.IsEnum)
+        {
+            var enumSymbol = _enumsByName[target.EnumName!];
+            var underlying = SemanticType.FromPrimitive(enumSymbol.UnderlyingType);
+            if (operand != underlying)
+                throw Error($"Cannot cast {operand} to {target}; expected {underlying}", cast.Operand.Location);
+            if (TryGetConstantInteger(cast.Operand, out var value)
+                && !enumSymbol.Members.Any(member => member.Value == value))
+                throw Error($"Value {value} is not a member of enum '{enumSymbol.Name}'", cast.Operand.Location);
+            return target;
+        }
+
+        if (operand.IsEnum)
+        {
+            var enumSymbol = _enumsByName[operand.EnumName!];
+            if (target != SemanticType.FromPrimitive(enumSymbol.UnderlyingType))
+                throw Error($"Enum '{enumSymbol.Name}' can only be cast to {enumSymbol.UnderlyingType}", cast.TargetType.Location);
+            return target;
+        }
+
+        if (operand.IsNumeric && target.IsNumeric)
+            return target;
+
+        if (target.IsPointer && operand.IsNumeric && IsPointerInteger(operand))
+            return target;
+        if (operand.IsPointer && target.IsNumeric && IsPointerInteger(target))
+            return target;
+
+        if (target.IsPointer && operand.IsPointer &&
+            (target.IsOpaquePointer || operand.IsOpaquePointer))
+            return target;
+
+        if (IsReferenceCast(operand, target, out _))
+            return target;
+
+        throw Error($"Unsupported cast from {operand} to {target}", cast.Location);
+    }
+
+    private static bool FitsUnderlying(int value, PrimitiveType underlying) =>
+        underlying switch
+        {
+            PrimitiveType.I8 => value is >= sbyte.MinValue and <= sbyte.MaxValue,
+            PrimitiveType.U8 => value is >= byte.MinValue and <= byte.MaxValue,
+            PrimitiveType.I16 => value is >= short.MinValue and <= short.MaxValue,
+            PrimitiveType.U16 => value is >= ushort.MinValue and <= ushort.MaxValue,
+            PrimitiveType.I32 or PrimitiveType.U32 or PrimitiveType.I64 or PrimitiveType.U64 => value >= 0
+                || underlying is PrimitiveType.I32 or PrimitiveType.I64,
+            _ => false
+        };
+
+    private bool CanAssign(SemanticType target, Expression value, SemanticType actual) =>
+        ConversionCostOf(target, value, actual) is not null;
+
+    // How far an implicit conversion is from an exact match; smaller is closer. The fields are compared in order: any
+    // conversion loses to an exact match; a conversion within one kind (integer to integer, float to float) beats one
+    // that crosses kinds; a narrowing conversion (only ever of a fitting constant) loses to a widening one; and a class
+    // or interface is closer the fewer steps up the hierarchy it takes to reach it.
+    private readonly record struct ConversionCost(int NotExact, int CrossKind, int Narrowing, int Distance)
+        : IComparable<ConversionCost>
+    {
+        public static readonly ConversionCost Exact = new(0, 0, 0, 0);
+
+        public int CompareTo(ConversionCost other) =>
+            (NotExact, CrossKind, Narrowing, Distance).CompareTo((other.NotExact, other.CrossKind, other.Narrowing, other.Distance));
+    }
+
+    // The cost of implicitly converting an argument to a parameter type, or null when no implicit conversion exists.
+    private ConversionCost? ConversionCostOf(SemanticType target, Expression value, SemanticType actual)
+    {
+        if (SemanticTypeComparer.Instance.Equals(target, actual))
+            return ConversionCost.Exact;
+        if (target.IsUnion && actual.IsUnion
+            && target.EnumName == actual.EnumName
+            && ((actual.TypeArguments is null || actual.TypeArguments.Count == 0)
+                || SemanticTypeComparer.Instance.Equals(target, actual)))
+            return ConversionCost.Exact;
+        if (target.IsPointer && value is NullLiteralExpression)
+            return ConversionCost.Exact;
+        if (IsReferenceCast(actual, target, out var implicitConversion) && implicitConversion)
+            return new ConversionCost(1, 0, 0, HierarchyDistance(actual.StructName!, target.StructName!));
+        if (!target.IsNumeric || !actual.IsNumeric)
+            return null;
+
+        var crossKind = IsFloatingPointType(actual) != IsFloatingPointType(target) ? 1 : 0;
+        if (IsImplicitlySafeNumericConversion(actual, target))
+            return new ConversionCost(1, crossKind, 0, 0);
+        // Only an integer constant that fits may narrow implicitly. A float never converts implicitly unless widening.
+        if (IsFloatingPointType(actual))
+            return null;
+        if (!TryGetConstantNumber(value, out var constant) || !IsRepresentable(constant, target))
+            return null;
+        // An integer constant reaches f32 only when f32 holds its exact value.
+        if (target.Primitive == PrimitiveType.F32 && (double)(float)constant != constant)
+            return null;
+        return new ConversionCost(1, crossKind, NumericBitWidth(target) < NumericBitWidth(actual) ? 1 : 0, 0);
+    }
+
+    // The number of steps from a class up to an ancestor class or interface: base classes and implemented interfaces
+    // each count as one step. An interface reached through a base class is further than that base class.
+    private int HierarchyDistance(string sourceName, string targetName)
+    {
+        var frontier = new List<string> { sourceName };
+        var seen = new HashSet<string>(StringComparer.Ordinal) { sourceName };
+        for (var depth = 0; frontier.Count > 0; depth++)
+        {
+            if (frontier.Contains(targetName, StringComparer.Ordinal))
+                return depth;
+            var next = new List<string>();
+            foreach (var name in frontier)
+            {
+                if (!_classesByName.TryGetValue(name, out var cls))
+                    continue;
+                IEnumerable<string> parents = cls.BaseTypeName is null
+                    ? cls.InterfaceNames
+                    : cls.InterfaceNames.Prepend(cls.BaseTypeName);
+                foreach (var parent in parents)
+                    if (seen.Add(parent))
+                        next.Add(parent);
+            }
+
+            frontier = next;
+        }
+
+        return int.MaxValue;
+    }
+
+    private static bool IsFloatingPointType(SemanticType type) =>
+        type.Primitive is PrimitiveType.F32 or PrimitiveType.F64;
+
+    private static int NumericBitWidth(SemanticType type) =>
+        type.Primitive switch
+        {
+            PrimitiveType.F32 => 32,
+            PrimitiveType.F64 => 64,
+            { } primitive => IntegerBitWidth(primitive),
+            null => throw new InvalidOperationException($"Type '{type}' is not numeric.")
+        };
+
+    private bool IsReferenceCast(SemanticType source, SemanticType target, out bool implicitConversion)
+    {
+        implicitConversion = false;
+        if ((!source.IsClass && !source.IsInterface) || (!target.IsClass && !target.IsInterface))
+            return false;
+
+        if (source.IsClass && target.IsClass)
+        {
+            if (IsClassDerivedFrom(source.StructName!, target.StructName!))
+            {
+                implicitConversion = true;
+                return true;
+            }
+
+            return IsClassDerivedFrom(target.StructName!, source.StructName!);
+        }
+
+        if (source.IsClass && target.IsInterface)
+        {
+            if (!ClassImplementsInterface(source.StructName!, target.StructName!))
+                return false;
+
+            implicitConversion = true;
+            return true;
+        }
+
+        if (source.IsInterface && target.IsClass)
+            return ClassImplementsInterface(target.StructName!, source.StructName!);
+
+        return false;
+    }
+
+    private static bool IsPointerInteger(SemanticType type) =>
+        type.Primitive is PrimitiveType.USize or PrimitiveType.ISize;
+
+    private static bool IsImplicitlySafeNumericConversion(SemanticType source, SemanticType target)
+    {
+        if (source.Primitive == target.Primitive)
+            return true;
+        if (source.Primitive == PrimitiveType.F32 && target.Primitive == PrimitiveType.F64)
+            return true;
+        if (source.Primitive is not ({ } sourcePrimitive) || target.Primitive is not ({ } targetPrimitive))
+            return false;
+        // An integer converts to a float without loss when the float's significand holds every value of the integer:
+        // 24 bits for f32 (up to 16-bit integers) and 53 bits for f64 (up to 32-bit integers).
+        if (IsInteger(sourcePrimitive) && (targetPrimitive is PrimitiveType.F32 or PrimitiveType.F64))
+            return IntegerBitWidth(sourcePrimitive) <= (targetPrimitive == PrimitiveType.F64 ? 32 : 16);
+        if (!IsInteger(sourcePrimitive) || !IsInteger(targetPrimitive))
+            return false;
+
+        var sourceBits = IntegerBitWidth(sourcePrimitive);
+        var targetBits = IntegerBitWidth(targetPrimitive);
+        var sourceUnsigned = IsUnsigned(sourcePrimitive);
+        var targetUnsigned = IsUnsigned(targetPrimitive);
+        if (sourceUnsigned == targetUnsigned)
+            return targetBits >= sourceBits;
+        // Only an unsigned value fits a wider signed type; a negative signed value never fits an unsigned type.
+        return sourceUnsigned && targetBits > sourceBits;
+    }
+
+    private static bool IsInteger(PrimitiveType type) =>
+        type is PrimitiveType.I8 or PrimitiveType.I16 or PrimitiveType.I32 or PrimitiveType.I64
+            or PrimitiveType.U8 or PrimitiveType.U16 or PrimitiveType.U32 or PrimitiveType.U64
+            or PrimitiveType.USize or PrimitiveType.ISize;
+
+    private static bool IsUnsigned(PrimitiveType type) =>
+        type is PrimitiveType.U8 or PrimitiveType.U16 or PrimitiveType.U32 or PrimitiveType.U64 or PrimitiveType.USize;
+
+    private static int IntegerBitWidth(PrimitiveType type) =>
+        type is PrimitiveType.I8 or PrimitiveType.U8 ? 8
+        : type is PrimitiveType.I16 or PrimitiveType.U16 ? 16
+        : type is PrimitiveType.I32 or PrimitiveType.U32 ? 32
+        : 64;
+
+    private static bool IsRepresentable(double value, SemanticType target)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+            return false;
+        return target.Primitive switch
+        {
+            PrimitiveType.I8 => value >= sbyte.MinValue && value <= sbyte.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.U8 => value >= byte.MinValue && value <= byte.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.I16 => value >= short.MinValue && value <= short.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.U16 => value >= ushort.MinValue && value <= ushort.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.I32 => value >= int.MinValue && value <= int.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.U32 => value >= uint.MinValue && value <= uint.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.I64 => value >= long.MinValue && value <= long.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.U64 => value >= 0 && value <= ulong.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.ISize => value >= long.MinValue && value <= long.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.USize => value >= 0 && value <= ulong.MaxValue && value == Math.Truncate(value),
+            PrimitiveType.F32 => value >= -float.MaxValue && value <= float.MaxValue,
+            PrimitiveType.F64 => true,
+            _ => false
+        };
+    }
+
+}
