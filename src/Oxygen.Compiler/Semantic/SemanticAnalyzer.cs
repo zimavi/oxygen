@@ -805,11 +805,16 @@ public sealed partial class SemanticAnalyzer
             }
             foreach (var contract in GetInterfaceContracts(classSymbol, classSymbol.InterfaceNames))
             {
-                if (!classSymbol.Methods.Concat(inherited).Any(method =>
-                        method.Name == contract.Name && method.Parameters.Select(parameter => parameter.Type)
-                            .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type), SemanticTypeComparer.Instance)
-                        && SemanticTypeComparer.Instance.Equals(method.ReturnType, contract.ReturnType)))
+                var implementations = classSymbol.Methods.Concat(inherited).Where(method =>
+                    method.Name == contract.Name && method.Parameters.Select(parameter => parameter.Type)
+                        .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type), SemanticTypeComparer.Instance)
+                    && SemanticTypeComparer.Instance.Equals(method.ReturnType, contract.ReturnType)).ToList();
+                if (implementations.Count == 0)
                     throw Error($"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
+                        classSymbol.Declaration.Location);
+                // Interface members are public, so the implementation that satisfies the contract must be public too.
+                if (!implementations.Any(method => method.Visibility == Visibility.Public))
+                    throw Error($"Interface method '{contract.Name}' must be implemented as public in class '{classSymbol.Name}'",
                         classSymbol.Declaration.Location);
             }
             foreach (var contract in classSymbol.InterfaceNames.SelectMany(name => _interfacesByName[name].DeclaredProperties))

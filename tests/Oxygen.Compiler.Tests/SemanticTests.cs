@@ -1198,6 +1198,24 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RejectsAPrivateImplementationOfAnInterfaceMethod()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "interface Shape { i32 area(); } class Square : Shape { private i32 area() { return 4; } } i32 main() { return 0; }"));
+
+        Assert.Contains("must be implemented as public", exception.Message);
+    }
+
+    [Fact]
+    public void AcceptsAPublicImplementationOfAnInterfaceMethod()
+    {
+        var model = Analyze(
+            "interface Shape { i32 area(); } class Square : Shape { i32 area() { return 4; } } i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));
