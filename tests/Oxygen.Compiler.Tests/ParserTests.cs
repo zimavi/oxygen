@@ -391,13 +391,23 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesMultipleTypeParameterConstraintsSeparatedByAmpersand()
+    {
+        var unit = Parse("interface A { } interface B { } interface C { } void foo<T : A & B, R : C>() { } i32 main() { return 0; }");
+
+        var parameters = unit.Functions[0].DeclaredTypeParameters;
+        Assert.Equal(new[] { "A", "B" }, parameters[0].Constraints);
+        Assert.Equal(new[] { "C" }, parameters[1].Constraints);
+    }
+
+    [Fact]
     public void ParsesTypeParameterConstraints()
     {
         var unit = Parse("void show<T : Printable, U>(T value, U other) { } i32 main() { return 0; }");
 
         var parameters = unit.Functions[0].DeclaredTypeParameters;
-        Assert.Equal("Printable", parameters[0].Constraint);
-        Assert.Null(parameters[1].Constraint);
+        Assert.Equal(new[] { "Printable" }, parameters[0].Constraints);
+        Assert.Empty(parameters[1].Constraints);
     }
 
     [Fact]

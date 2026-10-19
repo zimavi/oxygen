@@ -1175,10 +1175,14 @@ public sealed partial class Parser
         do
         {
             var token = Consume(TokenKind.Identifier, "Expected a generic type parameter.");
-            string? constraint = null;
+            var constraints = new List<string>();
             if (Match(TokenKind.Colon))
-                constraint = ConsumeIdentifierLike("Expected an interface name after ':' in a type parameter.").Lexeme;
-            parameters.Add(new TypeParameterSyntax(token.Lexeme, token.Location) { Constraint = constraint });
+            {
+                constraints.Add(ConsumeIdentifierLike("Expected an interface name after ':' in a type parameter.").Lexeme);
+                while (Match(TokenKind.Ampersand))
+                    constraints.Add(ConsumeIdentifierLike("Expected an interface name after '&' in a type parameter.").Lexeme);
+            }
+            parameters.Add(new TypeParameterSyntax(token.Lexeme, token.Location) { Constraints = constraints });
         } while (Match(TokenKind.Comma));
 
         Consume(TokenKind.GreaterThan, "Expected '>' after generic type parameters.");

@@ -203,8 +203,8 @@ public sealed record TypeParameterSyntax(
     string Name,
     SourceLocation Location) : SyntaxNode(Location)
 {
-    // The interface a type argument must implement, written `<T : Interface>`.
-    public string? Constraint { get; init; }
+    // The interfaces a type argument must implement, written `<T : A & B>`. Empty when unconstrained.
+    public IReadOnlyList<string> Constraints { get; init; } = [];
 }
 
 public sealed record ParameterDeclaration(

@@ -234,6 +234,26 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RequiresEveryInterfaceOfAMultipleConstraint()
+    {
+        var declarations = "interface A { void a(); } interface B { void b(); } " +
+            "class Both : A, B { void a() { } void b() { } } class OnlyA : A { void a() { } } " +
+            "void both<T : A & B>(T value) { } ";
+
+        var model = new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse(declarations + "i32 main() { both(new Both()); return 0; }")
+        ]);
+        Assert.NotNull(model.MainFunction);
+
+        var exception = Assert.Throws<SemanticException>(() => new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse(declarations + "i32 main() { both(new OnlyA()); return 0; }")
+        ]));
+        Assert.Contains("does not satisfy the constraint 'B'", exception.Message);
+    }
+
+    [Fact]
     public void ChecksTypeArgumentsAgainstTheirConstraints()
     {
         var printable = "module std.io; public interface Printable { void write(); } " +

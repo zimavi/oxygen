@@ -39,16 +39,18 @@ public sealed partial class SemanticAnalyzer
     {
         for (var index = 0; index < parameters.Count && index < arguments.Count; index++)
         {
-            var constraint = parameters[index].Constraint;
-            if (constraint is null || ContainsGenericParameter(arguments[index]))
+            if (ContainsGenericParameter(arguments[index]))
                 continue;
-            if (!_interfacesByName.ContainsKey(constraint))
-                throw Error($"Interface '{constraint}' is not declared", parameters[index].Location, constraint.Length);
-            if (!Satisfies(arguments[index], constraint))
-                throw Error(
-                    $"Type '{arguments[index]}' does not satisfy the constraint '{constraint}' of type parameter " +
-                    $"'{parameters[index].Name}'",
-                    location);
+            foreach (var constraint in parameters[index].Constraints)
+            {
+                if (!_interfacesByName.ContainsKey(constraint))
+                    throw Error($"Interface '{constraint}' is not declared", parameters[index].Location, constraint.Length);
+                if (!Satisfies(arguments[index], constraint))
+                    throw Error(
+                        $"Type '{arguments[index]}' does not satisfy the constraint '{constraint}' of type parameter " +
+                        $"'{parameters[index].Name}'",
+                        location);
+            }
         }
     }
 
