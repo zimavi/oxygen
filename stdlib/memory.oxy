@@ -6,10 +6,17 @@ extern void* allocate(u64 size);
 @extern("oxygen_free")
 extern void deallocate(void* pointer);
 
+@extern("oxygen_realloc")
+extern void* reallocate(void* pointer, u64 size);
+
 public T* alloc<T>(u64 count) {
     return cast<T*>(allocate(count * sizeof<T>()));
 }
 
 public void free<T>(T* pointer) {
     deallocate(cast<void*>(pointer));
+}
+
+public T* realloc<T>(T* pointer, u64 count) {
+    return cast<T*>(reallocate(cast<void*>(pointer), count * sizeof<T>()));
 }

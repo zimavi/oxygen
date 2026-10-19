@@ -111,6 +111,7 @@ OXYGEN_RUNTIME_API uint8_t __oxygen_runtime_exception_matches(
 #endif
 
 void *oxygen_alloc(uint64_t size);
+void *oxygen_realloc(void *pointer, uint64_t size);
 void oxygen_free(void *pointer);
 
 void oxygen_write_stdout(const oxygen_string *value);

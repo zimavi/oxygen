@@ -11,3 +11,11 @@ public union Result<T, E> {
     Ok(T);
     Err(E);
 }
+
+interface Iterator<T> {
+	Option<T> next();
+}
+
+interface Iterable<T> {
+    Iterator<T> iter();
+}
