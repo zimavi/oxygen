@@ -1719,6 +1719,32 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ArrayLiteralTakesTheDeclaredElementType()
+    {
+        var model = Analyze("i32 main() { i64[2] wide = { 1, 2 }; f64[2] half = { 1, 2 }; return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ArrayLiteralElementThatDoesNotFitTheDeclaredElementTypeIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { u8[2] values = { 1, 300 }; return 0; }"));
+
+        Assert.Contains("Array literal element has type i32; expected u8", exception.Message);
+    }
+
+    [Fact]
+    public void ArrayLiteralElementOfAnotherTypeIsRejectedAgainstTheDeclaredElementType()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32[2] values = { 1, cast<i64>(2) }; return 0; }"));
+
+        Assert.Contains("Array literal element has type i64; expected i32", exception.Message);
+    }
+
+    [Fact]
     public void StatementAfterBreakIsReportedAsUnreachable()
     {
         var result = AnalyzeWithDiagnostics(

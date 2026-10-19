@@ -8,7 +8,11 @@ i32[3] values = { 10, 20, 30 };
 ```
 
 The length is part of the type. Array literals must contain exactly as many
-elements as the declared length, and every element must have the same type.
+elements as the declared length. Where an array type is expected, such as a
+declaration, assignment or return, the literal takes that element type, and each
+element must convert to it implicitly: `i64[2] wide = { 1, 2 };` is valid, and
+`u8[2] small = { 1, 300 };` is rejected. Without an expected array type, every
+element must have the same type.
 Array element types may be primitive types, pointers, strings, structs, or
 other fixed-size arrays.
 

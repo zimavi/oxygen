@@ -238,8 +238,14 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var result = LLVMValueRef.CreateConstNull(ToLlvmType(model.ExpressionTypes[literal], model));
+        // Each element converts to the array's element type, which can differ from the element's own type.
+        var elementType = model.ExpressionTypes[literal].ElementType!;
         for (var i = 0; i < literal.Elements.Count; i++)
-            result = builder.BuildInsertValue(result, EmitExpression(context, builder, literal.Elements[i], values, storage, model, llvmFunctions), (uint)i, "array.element");
+        {
+            var element = EmitExpression(context, builder, literal.Elements[i], values, storage, model, llvmFunctions);
+            element = CoerceValue(builder, element, model.ExpressionTypes[literal.Elements[i]], elementType, model);
+            result = builder.BuildInsertValue(result, element, (uint)i, "array.element");
+        }
         return result;
     }
 

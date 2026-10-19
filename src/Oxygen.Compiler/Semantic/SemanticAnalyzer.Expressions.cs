@@ -48,7 +48,7 @@ public sealed partial class SemanticAnalyzer
                 pattern, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             StructLiteralExpression literal => AnalyzeStructLiteral(
                 literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
-            ArrayLiteralExpression literal => AnalyzeArrayLiteral(literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            ArrayLiteralExpression literal => AnalyzeArrayLiteral(literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             IndexExpression index => AnalyzeIndex(index, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             MemberAccessExpression member => AnalyzeMemberAccess(
                 member, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
@@ -141,9 +141,21 @@ public sealed partial class SemanticAnalyzer
         return SemanticType.Union(union.Name);
     }
 
-    private SemanticType AnalyzeArrayLiteral(ArrayLiteralExpression literal, Scope scope, IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types, IDictionary<CallExpression, FunctionSymbol> calls)
+    // An array literal in a context that expects an array takes that element type, and each element must convert to it
+    // implicitly, so `i64[2] a = { 1, 2 };` is valid. Without an expected array type, the first element sets the type.
+    private SemanticType AnalyzeArrayLiteral(ArrayLiteralExpression literal, Scope scope, IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types, IDictionary<CallExpression, FunctionSymbol> calls, SemanticType? expectedType)
     {
         if (literal.Elements.Count == 0) throw Error("Array literals cannot be empty", literal.Location);
+        if (expectedType is { IsArray: true, ElementType: { } expectedElement })
+        {
+            foreach (var value in literal.Elements)
+            {
+                var actual = AnalyzeExpression(value, scope, functions, moduleName, imports, types, calls, expectedType: expectedElement);
+                if (!CanAssign(expectedElement, value, actual))
+                    throw Error($"Array literal element has type {actual}; expected {expectedElement}", value.Location);
+            }
+            return SemanticType.ArrayOf(expectedElement, literal.Elements.Count);
+        }
         var element = AnalyzeExpression(literal.Elements[0], scope, functions, moduleName, imports, types, calls);
         foreach (var value in literal.Elements.Skip(1))
         {
