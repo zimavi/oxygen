@@ -15,6 +15,7 @@ public sealed class ConstructorChainingIntegrationTests : IDisposable
     [Fact]
     public void RunsBaseAndThisConstructorsBeforeDerivedInitialization()
     {
+        NativeProgram.RequireNativeToolchain();
         var run = BuildAndRun(
             """
             import std.io;
@@ -60,6 +61,7 @@ public sealed class ConstructorChainingIntegrationTests : IDisposable
     [Fact]
     public void ExceptionSubclassesPassMessagesThroughStandardConstructors()
     {
+        NativeProgram.RequireNativeToolchain();
         var run = BuildAndRun(
             """
             import std.io;
@@ -93,6 +95,7 @@ public sealed class ConstructorChainingIntegrationTests : IDisposable
     [Fact]
     public void ChainsGenericBaseConstructorsAndSelectsOverloadsByArgumentType()
     {
+        NativeProgram.RequireNativeToolchain();
         var run = BuildAndRun(
             """
             class Boxed<T> {
@@ -156,7 +159,7 @@ public sealed class ConstructorChainingIntegrationTests : IDisposable
         File.WriteAllText(sourcePath, source);
         var executable = Path.Combine(_directory, "main.exe");
 
-        var build = NativeProgram.RunProcess(Path.Combine(AppContext.BaseDirectory, "oxygenc.exe"),
+        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
             ["build", sourcePath, "-o", executable, "-r", NativeProgram.RuntimeLibrary]);
         Assert.True(build.ExitCode == 0, build.Error);
 

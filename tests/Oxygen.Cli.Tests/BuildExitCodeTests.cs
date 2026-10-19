@@ -48,20 +48,6 @@ public sealed class BuildExitCodeTests : IDisposable
         return path;
     }
 
-    private static int RunCompiler(params string[] arguments)
-    {
-        // The apphost copied next to the test assembly by the project file.
-        var startInfo = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "oxygenc.exe"))
-        {
-            RedirectStandardError = true,
-            RedirectStandardOutput = true,
-            UseShellExecute = false
-        };
-        foreach (var argument in arguments)
-            startInfo.ArgumentList.Add(argument);
-
-        using var process = Process.Start(startInfo)!;
-        process.WaitForExit();
-        return process.ExitCode;
-    }
+    private static int RunCompiler(params string[] arguments) =>
+        NativeProgram.RunProcess(NativeProgram.CompilerExecutable, arguments).ExitCode;
 }

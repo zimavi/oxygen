@@ -15,6 +15,7 @@ public sealed class PrintingIntegrationTests : IDisposable
     [Fact]
     public void PrintsPrimitiveStringAndUserValuesThroughTheStandardLibrary()
     {
+        NativeProgram.RequireNativeToolchain();
         var source = Path.Combine(_directory, "main.oxy");
         File.WriteAllText(source,
             """
@@ -59,7 +60,7 @@ public sealed class PrintingIntegrationTests : IDisposable
             """);
         var executable = Path.Combine(_directory, "main.exe");
 
-        var build = NativeProgram.RunProcess(Path.Combine(AppContext.BaseDirectory, "oxygenc.exe"),
+        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
             ["build", source, "-o", executable, "-r", NativeProgram.RuntimeLibrary]);
         Assert.True(build.ExitCode == 0, build.Error);
 
