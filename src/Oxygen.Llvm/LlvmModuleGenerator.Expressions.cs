@@ -367,7 +367,7 @@ public sealed partial class LlvmModuleGenerator
                 var targetFunction = llvmFunctions[getter];
                 var receiver = target;
                 if (!cls.IsValue)
-                    EmitNullReferenceCheck(builder, receiver, member.MemberName, model, llvmFunctions);
+                    EmitNullReferenceCheck(builder, receiver, member.MemberName, "read", model, llvmFunctions);
                 if (property.Declaration.IsVirtual || property.Declaration.IsOverride)
                 {
                     var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
@@ -383,7 +383,7 @@ public sealed partial class LlvmModuleGenerator
                 .First(pair => pair.field.Name == member.MemberName).index + 1;
             if (cls.IsValue)
                 return builder.BuildExtractValue(target, (uint)(fieldIndex - 1), $"field.{member.MemberName}");
-            EmitNullReferenceCheck(builder, target, member.MemberName, model, llvmFunctions);
+            EmitNullReferenceCheck(builder, target, member.MemberName, "read", model, llvmFunctions);
             fieldIndex = FieldOffset(cls, model, fieldIndex - 1);
             var address = builder.BuildStructGEP2(_classTypes[cls.Name], target, (uint)fieldIndex,
                 $"field.{member.MemberName}");

@@ -677,6 +677,74 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void WritingAMemberThroughANullClassReferenceThrowsNullReferenceException()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                i32 value = 3;
+            }
+
+            class Holder {
+                Box inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                Box box = holder.inner;
+                try {
+                    box.value = 5;
+                } catch (NullReferenceException error) {
+                    io.print(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("The member 'value' was written through a null class reference.", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void SettingAPropertyThroughANullClassReferenceThrowsNullReferenceException()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                public i32 Value { get; set; }
+            }
+
+            class Holder {
+                Box inner;
+            }
+
+            i32 main() {
+                Holder holder = new Holder();
+                Box box = holder.inner;
+                try {
+                    box.Value = 5;
+                } catch (NullReferenceException error) {
+                    io.print(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("The member 'Value' was written through a null class reference.", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
     public void BreakInsideACatchBodyLeavesTheLoop()
     {
         NativeProgram.RequireNativeToolchain();

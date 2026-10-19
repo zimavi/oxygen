@@ -187,6 +187,8 @@ public sealed partial class LlvmModuleGenerator
                             var receiver = values.TryGetValue(targetIdentifier.Name, out var directReceiver)
                                 ? directReceiver
                                 : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
+                            if (!cls.IsValue)
+                                EmitNullReferenceCheck(builder, receiver, member.MemberName, "written", model, llvmFunctions);
                             var targetFunction = llvmFunctions[setter];
                             if (property.Declaration.IsVirtual || property.Declaration.IsOverride)
                             {
@@ -219,6 +221,7 @@ public sealed partial class LlvmModuleGenerator
                             var objectValue = values.TryGetValue(targetIdentifier.Name, out var direct)
                                 ? direct
                                 : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
+                            EmitNullReferenceCheck(builder, objectValue, member.MemberName, "written", model, llvmFunctions);
                             var address = builder.BuildStructGEP2(_classTypes[targetType.StructName!], objectValue,
                                 (uint)FieldOffset(cls, model, fieldIndex), $"field.{member.MemberName}");
                             builder.BuildStore(coerced, address);

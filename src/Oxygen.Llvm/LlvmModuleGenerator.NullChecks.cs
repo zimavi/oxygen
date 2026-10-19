@@ -38,11 +38,11 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildUnreachable();
     }
 
-    // Reading a member through a class reference first checks that the reference is not null. A null reference raises
-    // a NullReferenceException, which can be caught like any other exception; otherwise the read continues in the
-    // valid block.
+    // Reading or writing a member through a class reference first checks that the reference is not null. A null
+    // reference raises a NullReferenceException, which can be caught like any other exception; otherwise the access
+    // continues in the valid block. `access` is "read" or "written".
     private void EmitNullReferenceCheck(
-        LLVMBuilderRef builder, LLVMValueRef reference, string memberName, SemanticModel model,
+        LLVMBuilderRef builder, LLVMValueRef reference, string memberName, string access, SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var isNull = builder.BuildIsNull(reference, "null.reference");
@@ -51,7 +51,7 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildCondBr(isNull, failure, valid);
 
         builder.PositionAtEnd(failure);
-        var message = $"The member '{memberName}' was read through a null class reference.";
+        var message = $"The member '{memberName}' was {access} through a null class reference.";
         EmitThrowObject(builder, EmitNullReferenceException(builder, message, model, llvmFunctions));
         builder.PositionAtEnd(valid);
     }
