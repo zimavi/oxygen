@@ -21,6 +21,7 @@ public sealed partial class SemanticAnalyzer
     // whether the identifier being analyzed is only a receiver.
     private readonly HashSet<VariableDeclarationStatement> _deletedLocals = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VariableDeclarationStatement> _valueUses = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<VariableDeclarationStatement> _autoFreedLocals = new(ReferenceEqualityComparer.Instance);
     private bool _receiverUse;
     private readonly Dictionary<ForInStatement, IteratorProtocol> _iteratorProtocols =
         new(ReferenceEqualityComparer.Instance);
@@ -141,6 +142,7 @@ public sealed partial class SemanticAnalyzer
         _declaredVariables.Clear();
         _escapingClassLocals.Clear();
         _deletedLocals.Clear();
+        _autoFreedLocals.Clear();
         _valueUses.Clear();
         _iteratorProtocols.Clear();
         _callReceiverTypes.Clear();
@@ -661,7 +663,8 @@ public sealed partial class SemanticAnalyzer
             new Dictionary<CallExpression, SemanticType>(_callReceiverTypes, ReferenceEqualityComparer.Instance),
             new HashSet<CallExpression>(_receiverArgumentCalls, ReferenceEqualityComparer.Instance),
             new Dictionary<SyntaxNode, int>(_constructorSelections, ReferenceEqualityComparer.Instance),
-            new Dictionary<ConstructorDeclaration, int>(_constructorChainTargets, ReferenceEqualityComparer.Instance));
+            new Dictionary<ConstructorDeclaration, int>(_constructorChainTargets, ReferenceEqualityComparer.Instance),
+            new HashSet<VariableDeclarationStatement>(_autoFreedLocals, ReferenceEqualityComparer.Instance));
     }
 
     private static FunctionSymbol CreateConstructorFunctionSymbol(string moduleName, ConstructorSymbol constructor)
@@ -1396,6 +1399,7 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Function '{function.Name}' must return a value", function.Declaration.Location);
         }
 
+        CollectAutomaticFrees(function);
         if (_diagnostics is not null)
         {
             foreach (var variable in _declaredVariables)
@@ -2232,21 +2236,42 @@ public sealed partial class SemanticAnalyzer
     }
 
     // A local that holds an object from `new` leaves scope without a `delete` and without escaping, so its memory is leaked.
+    // A `new` object held by a local that is never deleted and never escapes. Such an object is leaked unless the
+    // function frees it, so it is what the leak warning and the automatic free are about.
+    private bool IsUnfreedAllocation(VariableSymbol variable, out VariableDeclarationStatement declaration)
+    {
+        if (variable.Declaration is VariableDeclarationStatement { Initializer: NewExpression } found
+            && IsOwnedClass(variable.Type)
+            && !_deletedLocals.Contains(found)
+            && !_escapingClassLocals.Contains(found)
+            && !_valueUses.Contains(found))
+        {
+            declaration = found;
+            return true;
+        }
+
+        declaration = null!;
+        return false;
+    }
+
+    // In an automatic function, an unfreed allocation is freed when its scope ends. This is recorded for the backend.
+    private void CollectAutomaticFrees(FunctionSymbol function)
+    {
+        if (function.Memory != MemoryMode.Automatic)
+            return;
+        foreach (var variable in _declaredVariables)
+            if (IsUnfreedAllocation(variable, out var declaration))
+                _autoFreedLocals.Add(declaration);
+    }
+
     // Only manual functions warn: an automatic function frees its objects itself, so a missing `delete` is not a leak there.
     private void WarnAboutUnfreedAllocations(FunctionSymbol function)
     {
         if (function.Memory != MemoryMode.Manual)
             return;
         foreach (var variable in _declaredVariables)
-        {
-            if (variable.Declaration is not VariableDeclarationStatement { Initializer: NewExpression } declaration
-                || !IsOwnedClass(variable.Type)
-                || _deletedLocals.Contains(declaration)
-                || _escapingClassLocals.Contains(declaration)
-                || _valueUses.Contains(declaration))
-                continue;
-            ReportWarning($"Memory allocated for '{declaration.Name}' is never freed", declaration.Location, declaration.Name.Length);
-        }
+            if (IsUnfreedAllocation(variable, out var declaration))
+                ReportWarning($"Memory allocated for '{declaration.Name}' is never freed", declaration.Location, declaration.Name.Length);
     }
 
     private SemanticType AnalyzeExpression(

@@ -162,7 +162,8 @@ public sealed class SemanticModel
         IReadOnlyDictionary<CallExpression, SemanticType>? callReceiverTypes = null,
         IReadOnlySet<CallExpression>? receiverArgumentCalls = null,
         IReadOnlyDictionary<SyntaxNode, int>? constructorSelections = null,
-        IReadOnlyDictionary<ConstructorDeclaration, int>? constructorChainTargets = null)
+        IReadOnlyDictionary<ConstructorDeclaration, int>? constructorChainTargets = null,
+        IReadOnlySet<VariableDeclarationStatement>? automaticallyFreedLocals = null)
     {
         Functions = functions;
         ExpressionTypes = expressionTypes;
@@ -181,6 +182,7 @@ public sealed class SemanticModel
         ReceiverArgumentCalls = receiverArgumentCalls ?? new HashSet<CallExpression>();
         ConstructorSelections = constructorSelections ?? new Dictionary<SyntaxNode, int>();
         ConstructorChainTargets = constructorChainTargets ?? new Dictionary<ConstructorDeclaration, int>();
+        AutomaticallyFreedLocals = automaticallyFreedLocals ?? new HashSet<VariableDeclarationStatement>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -199,6 +201,10 @@ public sealed class SemanticModel
     public IReadOnlyDictionary<string, ClassSymbol> Classes { get; }
     public IReadOnlyDictionary<string, InterfaceSymbol> Interfaces { get; }
     public IReadOnlySet<VariableDeclarationStatement> EscapingClassLocals { get; }
+
+    // Locals holding a `new` object in an automatic function that is never deleted and never escapes: the compiler frees
+    // the object when the local's scope ends.
+    public IReadOnlySet<VariableDeclarationStatement> AutomaticallyFreedLocals { get; }
     public IReadOnlyDictionary<ForInStatement, IteratorProtocol> IteratorProtocols { get; }
     public IReadOnlyDictionary<string, string> AggregateSpecializations { get; }
 

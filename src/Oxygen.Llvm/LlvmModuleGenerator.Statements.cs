@@ -122,7 +122,8 @@ public sealed partial class LlvmModuleGenerator
                 DeclareLocalSlot(builder, values, storage, declaration.Name, ToLlvmType(declaredType, model), declaredValue);
                 // A stack object (or a value class) is destroyed at scope end. An object from `new` is not: its owner
                 // releases it with `delete`.
-                if (declaredType.IsClass && (IsValueClass(declaredType, model) || declaration.Initializer is ClassConstructionExpression))
+                if (declaredType.IsClass && (IsValueClass(declaredType, model) || declaration.Initializer is ClassConstructionExpression
+                    || model.AutomaticallyFreedLocals.Contains(declaration)))
                     _ownedScopes.Peek().Add(new OwnedLocal(declaration, declaration.Name, declaredType));
                 return false;
             case AssignmentStatement assignment:

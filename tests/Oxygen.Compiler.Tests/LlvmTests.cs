@@ -845,6 +845,18 @@ public sealed class LlvmTests
     }
 
     [Fact]
+    public void EmitsAFreeWhenAnAutomaticFunctionsAllocationGoesOutOfScope()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } void f() { Box b = new Box(); i32 v = b.value; } i32 main() { f(); return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("call void @oxygen_free", ir);
+    }
+
+    [Fact]
     public void EmitsConditionalExpressionControlFlow()
     {
         var model = Analyze("i32 main() { return true ? 1 : 2; }");

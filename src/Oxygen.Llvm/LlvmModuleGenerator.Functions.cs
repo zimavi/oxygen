@@ -487,6 +487,18 @@ public sealed partial class LlvmModuleGenerator
         scope ??= _ownedScopes.Peek();
         foreach (var owned in scope.AsEnumerable().Reverse())
         {
+            if (owned.Declaration is { } freedDeclaration && model.AutomaticallyFreedLocals.Contains(freedDeclaration))
+            {
+                // An allocation the function owns: its destructor runs, then its memory is released.
+                var allocated = values.TryGetValue(owned.Name, out var directAllocated)
+                    ? directAllocated
+                    : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
+                if (_destructors.TryGetValue(owned.Type.StructName!, out var allocatedDestructor))
+                    builder.BuildCall2(allocatedDestructor.FunctionType, allocatedDestructor, [allocated]);
+                builder.BuildCall2(_oxygenFree.FunctionType, _oxygenFree,
+                    [builder.BuildBitCast(allocated, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "free.memory")]);
+                continue;
+            }
             if (!owned.Type.IsClass || !_destructors.TryGetValue(owned.Type.StructName!, out var destructor))
                 continue;
             if (!IsValueClass(owned.Type, model))

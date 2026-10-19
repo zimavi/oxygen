@@ -1269,6 +1269,24 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RecordsAnAllocationThatDoesNotEscapeAsFreedAtScopeEnd()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } void f() { Box b = new Box(); i32 v = b.value; } i32 main() { f(); return 0; }");
+
+        Assert.Contains(model.AutomaticallyFreedLocals, declaration => declaration.Name == "b");
+    }
+
+    [Fact]
+    public void DoesNotRecordAnAllocationThatIsReturned()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } Box make() { Box b = new Box(); return b; } i32 main() { Box x = make(); delete x; return 0; }");
+
+        Assert.Empty(model.AutomaticallyFreedLocals);
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));

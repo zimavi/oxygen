@@ -337,6 +337,39 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void AutomaticFunctionFreesAnAllocationWhenItsScopeEnds()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            class Box {
+                i32 value = 3;
+
+                ~Box() {
+                    io.print("gone");
+                }
+            }
+
+            void f() {
+                Box box = new Box();
+                io.print(box.value);
+            }
+
+            i32 main() {
+                f();
+                io.print("end");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("3goneend", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
     public void SizeOfIncludesPadding()
     {
         NativeProgram.RequireNativeToolchain();
