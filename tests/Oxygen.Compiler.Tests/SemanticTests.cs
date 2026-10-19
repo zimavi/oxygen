@@ -1167,7 +1167,23 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void WarnsWhenAnAllocationIsNeverFreed()
+    public void WarnsWhenAnAllocationIsNeverFreedInAManualFunction()
+    {
+        var tokenizer = new Tokenizer();
+        var tokens = tokenizer.TokenizeWithDiagnostics(
+            "class Box { i32 value = 1; } i32 main() { Box b = new Box(); return b.value; }",
+            "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+
+        var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer { DefaultMemoryMode = MemoryMode.Manual }
+            .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("Memory allocated for 'b' is never freed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DoesNotWarnAboutAnAllocationInAnAutomaticFunction()
     {
         var tokenizer = new Tokenizer();
         var tokens = tokenizer.TokenizeWithDiagnostics(
@@ -1178,8 +1194,7 @@ public sealed class SemanticTests
         var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer()
             .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
 
-        Assert.Contains(result.Diagnostics, diagnostic =>
-            diagnostic.Message.Contains("Memory allocated for 'b' is never freed", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Message.Contains("never freed", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -1418,7 +1418,7 @@ public sealed partial class SemanticAnalyzer
                 }
             }
 
-            WarnAboutUnfreedAllocations();
+            WarnAboutUnfreedAllocations(function);
         }
     }
 
@@ -2232,8 +2232,11 @@ public sealed partial class SemanticAnalyzer
     }
 
     // A local that holds an object from `new` leaves scope without a `delete` and without escaping, so its memory is leaked.
-    private void WarnAboutUnfreedAllocations()
+    // Only manual functions warn: an automatic function frees its objects itself, so a missing `delete` is not a leak there.
+    private void WarnAboutUnfreedAllocations(FunctionSymbol function)
     {
+        if (function.Memory != MemoryMode.Manual)
+            return;
         foreach (var variable in _declaredVariables)
         {
             if (variable.Declaration is not VariableDeclarationStatement { Initializer: NewExpression } declaration
