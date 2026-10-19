@@ -2681,6 +2681,11 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Operator '{expression.Operator}' is not valid for pointer operands", expression.Location);
         }
 
+        // Strings compare for equality by their bytes; ordering is not defined.
+        if (left.Kind == SemanticTypeKind.String && right.Kind == SemanticTypeKind.String
+            && (expression.Operator == TokenKind.EqualsEquals || expression.Operator == TokenKind.BangEquals))
+            return SemanticType.FromPrimitive(PrimitiveType.Bool);
+
         // Booleans compare for equality only; ordering and arithmetic on bool are not defined.
         var boolean = SemanticType.FromPrimitive(PrimitiveType.Bool);
         if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals

@@ -287,6 +287,27 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void StringEqualityComparesBytesAndLength()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            i32 main() {
+                string a = "ab";
+                string b = "ab";
+                string c = "abc";
+                if (a == b && a != c && !(a == c) && c != b) {
+                    return 1;
+                }
+                return 2;
+            }
+            """);
+
+        Assert.Equal(1, run.ExitCode);
+    }
+
+    [Fact]
     public void SizeOfIncludesPadding()
     {
         NativeProgram.RequireNativeToolchain();

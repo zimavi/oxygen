@@ -82,6 +82,25 @@ public sealed partial class LlvmModuleGenerator
         return CoerceValue(builder, label, model.ExpressionTypes[expression], selectorType, model);
     }
 
+    // Two strings are equal when their lengths match and their bytes match. The bytes compared are only those both
+    // strings have, so a shorter string is never read past its end.
+    private static LLVMValueRef EmitStringEquality(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef right)
+    {
+        var leftPointer = builder.BuildExtractValue(left, 0, "string.left.pointer");
+        var rightPointer = builder.BuildExtractValue(right, 0, "string.right.pointer");
+        var leftLength = builder.BuildExtractValue(left, 1, "string.left.length");
+        var rightLength = builder.BuildExtractValue(right, 1, "string.right.length");
+        var sameLength = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, leftLength, rightLength, "string.length.match");
+        var shorter = builder.BuildSelect(
+            builder.BuildICmp(LLVMIntPredicate.LLVMIntULT, leftLength, rightLength, "string.shorter"),
+            leftLength, rightLength, "string.common");
+        var contents = builder.BuildCall2(_memcmp.FunctionType, _memcmp,
+            new LLVMValueRef[] { leftPointer, rightPointer, shorter }, "string.compare");
+        var sameContents = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, contents,
+            LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false), "string.match");
+        return builder.BuildAnd(sameLength, sameContents, "string.equal");
+    }
+
     private static LLVMValueRef EmitSwitchEquality(
         LLVMBuilderRef builder,
         LLVMValueRef selector,
@@ -90,23 +109,7 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model)
     {
         if (selectorType.Kind == SemanticTypeKind.String)
-        {
-            var selectorPointer = builder.BuildExtractValue(selector, 0, "switch.string.pointer");
-            var labelPointer = builder.BuildExtractValue(label, 0, "switch.label.pointer");
-            var selectorLength = builder.BuildExtractValue(selector, 1, "switch.string.length");
-            var labelLength = builder.BuildExtractValue(label, 1, "switch.label.length");
-            var sameLength = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, selectorLength, labelLength,
-                "switch.string.length.match");
-            // Compare only the bytes both strings have, so a shorter label is never read past its end.
-            var shorter = builder.BuildSelect(
-                builder.BuildICmp(LLVMIntPredicate.LLVMIntULT, selectorLength, labelLength, "switch.string.shorter"),
-                selectorLength, labelLength, "switch.string.common");
-            var contents = builder.BuildCall2(_memcmp.FunctionType, _memcmp,
-                new LLVMValueRef[] { selectorPointer, labelPointer, shorter }, "switch.string.compare");
-            var sameContents = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, contents,
-                LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false), "switch.string.match");
-            return builder.BuildAnd(sameLength, sameContents, "switch.string.equal");
-        }
+            return EmitStringEquality(builder, selector, label);
 
         if (selectorType.IsPointer)
             return builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, selector, label, "switch.pointer.equal");

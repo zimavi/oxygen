@@ -103,6 +103,11 @@ public sealed partial class LlvmModuleGenerator
         var right = EmitExpression(context, builder, expression.Right, values, storage, model, llvmFunctions);
         var leftType = model.ExpressionTypes[expression.Left];
         var rightType = model.ExpressionTypes[expression.Right];
+        if (leftType.Kind == SemanticTypeKind.String && rightType.Kind == SemanticTypeKind.String)
+        {
+            var equal = EmitStringEquality(builder, left, right);
+            return expression.Operator == TokenKind.BangEquals ? builder.BuildNot(equal, "string.not.equal") : equal;
+        }
         if (leftType != rightType && leftType.IsNumeric && rightType.IsNumeric)
         {
             var common = CommonNumericType(leftType, rightType);

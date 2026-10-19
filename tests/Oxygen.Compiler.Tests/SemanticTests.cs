@@ -1088,6 +1088,15 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RejectsOrderingComparisonOfStrings()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 main() { string a = \"a\"; string b = \"b\"; if (a < b) { return 1; } return 0; }"));
+
+        Assert.Contains("requires numeric operands", exception.Message);
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));
