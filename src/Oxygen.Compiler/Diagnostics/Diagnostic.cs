@@ -45,7 +45,19 @@ public sealed class DiagnosticBag
     public bool HasBlockingDiagnostics(bool warningsAsErrors = false) =>
         HasErrors || warningsAsErrors && HasWarnings;
 
-    public void Add(Diagnostic diagnostic) => _diagnostics.Add(diagnostic);
+    public void Add(Diagnostic diagnostic)
+    {
+        // A generic body is checked in its declared form and again for each instantiation, so one mistake can be reported
+        // several times at the same place. An error repeats an earlier one when phase, file and location match, and the
+        // first report is kept.
+        if (diagnostic.Severity == DiagnosticSeverity.Error && _diagnostics.Any(existing =>
+                existing.Severity == DiagnosticSeverity.Error
+                && existing.Phase == diagnostic.Phase
+                && existing.SourceName == diagnostic.SourceName
+                && existing.Span.Start == diagnostic.Span.Start))
+            return;
+        _diagnostics.Add(diagnostic);
+    }
 
     public void Add(
         DiagnosticPhase phase,

@@ -2133,6 +2133,19 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AnErrorInAGenericBodyIsReportedOnceNotOncePerInstantiation()
+    {
+        var unit = new Parser(_tokenizer.Tokenize(
+            "class Box<T> { T value; i32 bad() { return value.missing; } } " +
+            "i32 main() { Box<i32> b = new Box<i32>(); return b.bad(); }"), Log.Logger).Parse();
+
+        var result = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Contains("requires a struct or class value, got T", diagnostic.Message);
+    }
+
+    [Fact]
     public void MemberAccessOnTheNullLiteralIsRejectedAsNullHavingNoMembers()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze(
