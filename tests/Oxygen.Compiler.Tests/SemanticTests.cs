@@ -1023,6 +1023,32 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void CompoundDivisionByConstantZeroIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 1; x /= 0; return x; }"));
+
+        Assert.Contains("Division by zero", exception.Message);
+    }
+
+    [Fact]
+    public void CompoundShiftByConstantOutOfRangeIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 1; x <<= 40; return x; }"));
+
+        Assert.Contains("Shift count 40 is out of range for i32", exception.Message);
+    }
+
+    [Fact]
+    public void CompoundShiftWithinRangeIsAccepted()
+    {
+        var model = Analyze("i32 main() { i32 x = 1; x <<= 3; return x; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void StructurallyEqualGenericTypesAreEqualWhenBuiltSeparately()
     {
         // The type arguments are lists, so a record's default equality would compare them by reference.
