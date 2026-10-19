@@ -352,7 +352,8 @@ public sealed class LlvmTests
         // Pointers are opaque, so the receiver needs no bitcast; the slot is loaded and called indirectly.
         Assert.Contains("vtable.slot", ir);
         Assert.Contains("load ptr, ptr %vtable.slot", ir);
-        Assert.Contains("call i32 %vtable.target", ir);
+        // The local is freed at scope end, so it is owned and the call can unwind: it is an invoke into the cleanup.
+        Assert.Contains("invoke i32 %vtable.target", ir);
     }
 
     [Fact]
@@ -597,7 +598,8 @@ public sealed class LlvmTests
 
         var first = ir.IndexOf(destructor, StringComparison.Ordinal);
         var second = ir.IndexOf(destructor, first + destructor.Length, StringComparison.Ordinal);
-        Assert.Equal(2, ir.Split(destructor, StringSplitOptions.None).Length - 1);
+        // Each destructor runs on its scope-end path, and again in the unwind cleanup, which destroys flagged locals.
+        Assert.Equal(4, ir.Split(destructor, StringSplitOptions.None).Length - 1);
         Assert.True(first >= 0 && second > first);
     }
 

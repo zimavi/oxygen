@@ -195,6 +195,9 @@ public sealed partial class LlvmModuleGenerator
             return builder.BuildCallWithOperandBundles(functionType, target, arguments,
                 new LLVMOperandBundleRef[] { funclet }, resultName);
         }
+        // A context without an unwind target only runs code that continues unwinding by itself, so the call is plain.
+        if (exceptionContext.Unwind.Handle == IntPtr.Zero)
+            return builder.BuildCall2(functionType, target, arguments, resultName);
         var normal = _currentFunction.AppendBasicBlock("invoke.continue");
         result = builder.BuildInvoke2(functionType, target, arguments, normal,
             exceptionContext.Unwind, resultName);

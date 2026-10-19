@@ -47,6 +47,12 @@ public sealed partial class LlvmModuleGenerator
     private bool _usesWindowsSeh;
     // The runtime "alive" flag of each local that some `delete` releases, keyed by the local's stack slot.
     private readonly Dictionary<LLVMValueRef, LLVMValueRef> _dropFlags = new();
+    // The cleanup of the current function's owned locals, for an exception that leaves their scope. _unwindBlock is
+    // default when the function needs none. See LlvmModuleGenerator.Unwind.cs.
+    private readonly List<UnwindLocal> _unwindLocals = [];
+    private LLVMBasicBlockRef _unwindBlock;
+    private LLVMValueRef _unwindPad;
+    private LLVMValueRef _unwindLandingPad;
     // Context that owns every type and value created during Generate. Type factories must come from this context,
     // not from LLVMTypeRef's static (global-context) properties, or the module fails verification.
     private LLVMContextRef _context;

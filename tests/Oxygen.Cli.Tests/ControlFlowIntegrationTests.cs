@@ -978,6 +978,129 @@ public sealed class ControlFlowIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void OwnedLocalIsDestroyedWhenAnExceptionLeavesItsFunction()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                ~Box() {
+                    io.print("d");
+                }
+            }
+
+            class E : Exception {
+                E(string message) : base(message) {
+                }
+            }
+
+            void f() {
+                Box box = Box();
+                throw new E("x");
+            }
+
+            i32 main() {
+                try {
+                    f();
+                } catch (E error) {
+                    io.print("c");
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("dc", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void OwnedLocalWhoseBlockEndedIsNotDestroyedAgainWhenAnExceptionLeaves()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                ~Box() {
+                    io.print("d");
+                }
+            }
+
+            class E : Exception {
+                E(string message) : base(message) {
+                }
+            }
+
+            void g() {
+                {
+                    Box box = Box();
+                }
+                throw new E("x");
+            }
+
+            i32 main() {
+                try {
+                    g();
+                } catch (E error) {
+                    io.print("c");
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("dc", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void OwnedLocalSurvivesACatchInItsOwnFunctionUntilTheFunctionEnds()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            class Box {
+                ~Box() {
+                    io.print("d");
+                }
+            }
+
+            class E : Exception {
+                E(string message) : base(message) {
+                }
+            }
+
+            void h() {
+                Box box = Box();
+                try {
+                    throw new E("x");
+                } catch (E error) {
+                    io.print("c");
+                }
+            }
+
+            i32 main() {
+                h();
+                io.print("e");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("cde", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
     public void BreakInsideACatchBodyLeavesTheLoop()
     {
         NativeProgram.RequireNativeToolchain();

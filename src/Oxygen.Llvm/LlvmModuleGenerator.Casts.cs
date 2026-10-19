@@ -154,11 +154,12 @@ public sealed partial class LlvmModuleGenerator
         var release = function.AppendBasicBlock("destroy.release");
         builder.BuildCondBr(hasDestructor, call, release);
         builder.PositionAtEnd(call);
-        builder.BuildCall2(LLVMTypeRef.CreateFunction(_context.VoidType, [pointerType], false), destructor, [reference]);
+        EmitCallOrInvoke(builder, LLVMTypeRef.CreateFunction(_context.VoidType, [pointerType], false), destructor,
+            [reference], string.Empty);
         builder.BuildBr(release);
         builder.PositionAtEnd(release);
-        builder.BuildCall2(_oxygenFree.FunctionType, _oxygenFree,
-            [builder.BuildBitCast(reference, pointerType, "free.memory")]);
+        EmitCallOrInvoke(builder, _oxygenFree.FunctionType, _oxygenFree,
+            [builder.BuildBitCast(reference, pointerType, "free.memory")], string.Empty);
     }
 
     private LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName)

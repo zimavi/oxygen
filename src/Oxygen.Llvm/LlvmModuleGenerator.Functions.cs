@@ -78,15 +78,24 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        BeginUnwindCleanup(body, model);
+        var returned = false;
         foreach (var statement in body.Statements)
         {
             if (EmitStatement(context, builder, function, statement, values, storage, model, llvmFunctions,
                     SemanticType.FromPrimitive(PrimitiveType.Void),
                     new Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)>()))
-                return;
+            {
+                returned = true;
+                break;
+            }
         }
-        EmitTracePop(builder);
-        builder.BuildRetVoid();
+        if (!returned)
+        {
+            EmitTracePop(builder);
+            builder.BuildRetVoid();
+        }
+        EndUnwindCleanup(model);
     }
 
     // Calls the constructor that semantic analysis selected for `: this(...)`, `: base(...)`, or the implicit base
@@ -311,6 +320,7 @@ public sealed partial class LlvmModuleGenerator
         _exceptionContexts = new Stack<ExceptionContext>();
         _finallyScopes = new Stack<FinallyScope>();
         _ownedScopes.Push([]);
+        BeginUnwindCleanup(symbol.Declaration.Body, model);
         var parameterOffset = IsClassMethod(symbol, model) ? 1 : 0;
         if (parameterOffset != 0)
         {
@@ -397,6 +407,7 @@ public sealed partial class LlvmModuleGenerator
                 builder.BuildRet(CreateZeroValue(emittedReturnType, model));
             }
         }
+        EndUnwindCleanup(model);
     }
 
     private void EmitTracePush(LLVMBuilderRef builder, string functionName, string fileName, SourceLocation location)
@@ -487,6 +498,9 @@ public sealed partial class LlvmModuleGenerator
         scope ??= _ownedScopes.Peek();
         foreach (var owned in scope.AsEnumerable().Reverse())
         {
+            // The scope has ended on this path, so an exception from here on must not destroy the local again.
+            if (owned.Declaration is { } endingDeclaration)
+                ClearUnwindFlag(builder, endingDeclaration);
             if (owned.Declaration is { } freedDeclaration && model.AutomaticallyFreedLocals.Contains(freedDeclaration))
             {
                 // An allocation the function owns: its destructor runs, then its memory is released.

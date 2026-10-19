@@ -138,7 +138,10 @@ public sealed partial class LlvmModuleGenerator
                 // releases it with `delete`.
                 if (declaredType.IsClass && (IsValueClass(declaredType, model) || declaration.Initializer is ClassConstructionExpression
                     || model.AutomaticallyFreedLocals.Contains(declaration)))
+                {
                     _ownedScopes.Peek().Add(new OwnedLocal(declaration, declaration.Name, declaredType));
+                    RegisterUnwindLocal(builder, declaration, declaredType, declaredSlot);
+                }
                 return false;
             case AssignmentStatement assignment:
                 var assigned = EmitExpression(context, builder, assignment.Value, values, storage, model, llvmFunctions);
@@ -663,6 +666,10 @@ public sealed partial class LlvmModuleGenerator
             case DeleteStatement deleteStatement:
                 {
                     var target = EmitExpression(context, builder, deleteStatement.Target, values, storage, model, llvmFunctions);
+                    // The deleted local no longer owns an object for the unwind cleanup.
+                    if (deleteStatement.Target is IdentifierExpression clearedIdentifier
+                        && storage.TryGetValue(clearedIdentifier.Name, out var clearedSlot))
+                        ClearUnwindFlagOfSlot(builder, clearedSlot);
                     if (deleteStatement.Target is IdentifierExpression deleted && storage.TryGetValue(deleted.Name, out var deletedSlot)
                         && _dropFlags.ContainsKey(deletedSlot))
                     {
