@@ -50,6 +50,24 @@ public sealed class DiagnosticsTests
     }
 
     [Fact]
+    public void ExplainsWhyMixedSignednessOperandsHaveNoCommonType()
+    {
+        var bag = new DiagnosticBag();
+        bag.Add(
+            DiagnosticPhase.Semantic,
+            "Operands of type 'u64' and 'i32' have no common type. Convert one operand explicitly with cast<T>(x).",
+            new SourceLocation(1, 1),
+            1,
+            "main.oxy");
+        var diagnostic = Assert.Single(bag.Diagnostics);
+
+        var formatted = new DiagnosticFormatter().Format(diagnostic, new SourceText("main.oxy", "x"));
+
+        Assert.Contains("help: Implicit conversions only widen losslessly", formatted);
+        Assert.Contains("fix: Convert one operand with cast<T>(x)", formatted);
+    }
+
+    [Fact]
     public void HighlightsTheEntireSemanticNameWhenColorIsEnabled()
     {
         var diagnostic = new Diagnostic(

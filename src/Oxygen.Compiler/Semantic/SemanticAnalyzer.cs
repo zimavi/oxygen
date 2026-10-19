@@ -2982,7 +2982,8 @@ public sealed partial class SemanticAnalyzer
             return left;
         if (CanAssign(right, ((BinaryExpression)expression).Left, left))
             return right;
-        throw Error($"Binary operator '{((BinaryExpression)expression).Operator}' requires compatible numeric types",
+        throw Error(
+            $"Operands of type '{left}' and '{right}' have no common type. Convert one operand explicitly with cast<T>(x).",
             expression.Location);
     }
 

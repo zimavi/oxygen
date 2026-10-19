@@ -2105,6 +2105,17 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void MixedSignednessOperandsNameBothTypesAndNeedAnExplicitCast()
+    {
+        // Implicit conversions are lossless widenings only, so neither u64 nor i32 converts to the other.
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 main() { u64 length = 3; i32 pos = 1; if (length >= pos) { return 1; } return 0; }"));
+
+        Assert.Contains("'u64' and 'i32'", exception.Message);
+        Assert.Contains("cast<T>(x)", exception.Message);
+    }
+
+    [Fact]
     public void InheritedFieldsAppearOnceInEveryDescendantOfAThreeLevelChain()
     {
         var model = Analyze(

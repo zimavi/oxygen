@@ -123,6 +123,8 @@ internal static class DiagnosticAdvice
             "Each scope and function signature must give every declared name a single, unambiguous meaning.",
         (DiagnosticPhase.Semantic, var value) when value.Contains("must return", StringComparison.OrdinalIgnoreCase) =>
             "Every path through a non-void function must produce a value of its declared return type.",
+        (DiagnosticPhase.Semantic, var value) when value.Contains("have no common type", StringComparison.OrdinalIgnoreCase) =>
+            "Implicit conversions only widen losslessly, and neither type converts to the other without losing information.",
         (DiagnosticPhase.Semantic, var value) when value.Contains("requires", StringComparison.OrdinalIgnoreCase) =>
             "This operation is only defined for the operand types described by the language type rules.",
         (DiagnosticPhase.Semantic, var value) when value.Contains("expected", StringComparison.OrdinalIgnoreCase) =>
@@ -167,6 +169,8 @@ internal static class DiagnosticAdvice
             "Rename the declaration, or remove the duplicate if it was accidental.",
         (DiagnosticPhase.Semantic, var value) when value.Contains("must return", StringComparison.OrdinalIgnoreCase) =>
             "Add a return statement with the declared type, or change the function return type to void.",
+        (DiagnosticPhase.Semantic, var value) when value.Contains("have no common type", StringComparison.OrdinalIgnoreCase) =>
+            "Convert one operand with cast<T>(x) so both operands have the same type.",
         (DiagnosticPhase.Backend, _) =>
             "Inspect the backend message and simplify or revise the reported construct.",
         (DiagnosticPhase.Toolchain, _) =>
