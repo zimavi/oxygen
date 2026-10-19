@@ -1097,6 +1097,8 @@ public sealed partial class Parser
                 return new BooleanLiteralExpression(true, token.Location);
             case TokenKind.False:
                 return new BooleanLiteralExpression(false, token.Location);
+            case TokenKind.Null:
+                return new NullLiteralExpression(token.Location);
             case TokenKind.Cast:
                 {
                     Consume(TokenKind.LessThan, "Expected '<' after 'cast'.");

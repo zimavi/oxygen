@@ -10,6 +10,7 @@ public sealed class Tokenizer
         {
             ["true"] = TokenKind.True,
             ["false"] = TokenKind.False,
+            ["null"] = TokenKind.Null,
             ["return"] = TokenKind.Return,
             ["if"] = TokenKind.If,
             ["else"] = TokenKind.Else,

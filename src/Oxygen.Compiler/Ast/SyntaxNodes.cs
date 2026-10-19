@@ -342,6 +342,8 @@ public sealed record BooleanLiteralExpression(
     bool Value,
     SourceLocation Location) : Expression(Location);
 
+public sealed record NullLiteralExpression(SourceLocation Location) : Expression(Location);
+
 public sealed record IsExpression(
     Expression Operand,
     TypeSyntax TargetType,

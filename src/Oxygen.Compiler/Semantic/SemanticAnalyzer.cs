@@ -1780,7 +1780,7 @@ public sealed partial class SemanticAnalyzer
                                     expressionTypes, resolvedCalls);
                                 if (!IsConstantSwitchLabel(item.Value, labelType, valueType)
                                     || (labelType != valueType
-                                        && !(valueType.IsPointer && item.Value is IntegerLiteralExpression { Lexeme: "0" })
+                                        && !(valueType.IsPointer && item.Value is NullLiteralExpression)
                                         && !CanAssign(valueType, item.Value, labelType)))
                                     throw Error($"Switch case value must be a constant comparable with {valueType}", item.Location);
                                 if (!seenLabels.Add(SwitchLabelKey(item.Value)))
@@ -1949,13 +1949,13 @@ public sealed partial class SemanticAnalyzer
                 $"Cannot initialize '{declaration.Name}' with {initializerType}; expected {type}",
                 declaration.Initializer!.Location);
         }
-        if (declaration.Initializer is IntegerLiteralExpression { Lexeme: "0" } && type.IsPointer)
+        if (declaration.Initializer is NullLiteralExpression && type.IsPointer)
             expressionTypes[declaration.Initializer] = type;
 
         var variable = new VariableSymbol(type, declaration.IsConst, declaration, false);
         scope.Declare(declaration.Name, variable);
         _declaredVariables.Add(variable);
-        if (type.IsPointer && declaration.Initializer is IntegerLiteralExpression { Lexeme: "0" })
+        if (type.IsPointer && declaration.Initializer is NullLiteralExpression)
             _definitelyNullVariables.Add(variable);
     }
 
@@ -2083,7 +2083,7 @@ public sealed partial class SemanticAnalyzer
             }
             if (variable.Type.IsPointer && assignment.Operator == TokenKind.Equals)
             {
-                if (value is IntegerLiteralExpression { Lexeme: "0" })
+                if (value is NullLiteralExpression)
                     _definitelyNullVariables.Add(variable);
                 else
                     _definitelyNullVariables.Remove(variable);
@@ -2127,7 +2127,7 @@ public sealed partial class SemanticAnalyzer
                 $"Cannot return {valueType} from function '{function.Name}'; expected {function.ReturnType}",
                 returnStatement.Value.Location);
         }
-        if (returnStatement.Value is IntegerLiteralExpression { Lexeme: "0" } && function.ReturnType.IsPointer)
+        if (returnStatement.Value is NullLiteralExpression && function.ReturnType.IsPointer)
             expressionTypes[returnStatement.Value] = function.ReturnType;
     }
 
@@ -2150,6 +2150,7 @@ public sealed partial class SemanticAnalyzer
             FloatingPointLiteralExpression floating => SemanticType.FromPrimitive(ParseNumericLiteralType(floating.Lexeme, true)),
             StringLiteralExpression => SemanticType.String,
             BooleanLiteralExpression => SemanticType.FromPrimitive(PrimitiveType.Bool),
+            NullLiteralExpression => SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.Void)),
             IsExpression pattern => AnalyzeIsExpression(
                 pattern, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             StructLiteralExpression literal => AnalyzeStructLiteral(
@@ -2589,7 +2590,7 @@ public sealed partial class SemanticAnalyzer
 
         if (expression.Operator == TokenKind.Star)
         {
-            if (expression.Operand is IntegerLiteralExpression { Lexeme: "0" }
+            if (expression.Operand is NullLiteralExpression
                 || expression.Operand is IdentifierExpression identifier
                     && _definitelyNullVariables.Contains(scope.Lookup(identifier.Name, identifier.Location)))
                 throw Error("Cannot dereference a null pointer", expression.Location);
@@ -2663,13 +2664,13 @@ public sealed partial class SemanticAnalyzer
             if (left.IsPointer && right.IsInteger
                 && expression.Operator is TokenKind.Plus or TokenKind.Minus)
                 return left;
-            if (left.IsPointer && expression.Right is IntegerLiteralExpression { Lexeme: "0" }
+            if (left.IsPointer && expression.Right is NullLiteralExpression
                 && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
             {
                 expressionTypes[expression.Right] = left;
                 return SemanticType.FromPrimitive(PrimitiveType.Bool);
             }
-            if (right.IsPointer && expression.Left is IntegerLiteralExpression { Lexeme: "0" }
+            if (right.IsPointer && expression.Left is NullLiteralExpression
                 && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
             {
                 expressionTypes[expression.Left] = right;
@@ -3016,7 +3017,7 @@ public sealed partial class SemanticAnalyzer
         var function = matches[0];
         for (var index = 0; index < call.Arguments.Count; index++)
         {
-            if (call.Arguments[index] is IntegerLiteralExpression { Lexeme: "0" }
+            if (call.Arguments[index] is NullLiteralExpression
                 && function.Parameters[index].Type.IsPointer)
                 expressionTypes[call.Arguments[index]] = function.Parameters[index].Type;
         }
@@ -3056,7 +3057,7 @@ public sealed partial class SemanticAnalyzer
             && ((actual.TypeArguments is null || actual.TypeArguments.Count == 0)
                 || SemanticTypeComparer.Instance.Equals(target, actual)))
             return ConversionCost.Exact;
-        if (target.IsPointer && actual.IsNumeric && TryGetConstantInteger(value, out var nullValue) && nullValue == 0)
+        if (target.IsPointer && value is NullLiteralExpression)
             return ConversionCost.Exact;
         if (IsReferenceCast(actual, target, out var implicitConversion) && implicitConversion)
             return new ConversionCost(1, 0, 0, HierarchyDistance(actual.StructName!, target.StructName!));
@@ -3257,7 +3258,7 @@ public sealed partial class SemanticAnalyzer
             return labelType.Primitive == PrimitiveType.Bool && expression is BooleanLiteralExpression;
         if (selectorType.Kind == SemanticTypeKind.String)
             return labelType.Kind == SemanticTypeKind.String && expression is StringLiteralExpression;
-        return selectorType.IsPointer && expression is IntegerLiteralExpression { Lexeme: "0" };
+        return selectorType.IsPointer && expression is NullLiteralExpression;
     }
 
     private static string SwitchLabelKey(Expression expression)

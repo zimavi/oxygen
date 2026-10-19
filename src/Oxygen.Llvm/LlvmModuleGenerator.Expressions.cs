@@ -34,6 +34,7 @@ public sealed partial class LlvmModuleGenerator
             StringLiteralExpression literal => EmitStringLiteral(builder, literal),
             BooleanLiteralExpression boolean => LLVMValueRef.CreateConstInt(
                 _context.Int1Type, boolean.Value ? 1UL : 0UL, false),
+            NullLiteralExpression => LLVMValueRef.CreateConstNull(ToLlvmType(model.ExpressionTypes[expression], model)),
             StructLiteralExpression literal => EmitStructLiteral(
                 context, builder, literal, values, storage, model, llvmFunctions),
             ArrayLiteralExpression literal => EmitArrayLiteral(

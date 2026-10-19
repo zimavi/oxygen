@@ -578,7 +578,7 @@ public sealed class SemanticTests
         var model = new SemanticAnalyzer(Log.Logger).Analyze(
         [
             Parse("import std.memory; class Box { i32* value; Box() { value = memory.alloc<i32>(1); } } i32 main() { Box box = new Box(); return 0; }"),
-            Parse("public module std.memory; public T* alloc<T>(u64 count) { return 0; }")
+            Parse("public module std.memory; public T* alloc<T>(u64 count) { return null; }")
         ]);
 
         Assert.Contains(model.ResolvedCalls.Values, function =>
@@ -833,7 +833,7 @@ public sealed class SemanticTests
     public void RejectsIndexingOpaquePointers()
     {
         var exception = Assert.Throws<SemanticException>(() =>
-            Analyze("i32 main() { void* pointer = 0; return pointer[0]; }"));
+            Analyze("i32 main() { void* pointer = null; return pointer[0]; }"));
 
         Assert.Contains("Cannot dereference an opaque void pointer", exception.Message);
     }
@@ -844,7 +844,7 @@ public sealed class SemanticTests
         var model = new SemanticAnalyzer(Log.Logger).Analyze(
         [
             Parse("import std.memory; i32 main() { i32* pointer = memory.alloc<i32>(1); memory.free(pointer); return 0; }"),
-            Parse("public module std.memory; public T* alloc<T>(u64 count) { return 0; } public void free<T>(T* pointer) { return; }")
+            Parse("public module std.memory; public T* alloc<T>(u64 count) { return null; } public void free<T>(T* pointer) { return; }")
         ]);
 
         Assert.Contains(model.ResolvedCalls.Values, function =>
@@ -856,7 +856,7 @@ public sealed class SemanticTests
     public void KeepsExplicitGenericSpecializationsWithDifferentReturnTypesSeparate()
     {
         var model = Analyze(
-            "T* alloc<T>(u64 count) { return 0; } i32 main() { i32* first = alloc<i32>(1); i64* second = alloc<i64>(1); return 0; }");
+            "T* alloc<T>(u64 count) { return null; } i32 main() { i32* first = alloc<i32>(1); i64* second = alloc<i64>(1); return 0; }");
 
         var allocations = model.ResolvedCalls.Values.Where(function => function.Name == "alloc").ToArray();
         Assert.Equal(2, allocations.Length);
@@ -1094,6 +1094,31 @@ public sealed class SemanticTests
             "i32 main() { string a = \"a\"; string b = \"b\"; if (a < b) { return 1; } return 0; }"));
 
         Assert.Contains("requires numeric operands", exception.Message);
+    }
+
+    [Fact]
+    public void AcceptsNullForAnyPointerType()
+    {
+        var model = Analyze(
+            "i32 main() { i32* ptr = null; i64* other = null; if (ptr == null) { return 1; } return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsNullForANonPointerType()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { i32 value = null; return value; }"));
+
+        Assert.Contains("Cannot initialize 'value'", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsIntegerZeroAsANullPointer()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { i32* ptr = 0; return 0; }"));
+
+        Assert.Contains("expected i32*", exception.Message);
     }
 
     [Fact]
@@ -1612,7 +1637,8 @@ public sealed class SemanticTests
                 i32 value = 41;
                 i32* pointer = &value;
                 pointer = pointer + 1;
-                pointer = 0;
+                pointer = null;
+
                 return 0;
             }
 
@@ -1690,7 +1716,7 @@ public sealed class SemanticTests
     public void RejectsCompileTimeNullDereference()
     {
         var exception = Assert.Throws<SemanticException>(() =>
-            Analyze("i32 main() { return *(0); }"));
+            Analyze("i32 main() { return *(null); }"));
 
         Assert.Contains("Cannot dereference a null pointer", exception.Message);
     }
@@ -1699,7 +1725,7 @@ public sealed class SemanticTests
     public void RejectsDereferenceOfPointerKnownToBeNull()
     {
         var exception = Assert.Throws<SemanticException>(() =>
-            Analyze("i32 main() { i32* ptr = 0; *ptr = 10; return 0; }"));
+            Analyze("i32 main() { i32* ptr = null; *ptr = 10; return 0; }"));
 
         Assert.Contains("Cannot dereference a null pointer", exception.Message);
     }

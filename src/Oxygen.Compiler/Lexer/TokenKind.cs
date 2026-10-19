@@ -8,6 +8,7 @@ public enum TokenKind
     StringLiteral,
     True,
     False,
+    Null,
     Return,
     If,
     Else,
