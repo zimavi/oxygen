@@ -511,6 +511,114 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("4294967295", run.Output.Replace("\r\n", "\n"));
     }
 
+    [SkippableFact]
+    public void WhileLoopRunsContinueAndBreakInTheRightPlaces()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32 value = 0;
+                i32 total = 0;
+                while (value < 10) {
+                    value = value + 1;
+                    if (value == 2) {
+                        continue;
+                    }
+                    if (value == 5) {
+                        break;
+                    }
+                    total = total + value;
+                }
+                io.print(total);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("8", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void ForLoopRunsItsIncrementAfterContinue()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32 total = 0;
+                for (i32 index = 0; index < 4; index = index + 1) {
+                    if (index == 1) {
+                        continue;
+                    }
+                    total = total + index;
+                }
+                io.print(total);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("5", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void SwitchCaseFallsThroughUntilABreak()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32 value = 1;
+                switch (value) {
+                    case 1: { io.print("a"); }
+                    case 2: { io.print("b"); break; }
+                    case 3: { io.print("c"); }
+                    default: { io.print("d"); }
+                }
+                switch (value) {
+                    case 1: break;
+                    default: return 2;
+                }
+                io.print("!");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("ab!", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void ConditionalExpressionEvaluatesOnlyTheChosenArm()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32 n = 2;
+                i32 zero = 0;
+                io.print(n == 2 ? 10 : 1 / zero);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("10", run.Output.Replace("\r\n", "\n"));
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }
