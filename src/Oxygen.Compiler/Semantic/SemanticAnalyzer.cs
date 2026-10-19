@@ -45,6 +45,9 @@ public sealed partial class SemanticAnalyzer
     private readonly Dictionary<string, EnumSymbol> _enumsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, UnionSymbol> _unionsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClassSymbol> _classesByName = new(StringComparer.Ordinal);
+    // Each class's own fields as declared. _classesByName holds the full inherited list after GetClassFields runs, so
+    // inheritance is computed from this table, which never changes.
+    private readonly Dictionary<string, IReadOnlyList<ClassFieldSymbol>> _ownClassFields = new(StringComparer.Ordinal);
     private readonly Dictionary<string, InterfaceSymbol> _interfacesByName = new(StringComparer.Ordinal);
     private ClassSymbol? _currentOwnerClass;
     private bool _currentIsConstructor;
@@ -341,6 +344,7 @@ public sealed partial class SemanticAnalyzer
                         types.Insert(0, ResolveType(declaration.BaseTypeSyntax[0]));
                     return types;
                 });
+                _ownClassFields[declaration.Name] = fields;
                 _classesByName[declaration.Name] = _classesByName[declaration.Name] with
                 {
                     Fields = fields,
@@ -907,7 +911,8 @@ public sealed partial class SemanticAnalyzer
             : [];
         active.Remove(name);
         var fields = inherited.ToList();
-        foreach (var field in cls.Fields)
+        var own = _ownClassFields.TryGetValue(name, out var declared) ? declared : cls.Fields;
+        foreach (var field in own)
         {
             var inheritedIndex = fields.FindIndex(candidate => candidate.Name == field.Name);
             if (inheritedIndex < 0)

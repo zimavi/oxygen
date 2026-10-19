@@ -2104,6 +2104,18 @@ public sealed class SemanticTests
         Assert.Contains("'value' is not declared", fieldError.Message);
     }
 
+    [Fact]
+    public void InheritedFieldsAppearOnceInEveryDescendantOfAThreeLevelChain()
+    {
+        var model = Analyze(
+            "class A { i32 x; } " +
+            "class B : A { } " +
+            "class C : B { } " +
+            "i32 main() { return 0; }");
+
+        Assert.Equal(["x"], model.Classes["C"].Fields.Select(field => field.Name));
+    }
+
     private SemanticModel Analyze(string source)
     {
         var unit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
