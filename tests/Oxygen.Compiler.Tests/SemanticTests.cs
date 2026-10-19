@@ -1032,6 +1032,62 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RejectsPrivateFieldAccessFromOutsideTheClass()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { private i32 secret = 1; } i32 main() { Box b = new Box(); return b.secret; }"));
+
+        Assert.Contains("'secret' of class 'Box' is private", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsProtectedFieldAccessFromADerivedClass()
+    {
+        var model = Analyze(
+            "class Base { protected i32 level = 1; } class Child : Base { i32 read() { return this.level; } } " +
+            "i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsProtectedFieldAccessFromOutsideTheHierarchy()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Base { protected i32 level = 1; } class Child : Base { } " +
+            "i32 main() { Child c = new Child(); return c.level; }"));
+
+        Assert.Contains("'level' of class 'Child' is protected", exception.Message);
+    }
+
+    [Fact]
+    public void MembersWithoutAVisibilityKeywordArePublic()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 3; i32 get() { return value; } } i32 main() { Box b = new Box(); return b.get() + b.value; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsCallsToPrivateMethodsFromOutsideTheClass()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { private i32 hidden() { return 1; } } i32 main() { Box b = new Box(); return b.hidden(); }"));
+
+        Assert.Contains("'hidden' of class 'Box'", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsConstructingAClassWithAPrivateConstructorFromOutside()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { private Box() { } } i32 main() { Box b = new Box(); return 0; }"));
+
+        Assert.Contains("No accessible constructor", exception.Message);
+    }
+
+    [Fact]
     public void RejectsMissingMainFunction()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze("i32 helper() { return 1; }"));

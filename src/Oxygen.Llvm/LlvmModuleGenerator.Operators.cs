@@ -301,6 +301,9 @@ public sealed partial class LlvmModuleGenerator
         var isFloatingPoint = model.ExpressionTypes[expression].Primitive is PrimitiveType.F32 or PrimitiveType.F64;
         if (expression.Operator == TokenKind.Bang)
             return builder.BuildNot(operand, "not");
+        // Bitwise complement: exclusive or with all ones, for any integer width.
+        if (expression.Operator == TokenKind.Tilde)
+            return builder.BuildNot(operand, "bitwise.not");
         return expression.Operator == TokenKind.Minus
             ? isFloatingPoint
                 ? builder.BuildFNeg(operand, "fneg")

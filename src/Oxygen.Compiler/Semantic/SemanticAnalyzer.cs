@@ -2338,7 +2338,10 @@ public sealed partial class SemanticAnalyzer
             }
             var field = cls.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (field is not null)
+            {
+                EnsureMemberAccessible(field.Visibility, "Field", field.Name, cls, moduleName, member.Location);
                 return SubstituteGenericType(field.Type, substitutions);
+            }
             if (cls.Methods.Any(method => method.Name == member.MemberName))
                 return SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.Void));
             throw Error($"Class '{cls.Name}' has no member named '{member.MemberName}'", member.Location);
@@ -2375,6 +2378,49 @@ public sealed partial class SemanticAnalyzer
         return cls.BaseTypeName is not null && _classesByName.TryGetValue(cls.BaseTypeName, out var baseClass)
             ? FindProperty(baseClass, name)
             : null;
+    }
+
+    // Reports a constructor that matches the arguments but is not visible from here, instead of the generic no-match error.
+    private void EnsureConstructorAccessible(ClassSymbol cls, int argumentCount, string moduleName, SourceLocation location)
+    {
+        var hidden = cls.Constructors.FirstOrDefault(constructor =>
+            constructor.Parameters.Count == argumentCount
+            && !IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName));
+        if (hidden is not null)
+            throw Error(
+                $"No accessible constructor of '{cls.Name}' matches the supplied arguments; the matching constructor is " +
+                $"{hidden.Visibility.ToString().ToLowerInvariant()}",
+                location, cls.Name.Length);
+    }
+
+    // A method's module name ends with its owner class: `module.Class`.
+    private static string MethodOwnerName(FunctionSymbol method) =>
+        method.ModuleName[(method.ModuleName.LastIndexOf('.') + 1)..];
+
+    private static string MethodOwnerModule(FunctionSymbol method) =>
+        method.ModuleName[..Math.Max(0, method.ModuleName.LastIndexOf('.'))];
+
+    // Whether a member of `ownerClassName` (declared in `ownerModuleName` with `visibility`) can be used from the code being
+    // analyzed in `moduleName`. Public is open; internal needs the same module; protected needs the owner class or a
+    // class derived from it; private needs the owner class itself.
+    private bool IsMemberAccessible(Visibility visibility, string ownerClassName, string ownerModuleName, string moduleName) =>
+        visibility switch
+        {
+            Visibility.Public => true,
+            // Inside a class body the module name can carry the class name, so the class's own module is used there.
+            Visibility.Internal => string.Equals(ownerModuleName, _currentOwnerClass?.ModuleName ?? moduleName, StringComparison.Ordinal),
+            Visibility.Protected => _currentOwnerClass is not null
+                && (_currentOwnerClass.Name == ownerClassName || IsClassDerivedFrom(_currentOwnerClass.Name, ownerClassName)),
+            _ => _currentOwnerClass is not null && _currentOwnerClass.Name == ownerClassName
+        };
+
+    private void EnsureMemberAccessible(Visibility visibility, string memberKind, string memberName, ClassSymbol owner,
+        string moduleName, SourceLocation location)
+    {
+        if (!IsMemberAccessible(visibility, owner.Name, owner.ModuleName, moduleName))
+            throw Error(
+                $"{memberKind} '{memberName}' of class '{owner.Name}' is {visibility.ToString().ToLowerInvariant()} and cannot be used here",
+                location, memberName.Length);
     }
 
     private void EnsureAccessorVisible(PropertySymbol property, PropertyAccessorDeclaration accessor,
@@ -2414,7 +2460,8 @@ public sealed partial class SemanticAnalyzer
         var substitutions = cls.DeclaredTypeParameters
             .Zip(constructedType.TypeArguments ?? [], (name, type) => (name, type))
             .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
-        var matches = cls.Constructors.Where(constructor => constructor.Parameters.Count == arguments.Length)
+        var matches = cls.Constructors.Where(constructor => IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName))
+            .Where(constructor => constructor.Parameters.Count == arguments.Length)
             .Where(constructor => constructor.Parameters.Select((parameter, index) =>
             {
                 if (expression.Type.DeclaredTypeArguments.Count == 0)
@@ -2425,7 +2472,10 @@ public sealed partial class SemanticAnalyzer
                     arguments[index]);
             }).All(match => match)).ToArray();
         if (matches.Length == 0)
+        {
+            EnsureConstructorAccessible(cls, arguments.Length, moduleName, expression.Location);
             throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
+        }
         if (matches.Length > 1)
             throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
         _constructorSelections[expression] = IndexOfConstructor(cls, matches[0]);
@@ -2459,7 +2509,8 @@ public sealed partial class SemanticAnalyzer
                          expression.ExplicitTypeArguments.Select(ResolveType)))
                 substitutions[name] = type;
         }
-        var matches = cls.Constructors.Where(constructor => constructor.Parameters.Count == arguments.Length)
+        var matches = cls.Constructors.Where(constructor => IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName))
+            .Where(constructor => constructor.Parameters.Count == arguments.Length)
             .Where(constructor => constructor.Parameters.Select((parameter, index) =>
             {
                 if (expression.ExplicitTypeArguments.Count == 0)
@@ -2470,7 +2521,10 @@ public sealed partial class SemanticAnalyzer
                     arguments[index]);
             }).All(match => match)).ToArray();
         if (matches.Length == 0)
+        {
+            EnsureConstructorAccessible(cls, arguments.Length, moduleName, expression.Location);
             throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
+        }
         if (matches.Length > 1)
             throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
         _constructorSelections[expression] = IndexOfConstructor(cls, matches[0]);
@@ -2553,6 +2607,13 @@ public sealed partial class SemanticAnalyzer
                 throw Error("The '!' operator requires a bool operand", expression.Location);
             }
 
+            return operandType;
+        }
+
+        if (expression.Operator == TokenKind.Tilde)
+        {
+            if (!operandType.IsInteger)
+                throw Error($"The '~' operator requires an integer operand, got {operandType}", expression.Location);
             return operandType;
         }
 
@@ -2745,7 +2806,12 @@ public sealed partial class SemanticAnalyzer
                 _callReceiverTypes[call] = receiverType;
                 if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
                 {
-                    var methodCandidates = GetClassMethods(receiverClass.Name, []).Where(method => method.Name == methodName).ToArray();
+                    // A method's owner is the class named by the last segment of its module name.
+                    var namedMethods = GetClassMethods(receiverClass.Name, []).Where(method => method.Name == methodName).ToArray();
+                    var methodCandidates = namedMethods.Where(method => IsMemberAccessible(method.Visibility,
+                        MethodOwnerName(method), MethodOwnerModule(method), moduleName)).ToArray();
+                    if (methodCandidates.Length == 0 && namedMethods.Length > 0)
+                        throw Error($"Method '{methodName}' of class '{receiverClass.Name}' cannot be used here", call.Location);
                     var substitutions = receiverClass.DeclaredTypeParameters
                         .Zip(receiverType.TypeArguments ?? [], (name, type) => (name, type))
                         .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);

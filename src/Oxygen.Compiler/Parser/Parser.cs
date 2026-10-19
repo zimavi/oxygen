@@ -195,7 +195,7 @@ public sealed partial class Parser
         DestructorDeclaration? destructor = null;
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
-            var memberVisibility = Visibility.Private;
+            var memberVisibility = Visibility.Public;
             var hasVisibility = false;
             var isVirtual = false;
             var isOverride = false;
@@ -305,7 +305,7 @@ public sealed partial class Parser
         var properties = new List<PropertyDeclaration>();
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
-            var memberVisibility = ParseVisibility();
+            var memberVisibility = ParseVisibility(Visibility.Public);
             var methodLocation = Current.Location;
             var returnType = ParseType(allowInferred: false);
             var methodName = ConsumeIdentifierLike("Expected an interface method name.").Lexeme;
@@ -414,7 +414,8 @@ public sealed partial class Parser
         return new ConstructorInitializer(kind, arguments, location);
     }
 
-    private Visibility ParseVisibility()
+    // The visibility keyword at the current position, or `fallback` when none is written.
+    private Visibility ParseVisibility(Visibility fallback = Visibility.Private)
     {
         if (Match(TokenKind.Public))
             return Visibility.Public;
@@ -422,8 +423,9 @@ public sealed partial class Parser
             return Visibility.Protected;
         if (Match(TokenKind.Internal))
             return Visibility.Internal;
-        Match(TokenKind.Private);
-        return Visibility.Private;
+        if (Match(TokenKind.Private))
+            return Visibility.Private;
+        return fallback;
     }
 
     private UnionDeclaration ParseUnion()
@@ -950,7 +952,7 @@ public sealed partial class Parser
 
     private Expression ParseUnaryExpression()
     {
-        if (Check(TokenKind.Bang) || Check(TokenKind.Minus) || Check(TokenKind.Plus)
+        if (Check(TokenKind.Bang) || Check(TokenKind.Tilde) || Check(TokenKind.Minus) || Check(TokenKind.Plus)
             || Check(TokenKind.Ampersand) || Check(TokenKind.Star)
             || Check(TokenKind.PlusPlus) || Check(TokenKind.MinusMinus))
         {
