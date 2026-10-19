@@ -19,7 +19,7 @@ following function declaration. The compiler currently recognizes:
   declaration.
 - `@calling_convention(c)` or `@calling_convention("c")` — records the C
   calling convention.
-- `@packed` and `@align(bytes)` — reserved for future struct declarations.
+- `@packed` and `@align(bytes)` — apply to struct declarations (see `structs.md`).
 
 An external declaration uses `extern` in place of a function body and may be
 called like an ordinary function. Primitive arguments and return values are
@@ -35,9 +35,9 @@ deallocator yet, and null pointers are invalid inputs to the reverse
 conversion. Structs, variadic functions, and platform-specific ABI details
 remain unsupported until their Oxygen representations are defined.
 
-`@packed` and `@align` are parsed and their argument shapes are validated
-(`@align` currently accepts power-of-two byte values from 1 through 4096), but
-they are rejected until Oxygen has struct declarations and a defined layout model.
+`@packed` and `@align` are parsed and validated for struct declarations. `@align`
+accepts power-of-two byte values from 1 through 4096. The layout effect of `@align`
+(alignment of struct storage) is not emitted yet; only `@packed` changes the layout today.
 The eventual implementation must define target layout, alignment validity,
 marshaling, ownership, and the distinction between Oxygen-mangled symbols and
 external ABI symbols before emitting foreign calls.

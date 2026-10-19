@@ -16,8 +16,8 @@ i32 main() {
 assignment target. Pointer types are exact: implicit conversions between
 pointee types are not performed.
 
-The integer literal `0` is accepted as a null pointer value when a pointer is
-expected. Dereferencing a compile-time-known null literal is rejected. Other
+The keyword `null` is the null pointer value. It converts to any pointer type. The integer
+literal `0` is not a null pointer. Dereferencing a compile-time-known null literal is rejected. Other
 validity and lifetime rules are the programmer's responsibility; pointers to
 local variables are allowed, but must not outlive the storage they reference.
 

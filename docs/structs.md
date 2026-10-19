@@ -30,8 +30,8 @@ Whole-value assignment and field reads/writes are supported. Struct equality
 and other comparisons are not supported.
 
 Structs use natural LLVM layout by default. `@packed` removes inter-field
-padding, and `@align(<power-of-two>)` requests a struct alignment between 1
-and 4096 bytes:
+padding. `@align(<power-of-two>)` accepts an alignment between 1 and 4096 bytes; its
+layout effect is not emitted yet, so it currently has no effect on generated code:
 
 ```oxygen
 @packed struct PackedPoint {

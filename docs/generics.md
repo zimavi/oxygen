@@ -31,6 +31,9 @@ argument, no boxing, and no shared code between instantiations.
 
 ## Constraints
 
+A type parameter can require several interfaces with `&`, for example `void foo<T : A & B, R : C>()`.
+Every listed interface must be implemented by the type argument.
+
 A type parameter may require that its type argument implements an interface:
 
 ```oxygen
