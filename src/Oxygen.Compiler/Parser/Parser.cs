@@ -1136,12 +1136,7 @@ public sealed partial class Parser
                     return new SizeOfExpression(null, operand, token.Location);
                 }
             case TokenKind.OpenParenthesis:
-                if ((Check(TokenKind.Identifier) || IsType(Current.Kind)) && Peek(1).Kind == TokenKind.CloseParenthesis)
-                {
-                    var type = ParseType(allowInferred: false);
-                    Consume(TokenKind.CloseParenthesis, "Expected ')' after cast type.");
-                    return new CastExpression(type, ParseUnaryExpression(), token.Location);
-                }
+                // A parenthesized expression only. Casts are written as cast<T>(x) or x as T.
                 var expression = ParseExpression();
                 Consume(TokenKind.CloseParenthesis, "Expected ')' after expression.");
                 return expression;

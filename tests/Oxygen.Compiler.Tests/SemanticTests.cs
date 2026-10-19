@@ -706,8 +706,8 @@ public sealed class SemanticTests
             """
             enum Color : i32 { Red, Green = 4, Blue }
             i32 main() {
-                Color color = (Color) 4;
-                return (i32) color;
+                Color color = cast<Color>(4);
+                return cast<i32>(color);
             }
             """);
 
@@ -776,7 +776,7 @@ public sealed class SemanticTests
     public void RejectsInvalidConstantEnumCast()
     {
         var exception = Assert.Throws<SemanticException>(() =>
-            Analyze("enum Color : i32 { Red, Green } i32 main() { return (i32) (Color) 5; }"));
+            Analyze("enum Color : i32 { Red, Green } i32 main() { return cast<i32>(cast<Color>(5)); }"));
 
         Assert.Contains("is not a member of enum 'Color'", exception.Message);
     }

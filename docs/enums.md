@@ -26,8 +26,8 @@ name:
 
 ```oxygen
 i32 main() {
-    Color color = (Color) 4;
-    return (i32) color;
+    Color color = cast<Color>(4);
+    return cast<i32>(color);
 }
 ```
 

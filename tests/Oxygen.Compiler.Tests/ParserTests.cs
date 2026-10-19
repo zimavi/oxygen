@@ -114,7 +114,7 @@ public sealed class ParserTests
     [Fact]
     public void ParsesEnumsAndExplicitCasts()
     {
-        var unit = Parse("enum Color : i32 { Red, Green = 4, Blue } i32 main() { return (i32) Color.Blue; }");
+        var unit = Parse("enum Color : i32 { Red, Green = 4, Blue } i32 main() { return cast<i32>(Color.Blue); }");
 
         var enumeration = Assert.Single(unit.Enums);
         Assert.Equal("Color", enumeration.Name);
@@ -398,6 +398,20 @@ public sealed class ParserTests
         var parameters = unit.Functions[0].DeclaredTypeParameters;
         Assert.Equal(new[] { "A", "B" }, parameters[0].Constraints);
         Assert.Equal(new[] { "C" }, parameters[1].Constraints);
+    }
+
+    [Fact]
+    public void ParsesAParenthesizedIdentifierAsAnExpression()
+    {
+        var unit = Parse("i32 main() { i32 x = 1; return (x); }");
+
+        Assert.Single(unit.Functions);
+    }
+
+    [Fact]
+    public void RejectsTheRetiredParenthesizedCastSyntax()
+    {
+        Assert.Throws<ParseException>(() => Parse("i32 main() { i32 x = 1; return (i64)x; }"));
     }
 
     [Fact]
