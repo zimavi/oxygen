@@ -1,3 +1,4 @@
+using System.Numerics;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
@@ -109,10 +110,7 @@ public sealed partial class SemanticAnalyzer
         // Only an integer constant that fits may narrow implicitly. A float never converts implicitly unless widening.
         if (IsFloatingPointType(actual))
             return null;
-        if (!TryGetConstantNumber(value, out var constant) || !IsRepresentable(constant, target))
-            return null;
-        // An integer constant reaches f32 only when f32 holds its exact value.
-        if (target.Primitive == PrimitiveType.F32 && (double)(float)constant != constant)
+        if (!TryGetConstantInteger(value, out var constant) || !IsRepresentable(constant, target))
             return null;
         return new ConversionCost(1, crossKind, NumericBitWidth(target) < NumericBitWidth(actual) ? 1 : 0, 0);
     }
@@ -232,26 +230,26 @@ public sealed partial class SemanticAnalyzer
         : type is PrimitiveType.I32 or PrimitiveType.U32 ? 32
         : 64;
 
-    private static bool IsRepresentable(double value, SemanticType target)
+    // Whether an integer constant holds its exact value in the target. An integer reaches a float only when the float holds
+    // it exactly, so a value that rounds is rejected, as it is for any other implicit conversion to a float.
+    private static bool IsRepresentable(BigInteger value, SemanticType target)
     {
-        if (double.IsNaN(value) || double.IsInfinity(value))
-            return false;
-        return target.Primitive switch
+        var primitive = target.Primitive;
+        if (primitive is PrimitiveType.F32 or PrimitiveType.F64)
+            return IsExactFloat(value, primitive.Value);
+        return primitive is { } integer && TryGetIntegerRange(integer, out var minimum, out var maximum)
+            && value >= minimum && value <= maximum;
+    }
+
+    private static bool IsExactFloat(BigInteger value, PrimitiveType type)
+    {
+        if (type == PrimitiveType.F32)
         {
-            PrimitiveType.I8 => value >= sbyte.MinValue && value <= sbyte.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.U8 => value >= byte.MinValue && value <= byte.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.I16 => value >= short.MinValue && value <= short.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.U16 => value >= ushort.MinValue && value <= ushort.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.I32 => value >= int.MinValue && value <= int.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.U32 => value >= uint.MinValue && value <= uint.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.I64 => value >= long.MinValue && value <= long.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.U64 => value >= 0 && value <= ulong.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.ISize => value >= long.MinValue && value <= long.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.USize => value >= 0 && value <= ulong.MaxValue && value == Math.Truncate(value),
-            PrimitiveType.F32 => value >= -float.MaxValue && value <= float.MaxValue,
-            PrimitiveType.F64 => true,
-            _ => false
-        };
+            var single = (float)value;
+            return !float.IsInfinity(single) && (BigInteger)single == value;
+        }
+        var doubled = (double)value;
+        return !double.IsInfinity(doubled) && (BigInteger)doubled == value;
     }
 
 }

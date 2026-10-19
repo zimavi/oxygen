@@ -66,20 +66,40 @@ public sealed partial class SemanticAnalyzer
         throw Error($"'{text}' does not fit in {suffix}", location, text.Length);
     }
 
-    // The value of an integer literal, with the sign of a unary minus applied. False for anything else.
-    private static bool TryGetIntegerConstantValue(Expression expression, out BigInteger value)
+    // The exact value of an integer constant expression: integer literals, unary plus and minus, and + - * / % over them.
+    // Arithmetic is exact, so no value is rounded. A division or remainder by zero is not a constant.
+    private static bool TryGetConstantInteger(Expression expression, out BigInteger value)
     {
         switch (expression)
         {
             case IntegerLiteralExpression integer:
                 value = ParseIntegerLiteralDigits(integer.Lexeme);
                 return true;
-            case UnaryExpression { Operator: TokenKind.Minus, Operand: IntegerLiteralExpression negated }:
-                value = -ParseIntegerLiteralDigits(negated.Lexeme);
+            case UnaryExpression { Operator: TokenKind.Minus, Operand: var negated } when TryGetConstantInteger(negated, out var operand):
+                value = -operand;
                 return true;
+            case UnaryExpression { Operator: TokenKind.Plus, Operand: var positive }:
+                return TryGetConstantInteger(positive, out value);
+            case BinaryExpression binary when TryGetConstantInteger(binary.Left, out var left)
+                && TryGetConstantInteger(binary.Right, out var right):
+                return TryFoldArithmetic(binary.Operator, left, right, out value);
             default:
                 value = default;
                 return false;
+        }
+    }
+
+    private static bool TryFoldArithmetic(TokenKind operatorKind, BigInteger left, BigInteger right, out BigInteger value)
+    {
+        value = default;
+        switch (operatorKind)
+        {
+            case TokenKind.Plus: value = left + right; return true;
+            case TokenKind.Minus: value = left - right; return true;
+            case TokenKind.Star: value = left * right; return true;
+            case TokenKind.Slash when !right.IsZero: value = left / right; return true;
+            case TokenKind.Percent when !right.IsZero: value = left % right; return true;
+            default: return false;
         }
     }
 
@@ -104,57 +124,6 @@ public sealed partial class SemanticAnalyzer
                 _ => floating ? PrimitiveType.F64 : PrimitiveType.I32
             };
         return floating ? PrimitiveType.F64 : PrimitiveType.I32;
-    }
-
-    private static bool TryGetConstantNumber(Expression expression, out double value)
-    {
-        static string WithoutSuffix(string lexeme)
-        {
-            foreach (var suffix in new[] { "usize", "isize", "f32", "f64", "i16", "i32", "i64", "u16", "u32", "u64", "i8", "u8" })
-                if (lexeme.EndsWith(suffix, StringComparison.Ordinal))
-                    return lexeme[..^suffix.Length];
-            return lexeme;
-        }
-        switch (expression)
-        {
-            case IntegerLiteralExpression integer:
-                return double.TryParse(WithoutSuffix(integer.Lexeme),
-                    System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value);
-            case FloatingPointLiteralExpression floating:
-                return double.TryParse(WithoutSuffix(floating.Lexeme),
-                    System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
-            case UnaryExpression { Operator: TokenKind.Minus, Operand: var operand } when TryGetConstantNumber(operand, out var negated):
-                value = -negated; return true;
-            case UnaryExpression { Operator: TokenKind.Plus, Operand: var operand }:
-                return TryGetConstantNumber(operand, out value);
-            case BinaryExpression binary when TryGetConstantNumber(binary.Left, out var left)
-                && TryGetConstantNumber(binary.Right, out var right):
-                value = binary.Operator switch
-                {
-                    TokenKind.Plus => left + right,
-                    TokenKind.Minus => left - right,
-                    TokenKind.Star => left * right,
-                    TokenKind.Slash when right != 0 => left / right,
-                    TokenKind.Percent when right != 0 => left % right,
-                    _ => double.NaN
-                };
-                return !double.IsNaN(value);
-            default:
-                value = 0; return false;
-        }
-    }
-
-    private static bool TryGetConstantInteger(Expression expression, out int value)
-    {
-        if (TryGetConstantNumber(expression, out var number)
-            && number >= int.MinValue && number <= int.MaxValue
-            && number == Math.Truncate(number))
-        {
-            value = (int)number;
-            return true;
-        }
-        value = 0;
-        return false;
     }
 
 }

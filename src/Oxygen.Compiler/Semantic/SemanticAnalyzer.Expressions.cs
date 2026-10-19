@@ -446,10 +446,10 @@ public sealed partial class SemanticAnalyzer
     private static void CheckConstantIntegerOperation(BinaryExpression expression, SemanticType left, SemanticType right)
     {
         if (expression.Operator is TokenKind.Slash or TokenKind.Percent && left.IsInteger && right.IsInteger
-            && TryGetIntegerConstantValue(expression.Right, out var divisor) && divisor.IsZero)
+            && TryGetConstantInteger(expression.Right, out var divisor) && divisor.IsZero)
             throw Error("Division by zero", expression.Right.Location);
         if (expression.Operator is TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan
-            && left.IsInteger && TryGetIntegerConstantValue(expression.Right, out var count)
+            && left.IsInteger && TryGetConstantInteger(expression.Right, out var count)
             && (count.Sign < 0 || count >= IntegerBitWidth(left.Primitive!.Value)))
             throw Error($"Shift count {count} is out of range for {left}", expression.Right.Location);
     }

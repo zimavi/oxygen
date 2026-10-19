@@ -1673,6 +1673,52 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ConstantFoldingIsExactBeyondDoublePrecision()
+    {
+        // 9007199254740993 - 9007199254740992 + 2147483647 is 2147483648, one above i32's limit. In double arithmetic
+        // the first two literals round to the same value, so the sum wrongly fits.
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 9007199254740993 - 9007199254740992 + 2147483647; return x; }"));
+
+        Assert.Contains("Cannot initialize 'x' with i64; expected i32", exception.Message);
+    }
+
+    [Fact]
+    public void IntegerConstantThatRoundsWhenConvertedToFloatIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { f64 x = 9007199254740993; return 0; }"));
+
+        Assert.Contains("f64", exception.Message);
+    }
+
+    [Fact]
+    public void IntegerConstantExactAsFloatIsAccepted()
+    {
+        var model = Analyze("i32 main() { f64 x = 9007199254740991 - 1; f32 y = 16777216 + 0; return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void DivisorThatFoldsToZeroIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 1; return x / (3 - 3); }"));
+
+        Assert.Contains("Division by zero", exception.Message);
+    }
+
+    [Fact]
+    public void ShiftCountThatFoldsOutOfRangeIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = 1; return x << (20 + 20); }"));
+
+        Assert.Contains("Shift count 40 is out of range for i32", exception.Message);
+    }
+
+    [Fact]
     public void StatementAfterBreakIsReportedAsUnreachable()
     {
         var result = AnalyzeWithDiagnostics(
