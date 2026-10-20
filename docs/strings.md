@@ -18,6 +18,18 @@ pointer to immutable UTF-8 bytes and the byte length. String literals are
 stored in private module globals. This is an internal representation, not yet a
 C ABI contract.
 
+A string has two read-only members and an element type:
+
+- `text.length` is the byte length, as a `usize`.
+- `text[i]` is the byte at index `i`, as a `u8`. The index can be any integer
+  type. It is checked against the length at run time: an index outside
+  `0 .. length` stops the program through the bounds-failure primitive, and a
+  negative index is outside the range.
+- A string is immutable, so `text[i] = x` and `text.length = x` are rejected at
+  compile time.
+- Two strings compare with `==` and `!=`, by their bytes. Ordering operators are
+  not defined on strings.
+
 The standard library exposes `stdlib.strings.to_c_string` and
 `stdlib.strings.from_c_string` for C interop. `to_c_string` copies the UTF-8
 bytes into a newly allocated, NUL-terminated buffer and returns an `i8*`.

@@ -92,13 +92,6 @@ public sealed partial class SemanticAnalyzer
                 : expectedType?.EnumName == union.Name ? expectedType.TypeArguments : null;
             return SemanticType.Union(union.Name, unionArguments);
         }
-        if (call.Name == "length")
-        {
-            if (call.Arguments.Count != 1) throw Error("length(array) expects one argument", call.Location);
-            var argumentType = AnalyzeExpression(call.Arguments[0], scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-            if (!argumentType.IsArray) throw Error("length() requires an array", call.Arguments[0].Location);
-            return SemanticType.FromPrimitive(PrimitiveType.I32);
-        }
         if (call.Name.Contains('.', StringComparison.Ordinal))
         {
             var separator = call.Name.LastIndexOf('.');

@@ -171,8 +171,11 @@ public sealed partial class SemanticAnalyzer
         var target = AnalyzeExpression(index.Target, scope, functions, moduleName, imports, types, calls);
         var indexType = AnalyzeExpression(index.Index, scope, functions, moduleName, imports, types, calls);
         if (!indexType.IsNumeric) throw Error("Index must be numeric", index.Index.Location);
-        if (!target.IsArray && !target.IsPointer)
-            throw Error("Indexing requires an array or pointer", index.Target.Location);
+        if (!target.IsArray && !target.IsPointer && target.Kind != SemanticTypeKind.String)
+            throw Error("Indexing requires an array, a string or a pointer", index.Target.Location);
+        // A string element is one byte, which is read but never written.
+        if (target.Kind == SemanticTypeKind.String)
+            return SemanticType.FromPrimitive(PrimitiveType.U8);
         if (target.IsOpaquePointer)
             throw Error("Cannot dereference an opaque void pointer; cast it to a typed pointer first",
                 index.Target.Location);
@@ -237,6 +240,9 @@ public sealed partial class SemanticAnalyzer
         _receiverUse = member.Target is IdentifierExpression;
         var targetType = AnalyzeExpression(member.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         _receiverUse = previousReceiver;
+        // An array and a string have a read-only length, of type usize.
+        if ((targetType.IsArray || targetType.Kind == SemanticTypeKind.String) && member.MemberName == "length")
+            return SemanticType.FromPrimitive(PrimitiveType.USize);
         if (targetType.IsClass)
         {
             var cls = _classesByName[targetType.StructName!];

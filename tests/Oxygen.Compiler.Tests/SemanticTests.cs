@@ -1849,6 +1849,32 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void StringLengthAndByteIndexAreReadable()
+    {
+        var model = Analyze("i32 main() { string a = \"hey\"; usize n = a.length; u8 b = a[1]; return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void LengthOfAnArrayOrStringCannotBeAssigned()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { string a = \"hey\"; a.length = 3; return 0; }"));
+
+        Assert.Contains("The length of an array or a string cannot be assigned", exception.Message);
+    }
+
+    [Fact]
+    public void StringByteCannotBeAssigned()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { string a = \"hey\"; a[0] = 5u8; return 0; }"));
+
+        Assert.Contains("A string is immutable", exception.Message);
+    }
+
+    [Fact]
     public void EnumValuesOfOneEnumCompareForEquality()
     {
         var model = Analyze(

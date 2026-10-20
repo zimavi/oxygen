@@ -52,8 +52,6 @@ public sealed partial class LlvmModuleGenerator
                 context, builder, creation, values, storage, model, llvmFunctions),
             IndexExpression index => builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[index], model),
                 EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions), "array.element"),
-            CallExpression { Name: "length", Arguments: [var target] } => LLVMValueRef.CreateConstInt(
-                _context.Int32Type, (ulong)model.ExpressionTypes[target].ArrayLength, false),
             MemberAccessExpression member => EmitMemberAccess(
                 context, builder, member, values, storage, model, llvmFunctions),
             CastExpression cast => EmitCast(
@@ -259,6 +257,8 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var targetType = model.ExpressionTypes[index.Target];
+        if (targetType.Kind == SemanticTypeKind.String)
+            return EmitStringByteAddress(context, builder, index, values, storage, model, llvmFunctions);
         if (targetType.IsPointer)
         {
             var pointerValue = EmitExpression(context, builder, index.Target, values, storage, model, llvmFunctions);
@@ -292,6 +292,33 @@ public sealed partial class LlvmModuleGenerator
         builder.PositionAtEnd(continueBlock);
         return builder.BuildGEP2(ToLlvmType(arrayType, model), pointer,
             new LLVMValueRef[] { LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), llvmIndex }, (ReadOnlySpan<char>)"array.address");
+    }
+
+    // The address of one byte of a string. The index is checked against the length, as an array index is. An unsigned
+    // comparison also rejects a negative index, which is a very large unsigned value.
+    private LLVMValueRef EmitStringByteAddress(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        IndexExpression index,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var text = EmitExpression(context, builder, index.Target, values, storage, model, llvmFunctions);
+        var llvmIndex = EmitExpression(context, builder, index.Index, values, storage, model, llvmFunctions);
+        llvmIndex = ExtendIndexToInt64(builder, llvmIndex, model.ExpressionTypes[index.Index], "string.index");
+        var length = builder.BuildExtractValue(text, 1, "string.length");
+        var outside = builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, llvmIndex, length, "string.outside");
+        var failureBlock = _currentFunction.AppendBasicBlock("string.bounds.failure");
+        var continueBlock = _currentFunction.AppendBasicBlock("string.bounds.continue");
+        builder.BuildCondBr(outside, failureBlock, continueBlock);
+        builder.PositionAtEnd(failureBlock);
+        BuildNoThrowCall(builder, _arrayBoundsFailure, [llvmIndex, length]);
+        builder.BuildUnreachable();
+        builder.PositionAtEnd(continueBlock);
+        var data = builder.BuildExtractValue(text, 0, "string.data");
+        return builder.BuildGEP2(_context.Int8Type, data, [llvmIndex], (ReadOnlySpan<char>)"string.byte.address");
     }
 
     private LLVMValueRef EmitStructLiteral(
@@ -328,6 +355,19 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        // The length of a string is stored with it. The length of an array is part of its type.
+        // An enum name is not an expression with a type, so only a typed target can be a string or an array.
+        if (member.MemberName == "length" && model.ExpressionTypes.TryGetValue(member.Target, out var ownerType))
+        {
+            if (ownerType.Kind == SemanticTypeKind.String)
+                return builder.BuildExtractValue(
+                    EmitExpression(context, builder, member.Target, values, storage, model, llvmFunctions), 1, "string.length");
+            if (ownerType.IsArray)
+            {
+                EmitExpression(context, builder, member.Target, values, storage, model, llvmFunctions);
+                return LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)ownerType.ArrayLength, false);
+            }
+        }
         if (member.Target is IdentifierExpression enumIdentifier
             && model.Enums.TryGetValue(enumIdentifier.Name, out var enumSymbol))
         {

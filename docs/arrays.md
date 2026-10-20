@@ -26,8 +26,9 @@ return values[1];
 
 Constant indices are checked by the compiler. Dynamic indices are checked at
 runtime; an invalid index reports an error and terminates the process through
-the runtime bounds-failure primitive. `length(array)` is a compiler intrinsic
-that produces the array's fixed length and does not allocate.
+the runtime bounds-failure primitive. `array.length` is a read-only member that
+gives the array's fixed length as a `usize`, and does not allocate. It cannot be
+assigned.
 
 Arrays are not heap allocated, resized, or implicitly converted to pointers.
 Passing or returning an array uses the array value type directly. Arrays must

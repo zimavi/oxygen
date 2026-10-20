@@ -661,6 +661,13 @@ public sealed partial class SemanticAnalyzer
 
     private void ValidateWritableTarget(Expression target, Scope scope, IDictionary<Expression, SemanticType> expressionTypes)
     {
+        if (target is MemberAccessExpression { MemberName: "length" } lengthMember
+            && expressionTypes.TryGetValue(lengthMember.Target, out var lengthOwner)
+            && (lengthOwner.IsArray || lengthOwner.Kind == SemanticTypeKind.String))
+            throw Error("The length of an array or a string cannot be assigned", target.Location);
+        if (target is IndexExpression stringIndex
+            && expressionTypes.TryGetValue(stringIndex.Target, out var indexed) && indexed.Kind == SemanticTypeKind.String)
+            throw Error("A string is immutable, so its bytes cannot be assigned", target.Location);
         if (target is IdentifierExpression identifier)
         {
             var variable = scope.Lookup(identifier.Name, identifier.Location);
