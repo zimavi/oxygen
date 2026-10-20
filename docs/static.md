@@ -154,5 +154,6 @@ static methods. Auto-accessors (`get;`) are not allowed on a static property.
 
 ## Limits
 
-- A static property of a generic class is not supported yet. Each instance would
-  need its own accessors.
+- A static property of a generic class belongs to one instance, so it is named
+  with type arguments: `Box<i32>.Seen`. Without them, `Box.Seen` is an error.
+  Inside the class, the property is still named with its type arguments.

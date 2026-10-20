@@ -23,19 +23,36 @@ variables are scoped to their handler body. `finally` runs after normal
 completion, before a return leaves the construct, and during exception
 unwinding; if it throws or returns, that outcome replaces the pending one.
 
+`throw;` inside a catch clause continues the unwinding of the exception that the
+clause caught. It is the same object, with the trace captured at its original
+throw, so no new exception is created and no new trace is captured. Outer
+catches and `finally` clauses see the original exception. `throw;` is valid only
+inside a catch clause.
+
 The standard library provides `std.exception.Exception` as the root exception
 class. Construct it with the user-facing `Exception(message)` constructor, or with
 `Exception()` for an empty message; the runtime trace is not a constructor
 argument. It contains the exception message
-and a `StackTrace` value. The native
-runtime owns a bounded, address-stable trace copy captured at the throw site;
-each frame contains the Oxygen function, module/source name, line, and column.
-The runtime-backed `StackTrace` exposes the count and `frame_at(index)`
-constructs a `Frame` through bounds-checked accessors. Runtime plumbing is
-internal. The standard `Exception` constructors create the trace, and a derived
-exception class reaches them through its constructor's `base(...)` call, or
-through the implicit parameterless base call. The runtime owns the frame storage
-until the matching catch or unhandled-exception path ends.
+and a `StackTrace` value. The native runtime keeps a copy of every frame that is
+on the trace stack at the throw site, with no limit on depth. Each frame contains
+the Oxygen function, module/source name, line, and column.
+
+`StackTrace` is a value class that refers to its exception, so creating an
+exception allocates no trace object. `count` reads the number of frames, and
+`frame_at(index)` returns a new `Frame`, which the caller owns. Frames are
+numbered from zero, outermost first. `frame_at` stops the program when the index
+is not less than `count`. Runtime plumbing is internal. The standard `Exception`
+constructors create the trace, and a derived exception class reaches them through
+its constructor's `base(...)` call, or through the implicit parameterless base
+call.
+
+The runtime keeps the trace of a caught exception until the catch body that
+handles it completes, so the body can read `count` and the frames. After that,
+`count` is zero. A catch body that leaves early, by `return`, `break`,
+`continue` or a new `throw`, keeps its trace until the program ends. Each `try`
+saves the depth of the trace stack, and each catch restores it, because the
+functions that an exception left never popped their frames. The trace of an
+uncaught exception is printed and released when it reaches the entry point.
 
 Exception propagation is implemented by the runtime's handler frames. A
 function that does not handle an exception propagates it to its caller. Class

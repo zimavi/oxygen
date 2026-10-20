@@ -202,12 +202,13 @@ public sealed partial class SemanticAnalyzer
         cls.StaticMethods.Any(method => method.Name == $"get_{name}" || method.Name == $"set_{name}");
 
     // `Class.name` reads a static property through its getter, or writes it through its setter. The backend calls the accessor, which
-    // has no receiver. A generic class's static property is not supported yet, because each instance would need its own accessors.
+    // has no receiver. A generic class has one property per instance, so its property is named with type arguments: `Class<T>.name`.
     private SemanticType AnalyzeStaticProperty(MemberAccessExpression member, ClassSymbol cls, bool forWrite, string moduleName)
     {
         var name = member.MemberName;
         if (cls.DeclaredTypeParameters.Count > 0)
-            throw Error($"Static property '{name}' of generic class '{cls.Name}' is not supported yet", member.Location, name.Length);
+            throw Error($"Static property '{name}' of generic class '{cls.Name}' is named with its type arguments, such as {cls.Name}<T>.{name}",
+                member.Location, name.Length);
         var accessor = forWrite
             ? cls.StaticMethods.FirstOrDefault(method => method.Name == $"set_{name}")
                 ?? throw Error($"Property '{name}' is read-only", member.Location, name.Length)
@@ -224,6 +225,74 @@ public sealed partial class SemanticAnalyzer
         }
         _staticPropertyGetters[member] = accessor;
         return accessor.ReturnType;
+    }
+
+    // The accessors of a static property are static methods, so an instance of a generic class has its own. `Class<T>.name` names the
+    // property of that instance. Reading it calls the instance's getter, and writing it calls the setter. A compound assignment does
+    // both, so it needs both. The call records the instance as its receiver type, which the backend uses to find the accessor.
+    private SemanticType AnalyzeInstanceStaticProperty(
+        CallExpression call,
+        ClassSymbol cls,
+        IReadOnlyList<SemanticType> typeArguments,
+        string name,
+        string moduleName,
+        bool forWrite,
+        bool compound)
+    {
+        if (cls.DeclaredTypeParameters.Count == 0)
+            throw Error($"Class '{cls.Name}' is not generic, so its static property '{name}' is named as {cls.Name}.{name}",
+                call.Location, name.Length);
+        if (typeArguments.Count != cls.DeclaredTypeParameters.Count)
+            throw Error($"Class '{cls.Name}' has {cls.DeclaredTypeParameters.Count} type parameter(s), got {typeArguments.Count}",
+                call.Location, cls.Name.Length);
+        RequireReachableFrom(cls, cls, call.Location, name, name.Length);
+        var substitutions = cls.DeclaredTypeParameters
+            .Zip(typeArguments, (parameter, argument) => (parameter, argument))
+            .ToDictionary(item => item.parameter, item => item.argument, StringComparer.Ordinal);
+        _callReceiverTypes[call] = SemanticType.Class(cls.QualifiedName, typeArguments.ToArray());
+        var getter = cls.StaticMethods.FirstOrDefault(method => method.Name == $"get_{name}");
+        var setter = cls.StaticMethods.FirstOrDefault(method => method.Name == $"set_{name}");
+        if (forWrite || compound)
+        {
+            if (setter is null)
+                throw Error($"Property '{name}' is read-only", call.Location, name.Length);
+            RequireStaticAccessorVisible(setter, cls, name, moduleName, call.Location);
+            _staticPropertySetters[call] = setter;
+            _usedFunctions.Add(setter);
+        }
+        if (!forWrite)
+        {
+            if (getter is null)
+                throw Error($"Property '{name}' is write-only", call.Location, name.Length);
+            RequireStaticAccessorVisible(getter, cls, name, moduleName, call.Location);
+            _staticPropertyGetters[call] = getter;
+            _usedFunctions.Add(getter);
+            return SubstituteGenericType(getter.ReturnType, substitutions);
+        }
+        return SubstituteGenericType(setter!.Parameters[0].Type, substitutions);
+    }
+
+    private void RequireStaticAccessorVisible(FunctionSymbol accessor, ClassSymbol cls, string name, string moduleName, SourceLocation location)
+    {
+        if (!IsMemberAccessible(accessor.Visibility, MethodOwnerName(accessor), MethodOwnerModule(accessor), moduleName, cls.QualifiedName))
+            throw Error($"Static property '{name}' of '{cls.Name}' cannot be used here", location, name.Length);
+    }
+
+    // The generic class that a bare `Class<T>.name` names a static property of, or null. A variable is never a class name.
+    private ClassSymbol? GenericStaticPropertyClass(CallExpression call, Scope scope, out string name)
+    {
+        name = string.Empty;
+        var separator = call.Name.LastIndexOf('.');
+        if (!call.IsBareName || call.ExplicitTypeArguments.Count == 0 || separator < 0)
+            return null;
+        var receiverName = call.Name[..separator];
+        if (LookupVariableType(scope, receiverName, call.Location) is not null)
+            return null;
+        if (FindTypeName(receiverName, call.Location) is not { } className || !_classesByName.TryGetValue(className, out var cls)
+            || cls.DeclaredTypeParameters.Count == 0)
+            return null;
+        name = call.Name[(separator + 1)..];
+        return IsStaticProperty(cls, name) ? cls : null;
     }
 
     // `Class<T>.field` names the static field of one instance of a generic class. Each instance has its own field, which is the one
@@ -277,6 +346,9 @@ public sealed partial class SemanticAnalyzer
         // `Class<T>.field` with no parentheses names a static field of that instance. A union case of the same spelling is not a class.
         if (call.IsBareName && typeArguments is not null && cls.StaticFields.Any(field => field.Name == methodName))
             return AnalyzeInstanceStaticField(call, cls, typeArguments, methodName, moduleName);
+        // `Class<T>.name` with no parentheses reads a static property of that instance, through its getter.
+        if (call.IsBareName && typeArguments is not null && IsStaticProperty(cls, methodName))
+            return AnalyzeInstanceStaticProperty(call, cls, typeArguments, methodName, moduleName, forWrite: false, compound: false);
         // Inside its own body, a generic class names its current instance: `Box.total()` is `Box<T>.total()` for its own T.
         if (typeArguments is null && cls.DeclaredTypeParameters.Count > 0 && _currentOwnerTemplate == cls.QualifiedName
             && cls.DeclaredTypeParameters.All(_genericTypes.ContainsKey))
@@ -290,9 +362,7 @@ public sealed partial class SemanticAnalyzer
         if (named.Length == 0)
         {
             if (IsStaticProperty(cls, methodName))
-                throw Error(call.IsBareName
-                    ? $"Static property '{methodName}' of generic class '{cls.Name}' is not supported yet"
-                    : $"'{methodName}' of '{cls.Name}' is a static property, not a method", call.Location, methodName.Length);
+                throw Error($"'{methodName}' of '{cls.Name}' is a static property, not a method", call.Location, methodName.Length);
             if (cls.StaticFields.Any(field => field.Name == methodName))
                 throw Error($"'{methodName}' of '{cls.Name}' is a static field, not a method; a generic class's static field is named by its bare name inside the class", call.Location, methodName.Length);
             if (GetClassMethods(cls.QualifiedName, []).Any(method => method.Name == methodName))

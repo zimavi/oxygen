@@ -243,4 +243,31 @@ public sealed class StaticMemberIntegrationTests : IDisposable
 
         Assert.Equal(7, run.ExitCode);
     }
+
+    [SkippableFact]
+    public void StaticPropertiesOfEachInstanceOfAGenericClassHaveTheirOwnStorage()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var run = NativeProgram.BuildAndRun(_directory,
+            """
+            class Box<T> {
+                static i32 seen = 0;
+
+                static i32 Seen {
+                    get { return seen; }
+                    set { seen = value; }
+                }
+            }
+
+            i32 main() {
+                Box<i32>.Seen = 4;
+                Box<i32>.Seen += 3;
+                Box<i64>.Seen = 10;
+                return Box<i32>.Seen * 10 + Box<i64>.Seen;
+            }
+            """);
+
+        // Box<i32> holds 7 and Box<i64> holds 10: 7 * 10 + 10
+        Assert.Equal(80, run.ExitCode);
+    }
 }

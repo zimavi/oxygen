@@ -7,9 +7,13 @@
 #include <windows.h>
 #endif
 
-#define OXYGEN_TRACE_MAX_FRAMES 256
-static _Thread_local oxygen_runtime_trace_frame oxygen_trace_frames[OXYGEN_TRACE_MAX_FRAMES];
-static _Thread_local uint64_t oxygen_trace_count;
+/* The trace stack of the running thread. Each function pushes a frame when it starts and pops it when it returns. The stack grows
+ * as needed, so a deep call chain keeps every frame. An exception leaves its functions without popping them, so the catch that
+ * handles it restores the depth that its `try` saved. */
+#define OXYGEN_TRACE_INITIAL_CAPACITY 256
+static _Thread_local oxygen_runtime_trace_frame *oxygen_trace_frames;
+static _Thread_local uint64_t oxygen_trace_depth;
+static _Thread_local uint64_t oxygen_trace_capacity;
 
 typedef struct oxygen_exception_trace_record
 {
@@ -24,16 +28,42 @@ static _Thread_local oxygen_exception_trace_record *oxygen_exception_traces;
 void __oxygen_runtime_trace_push(const char *function_name, const char *file_name,
     uint32_t line, uint32_t column)
 {
-    if (oxygen_trace_count == OXYGEN_TRACE_MAX_FRAMES)
-        return;
-    oxygen_trace_frames[oxygen_trace_count++] =
+    if (oxygen_trace_depth == oxygen_trace_capacity)
+    {
+        uint64_t capacity = oxygen_trace_capacity == 0
+            ? OXYGEN_TRACE_INITIAL_CAPACITY : oxygen_trace_capacity * 2;
+        oxygen_runtime_trace_frame *frames =
+            realloc(oxygen_trace_frames, sizeof(*frames) * capacity);
+        if (frames == NULL)
+        {
+            fprintf(stderr, "Oxygen ran out of memory for the stack trace\n");
+            fflush(stderr);
+            abort();
+        }
+        oxygen_trace_frames = frames;
+        oxygen_trace_capacity = capacity;
+    }
+    oxygen_trace_frames[oxygen_trace_depth++] =
         (oxygen_runtime_trace_frame){function_name, file_name, line, column};
 }
 
 void __oxygen_runtime_trace_pop(void)
 {
-    if (oxygen_trace_count != 0)
-        --oxygen_trace_count;
+    if (oxygen_trace_depth != 0)
+        --oxygen_trace_depth;
+}
+
+uint64_t __oxygen_runtime_trace_depth(void)
+{
+    return oxygen_trace_depth;
+}
+
+/* Sets the depth back to a depth saved by a `try`. The depth only goes down: frames above it belong to functions that the
+ * exception has already left. */
+void __oxygen_runtime_trace_restore(uint64_t depth)
+{
+    if (depth < oxygen_trace_depth)
+        oxygen_trace_depth = depth;
 }
 
 static void oxygen_capture_trace(void *object)
@@ -42,14 +72,14 @@ static void oxygen_capture_trace(void *object)
     if (record == NULL)
         abort();
     record->object = object;
-    record->trace.count = oxygen_trace_count;
-    if (oxygen_trace_count != 0)
+    record->trace.count = oxygen_trace_depth;
+    if (oxygen_trace_depth != 0)
     {
-        record->frames = malloc(sizeof(*record->frames) * oxygen_trace_count);
+        record->frames = malloc(sizeof(*record->frames) * oxygen_trace_depth);
         if (record->frames == NULL)
             abort();
         memcpy(record->frames, oxygen_trace_frames,
-            sizeof(*record->frames) * oxygen_trace_count);
+            sizeof(*record->frames) * oxygen_trace_depth);
         record->trace.frames = record->frames;
     }
     record->next = oxygen_exception_traces;
@@ -96,8 +126,21 @@ uint64_t __oxygen_runtime_exception_trace_count(void *object)
 void *__oxygen_runtime_exception_trace_frame(void *object, uint64_t index)
 {
     const oxygen_runtime_trace *trace = oxygen_find_trace(object);
-    return trace == NULL || trace->frames == NULL || index >= trace->count
-        ? NULL : (void *)&trace->frames[index];
+    uint64_t count = trace == NULL ? 0 : trace->count;
+    if (index >= count)
+    {
+        fprintf(stderr, "Oxygen stack trace frame %llu is out of bounds for %llu frames\n",
+            (unsigned long long)index, (unsigned long long)count);
+        fflush(stderr);
+        abort();
+    }
+    return (void *)&trace->frames[index];
+}
+
+/* Releases the trace of an exception once the catch that handled it has finished with it. */
+void __oxygen_runtime_release_exception_trace(void *object)
+{
+    oxygen_release_trace(object);
 }
 
 const char *__oxygen_runtime_trace_frame_function_name(void *frame)
@@ -153,9 +196,10 @@ static _Thread_local DWORD oxygen_current_seh_flags;
 static _Thread_local void *oxygen_in_flight_seh_object;
 #endif
 
-void __oxygen_runtime_throw_object(void *object)
+/* Raises an exception object that is already being handled, so it continues to unwind. The object and its trace are the ones that
+ * were captured at the original throw; the trace is not captured again. */
+void __oxygen_runtime_continue_throw(void *object)
 {
-    oxygen_capture_trace(object);
 #if !defined(_WIN32)
     void **payload = (void **)__cxa_allocate_exception(sizeof(void *));
     if (payload == NULL)
@@ -172,6 +216,13 @@ void __oxygen_runtime_throw_object(void *object)
         arguments);
     abort();
 #endif
+}
+
+/* Throws a new exception object: its trace is captured here, at the throw site. */
+void __oxygen_runtime_throw_object(void *object)
+{
+    oxygen_capture_trace(object);
+    __oxygen_runtime_continue_throw(object);
 }
 
 void *__oxygen_runtime_exception_object(void *exception_handle)
@@ -192,16 +243,14 @@ void *__oxygen_runtime_exception_object(void *exception_handle)
 #endif
 }
 
+/* Ends the native catch. The trace of the caught object is not released here: the handler may still read its stack trace, so the
+ * backend releases it when the catch body has finished. */
 void __oxygen_runtime_end_catch(void)
 {
 #if !defined(_WIN32)
-    oxygen_release_trace(oxygen_current_posix_object);
     oxygen_current_posix_object = NULL;
-    /* The active object is owned by the native EH runtime; release only our
-     * trace copy after the handler has finished. */
     __cxa_end_catch();
 #else
-    oxygen_release_trace(oxygen_current_seh_object);
     oxygen_current_seh_object = NULL;
     oxygen_current_seh_flags = 0;
 #endif

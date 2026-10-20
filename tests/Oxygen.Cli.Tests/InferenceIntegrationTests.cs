@@ -34,10 +34,10 @@ public sealed class InferenceIntegrationTests : IDisposable
                 }
             }
 
-            class Box<T> {
+            class Wrap<T> {
                 T value;
 
-                Box(T value) {
+                Wrap(T value) {
                     this.value = value;
                 }
 
@@ -76,9 +76,9 @@ public sealed class InferenceIntegrationTests : IDisposable
                 Items items = new Items();
                 Option<Iterable<i32>> widened = Option.Some(items);
                 var named = Option.Some("hello");
-                io.println(Box(4).get());
-                io.println(new Box(5).get());
-                io.println(Box<i64>(6).get());
+                io.println(Wrap(4).get());
+                io.println(new Wrap(5).get());
+                io.println(Wrap<i64>(6).get());
                 Animal a = pick(new Dog(), new Cat());
                 io.println(a.legs);
                 i64* values = memory.alloc<i64>(2);

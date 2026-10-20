@@ -34,6 +34,13 @@ public sealed partial class LlvmModuleGenerator
                     EmitExpression(context, builder, dereference.Operand, values, storage, model, llvmFunctions), "deref");
             case MemberAccessExpression member:
                 return EmitMemberPlace(context, builder, member, values, storage, model, llvmFunctions);
+            // `Class<T>.Name` is a static property of one instance: a compound assignment loads it through that instance's getter.
+            case CallExpression bareProperty when model.StaticPropertySetters.ContainsKey(bareProperty):
+                return new Place(
+                    () => EmitStaticPropertyGet(builder,
+                        StaticPropertyAccessor(model, bareProperty, model.StaticPropertyGetters[bareProperty]), llvmFunctions),
+                    value => EmitStaticPropertySet(builder,
+                        StaticPropertyAccessor(model, bareProperty, model.StaticPropertySetters[bareProperty]), value, llvmFunctions));
             case CallExpression bareStatic when model.GlobalReferences.ContainsKey(bareStatic):
                 return MemoryPlace(builder, type, _globalVariables[model.GlobalReferences[bareStatic]], "static.field");
             default:
@@ -99,6 +106,16 @@ public sealed partial class LlvmModuleGenerator
         return new Place(
             () => builder.BuildExtractValue(part.Load(), (uint)partIndex, member.MemberName),
             value => part.Store(builder.BuildInsertValue(part.Load(), value, (uint)partIndex, "struct.update")));
+    }
+
+    // The accessor that a static property access calls. A property of a generic class belongs to one instance, which the analyzer
+    // recorded as the receiver type of the access. The instance's own copy of the accessor is the one that is called.
+    private FunctionSymbol StaticPropertyAccessor(SemanticModel model, Expression access, FunctionSymbol accessor)
+    {
+        if (access is not CallExpression call || !model.CallReceiverTypes.TryGetValue(call, out var receiver))
+            return accessor;
+        var instance = model.Classes[NormalizeAggregateType(receiver, model).StructName!];
+        return instance.StaticMethods.First(method => method.Name == accessor.Name);
     }
 
     // A static property is read by calling its getter, a static method with no receiver.

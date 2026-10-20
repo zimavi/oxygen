@@ -75,6 +75,9 @@ public sealed partial class LlvmModuleGenerator
             ConditionalExpression conditional => EmitConditional(
                 context, builder, conditional, values, storage, model, llvmFunctions),
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
+            // `Class<T>.Name` reads a static property of one instance by calling that instance's getter.
+            CallExpression bareProperty when model.StaticPropertyGetters.ContainsKey(bareProperty) => EmitStaticPropertyGet(builder,
+                StaticPropertyAccessor(model, bareProperty, model.StaticPropertyGetters[bareProperty]), llvmFunctions),
             // `Class<T>.field` reads the static field of one instance. The analyzer recorded the call as a reference to that field.
             CallExpression bareStatic when model.GlobalReferences.ContainsKey(bareStatic) => builder.BuildLoad2(
                 ToLlvmType(model.ExpressionTypes[bareStatic], model),

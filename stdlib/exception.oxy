@@ -28,19 +28,21 @@ public class Frame {
     }
 }
 
-public class StackTrace {
-    public u64 count;
+// The stack trace of an exception. It is a value that refers to the exception, so an exception does not allocate one. Its frames
+// are read from the runtime's record of the exception, which is kept until the catch that handles the exception has finished.
+// After that, count is zero.
+@value public class StackTrace {
     internal Exception exception_object;
 
-    internal StackTrace(u64 count) {
-        this.count = count;
-    }
-
     internal StackTrace(Exception exception_object) {
-        this.count = std.exception.runtime_trace_count(exception_object);
         this.exception_object = exception_object;
     }
 
+    public u64 count {
+        get { return std.exception.runtime_trace_count(exception_object); }
+    }
+
+    // The frames are numbered from zero, outermost first. The program stops when index is not less than count.
     public Frame frame_at(u64 index) {
         return new Frame(std.exception.runtime_trace_frame(exception_object, index));
     }
@@ -65,7 +67,7 @@ public class Exception {
 
     public Exception() {
         this.message = "";
-        this.stack_trace = new StackTrace(this);
+        this.stack_trace = StackTrace(this);
     }
 
     public Exception(string message) : this() {

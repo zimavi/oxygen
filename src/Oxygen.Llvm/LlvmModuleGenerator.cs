@@ -33,12 +33,16 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef _memcmp;
     private LLVMTypeRef _runtimeTypeInfoType;
     private LLVMValueRef _exceptionThrow;
+    private LLVMValueRef _exceptionContinueThrow;
     private LLVMValueRef _exceptionObject;
     private LLVMValueRef _exceptionEndCatch;
     private LLVMValueRef _exceptionRethrow;
     private LLVMValueRef _exceptionUnhandled;
     private LLVMValueRef _tracePush;
     private LLVMValueRef _tracePop;
+    private LLVMValueRef _traceDepth;
+    private LLVMValueRef _traceRestore;
+    private LLVMValueRef _releaseExceptionTrace;
     private LLVMValueRef _exceptionPointer;
     private LLVMModuleRef _module;
     private LLVMValueRef _personality;
@@ -169,6 +173,9 @@ public sealed partial class LlvmModuleGenerator
             _exceptionThrow = DeclareNativeFunction(module, "__oxygen_runtime_throw_object",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
+            _exceptionContinueThrow = DeclareNativeFunction(module, "__oxygen_runtime_continue_throw",
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
             _exceptionObject = DeclareNativeFunction(module, "__oxygen_runtime_exception_object",
                 LLVMTypeRef.CreateFunction(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
@@ -186,6 +193,13 @@ public sealed partial class LlvmModuleGenerator
                         _context.Int32Type], false));
             _tracePop = DeclareNativeFunction(module, "__oxygen_runtime_trace_pop",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
+            _traceDepth = DeclareNativeFunction(module, "__oxygen_runtime_trace_depth",
+                LLVMTypeRef.CreateFunction(_context.Int64Type, [], false));
+            _traceRestore = DeclareNativeFunction(module, "__oxygen_runtime_trace_restore",
+                LLVMTypeRef.CreateFunction(_context.VoidType, [_context.Int64Type], false));
+            _releaseExceptionTrace = DeclareNativeFunction(module, "__oxygen_runtime_release_exception_trace",
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
             foreach (var cls in concreteClasses)
             {
                 foreach (var ctor in cls.Constructors)

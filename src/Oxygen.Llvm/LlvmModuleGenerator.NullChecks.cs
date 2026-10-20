@@ -9,12 +9,15 @@ public sealed partial class LlvmModuleGenerator
 {
     // Throws an object the way a throw statement does: through the runtime, and to the innermost landing pad when the
     // current code is inside a try.
-    private void EmitThrowObject(LLVMBuilderRef builder, LLVMValueRef thrown)
+    private void EmitThrowObject(LLVMBuilderRef builder, LLVMValueRef thrown) => EmitRaiseObject(builder, thrown, _exceptionThrow);
+
+    // Raises an exception object through `raise`, which captures its trace (`_exceptionThrow`) or keeps it (`_exceptionContinueThrow`).
+    private void EmitRaiseObject(LLVMBuilderRef builder, LLVMValueRef thrown, LLVMValueRef raise)
     {
         var raw = builder.BuildBitCast(thrown, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "exception.object");
         if (_exceptionContexts.Count == 0)
         {
-            builder.BuildCall2(_exceptionThrow.FunctionType, _exceptionThrow,
+            builder.BuildCall2(raise.FunctionType, raise,
                 new[] { raw }, (ReadOnlySpan<char>)string.Empty);
             builder.BuildUnreachable();
             return;
@@ -25,13 +28,13 @@ public sealed partial class LlvmModuleGenerator
         if (_usesWindowsSeh && exceptionContext.Pad.Handle != IntPtr.Zero)
         {
             using var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { exceptionContext.Pad });
-            builder.BuildInvokeWithOperandBundles(_exceptionThrow.FunctionType, _exceptionThrow,
+            builder.BuildInvokeWithOperandBundles(raise.FunctionType, raise,
                 new[] { raw }, normal, exceptionContext.Unwind, new LLVMOperandBundleRef[] { funclet },
                 (ReadOnlySpan<char>)string.Empty);
         }
         else
         {
-            builder.BuildInvoke2(_exceptionThrow.FunctionType, _exceptionThrow,
+            builder.BuildInvoke2(raise.FunctionType, raise,
                 new[] { raw }, normal, exceptionContext.Unwind, (ReadOnlySpan<char>)string.Empty);
         }
         builder.PositionAtEnd(normal);

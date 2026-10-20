@@ -84,13 +84,20 @@ void __oxygen_runtime_invalid_cast(
 OXYGEN_RUNTIME_API void __oxygen_runtime_trace_push(
     const char *function_name, const char *file_name, uint32_t line, uint32_t column);
 OXYGEN_RUNTIME_API void __oxygen_runtime_trace_pop(void);
-/* The returned view remains valid until the matching catch is ended or the
- * unhandled-exception reporter returns. */
+/* The number of frames on the trace stack. A `try` saves it, and the catch that handles an exception restores it. */
+OXYGEN_RUNTIME_API uint64_t __oxygen_runtime_trace_depth(void);
+OXYGEN_RUNTIME_API void __oxygen_runtime_trace_restore(uint64_t depth);
+/* Releases the trace of a caught exception. Called when the catch body has finished. */
+OXYGEN_RUNTIME_API void __oxygen_runtime_release_exception_trace(void *object);
+/* The returned view remains valid until the catch body that handles the
+ * exception has finished, or the unhandled-exception reporter returns. */
 OXYGEN_RUNTIME_API const oxygen_runtime_trace *__oxygen_runtime_exception_trace(void *object);
 /* Returns the captured frame count, or zero when no trace is associated with
- * the object.  The returned count is safe to use after the trace view itself
- * is released and does not expose the runtime-owned frame storage. */
+ * the object.  The count is zero once the catch that handled the exception has
+ * ended.  The returned count is safe to use after the trace view itself is
+ * released and does not expose the runtime-owned frame storage. */
 OXYGEN_RUNTIME_API uint64_t __oxygen_runtime_exception_trace_count(void *object);
+/* Aborts the program when index is not less than the frame count. */
 OXYGEN_RUNTIME_API void *__oxygen_runtime_exception_trace_frame(
     void *object, uint64_t index);
 OXYGEN_RUNTIME_API const char *__oxygen_runtime_trace_frame_function_name(
@@ -101,6 +108,8 @@ OXYGEN_RUNTIME_API uint32_t __oxygen_runtime_trace_frame_line(void *frame);
 OXYGEN_RUNTIME_API uint32_t __oxygen_runtime_trace_frame_column(void *frame);
 /* Native exception bridge used by LLVM landing pads or Windows funclets. */
 OXYGEN_RUNTIME_API void __oxygen_runtime_throw_object(void *object);
+/* Continues the unwinding of an exception object that a catch clause is handling (`throw;`). Its trace is kept. */
+OXYGEN_RUNTIME_API void __oxygen_runtime_continue_throw(void *object);
 OXYGEN_RUNTIME_API void *__oxygen_runtime_exception_object(void *exception_handle);
 OXYGEN_RUNTIME_API void __oxygen_runtime_end_catch(void);
 OXYGEN_RUNTIME_API void __oxygen_runtime_rethrow(void);

@@ -565,6 +565,10 @@ public sealed partial class SemanticAnalyzer
             IdentifierExpression assignedIdentifier => AssignmentTargetType(assignedIdentifier, scope, expressionTypes),
             MemberAccessExpression assignedMember when assignment.Operator == TokenKind.Equals => WrittenMemberType(
                 assignedMember, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            // `Class<T>.Name = value` writes a static property of one instance of a generic class, through its setter.
+            CallExpression { IsBareName: true } assignedProperty when GenericStaticPropertyClass(assignedProperty, scope, out var propertyName)
+                is { } instanceOwner => RecordInstanceStaticPropertyTarget(assignedProperty, instanceOwner, propertyName, assignment,
+                    moduleName, expressionTypes),
             _ => AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)
         };
         // A compound assignment reads its target before it writes it.
@@ -717,6 +721,10 @@ public sealed partial class SemanticAnalyzer
                  && scope.Lookup(indexIdentifier.Name, indexIdentifier.Location).IsConst)
             throw ErrorWithCode(DiagnosticCode.ConstAssignment, $"Cannot assign to an element of const variable '{indexIdentifier.Name}'", target.Location,
                 indexIdentifier.Name.Length);
+        else if (target is CallExpression { IsBareName: true } bareProperty && _staticPropertySetters.ContainsKey(bareProperty))
+        {
+            // A static property of one generic instance is written through its setter, which the assignment has named.
+        }
         else if (target is CallExpression { IsBareName: true } bareStatic && _globalReferences.TryGetValue(bareStatic, out var staticField))
         {
             // `Class<T>.field` is a static field of one instance, which is assigned like any static field.
@@ -838,6 +846,23 @@ public sealed partial class SemanticAnalyzer
         var type = AnalyzeMemberAccess(member, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
             forWrite: true);
         expressionTypes[member] = type;
+        return type;
+    }
+
+    // The target of an assignment to a static property of one generic instance. A plain write names the setter. A compound assignment
+    // reads the getter as well, so both are recorded.
+    private SemanticType RecordInstanceStaticPropertyTarget(
+        CallExpression target,
+        ClassSymbol cls,
+        string name,
+        AssignmentStatement assignment,
+        string moduleName,
+        IDictionary<Expression, SemanticType> expressionTypes)
+    {
+        var typeArguments = target.ExplicitTypeArguments.Select(ResolveType).ToArray();
+        var write = assignment.Operator == TokenKind.Equals;
+        var type = AnalyzeInstanceStaticProperty(target, cls, typeArguments, name, moduleName, forWrite: write, compound: !write);
+        expressionTypes[target] = type;
         return type;
     }
 

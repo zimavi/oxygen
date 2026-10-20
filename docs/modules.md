@@ -100,24 +100,44 @@ the CLI imports its public declarations and native symbols for semantic
 checking; the compiler never infers signatures by guessing from native
 exports.
 
-## Type names (planned)
+## Type names
 
-Type names are not module-scoped yet: every struct, enum, union, class and
-interface is one global name, so a user class named `Exception` clashes with the
-standard library's.
+Every struct, enum, union, class and interface belongs to the module that
+declares it. Its name is qualified by that module, so two modules can each
+declare a type with the same name. A type is referred to in one of three ways:
 
-Decided: type names become module-scoped and import-aware, like namespaces in C#.
-A module's types are visible inside that module. Importing a module brings its
-type names into the importing module, as if they were declared where the `import`
-appears. Two types with one name are an error when both are visible in the same
-module.
+- By its bare name, when the name is declared in the current module or in an
+  imported module. `import util;` makes `util`'s types visible under their own
+  names.
+- By its qualified name, `module.Type`. The qualified name needs no import when
+  the module is part of the compilation.
+- Through an import alias, `alias.Type`. `import util as u;` makes `u.Box` the
+  name of `util.Box`. The alias adds a qualifier and does not hide the bare name.
 
-Open before this changes the compiler:
+```oxygen
+import util;
 
-- Qualification. Whether a type can be written as `module.Type` when it is not
-  imported, and how an import alias (`import std.io as io`) applies to types.
-- Clashes with the standard library's names (`Exception`, `RuntimeException`,
-  `NullReferenceException`, `StackTrace`, `Option`, `Result`). A program that
-  declares one of these needs a rule that keeps its own name without an error.
-- Mangled symbols. The native names of types must include the module, so two
-  modules can declare the same name.
+class Box {
+    i32 value = 5;
+}
+
+i32 main() {
+    program.Box local = program.Box(); // this module's Box
+    util.Box other = util.Box();       // the imported util.Box
+    Box ambiguous = Box();             // error: ambiguous, see below
+    return local.value;
+}
+```
+
+Two visible types with one name are an error at the use (`OX0211`). The
+diagnostic names both types and suggests a qualified name. The same rule covers
+a type of this module and an imported type. A module declares each type name
+once, so two declarations of one name in one module are an error at the
+declaration.
+
+A name that is not visible is not in the way. A program may declare its own
+`Exception` while it does not import `std.exception`. Importing that module makes
+the two names clash, and the clash is reported at the use.
+
+In native output, each type has a symbol name that includes its module, so two
+types with one name in different modules do not collide at link time.

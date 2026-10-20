@@ -3685,12 +3685,31 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void RejectsAStaticPropertyOfAGenericClassForNow()
+    public void AcceptsReadingAndWritingAStaticPropertyOfOneInstanceOfAGenericClass()
+    {
+        var model = Analyze("class Box<T> { static i32 seen = 0; static i32 Seen { get { return seen; } set { seen = value; } } } " +
+            "i32 main() { Box<i32>.Seen = 4; Box<i32>.Seen += 3; return Box<string>.Seen; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsAGenericStaticPropertyNamedWithoutTypeArguments()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze(
-            "class Box<T> { static i32 Seen { get { return 1; } } } i32 main() { return Box<i32>.Seen; }"));
+            "class Box<T> { static i32 Seen { get { return 1; } } } i32 main() { return Box.Seen; }"));
 
-        Assert.Contains("Static property 'Seen' of generic class 'Box' is not supported yet", exception.Message);
+        Assert.Contains("Static property 'Seen' of generic class 'Box' is named with its type arguments, such as Box<T>.Seen",
+            exception.Message);
+    }
+
+    [Fact]
+    public void RejectsWritingAReadOnlyStaticPropertyOfAGenericInstance()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box<T> { static i32 Seen { get { return 1; } } } i32 main() { Box<i32>.Seen = 4; return 0; }"));
+
+        Assert.Contains("Property 'Seen' is read-only", exception.Message);
     }
 
     [Fact]

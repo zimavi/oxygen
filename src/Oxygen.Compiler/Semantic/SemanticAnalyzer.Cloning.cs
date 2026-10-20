@@ -243,6 +243,13 @@ public sealed partial class SemanticAnalyzer
                 _callReceiverTypes[cloned] = SubstituteAggregate(receiverType, substitutions, aggregateNames);
             if (_receiverArgumentCalls.Contains(call))
                 _receiverArgumentCalls.Add(cloned);
+            // A static field or property of one instance is named by a call, so the copy names the same global or accessor.
+            if (_globalReferences.TryGetValue(call, out var global))
+                _globalReferences[cloned] = global;
+            if (_staticPropertyGetters.TryGetValue(call, out var getter))
+                _staticPropertyGetters[cloned] = getter;
+            if (_staticPropertySetters.TryGetValue(call, out var setter))
+                _staticPropertySetters[cloned] = setter;
         }
         if (_constructorSelections.TryGetValue(source, out var selection))
             _constructorSelections[result] = selection;

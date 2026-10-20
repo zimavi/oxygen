@@ -137,6 +137,7 @@ public sealed partial class LlvmModuleGenerator
         var exceptionSlot = hasCatches
             ? BuildEntryAlloca(builder, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "exception.addr")
             : default;
+        var savedTraceDepth = hasCatches ? EmitSaveTraceDepth(builder) : default;
 
         if (scope is not null)
             _finallyScopes.Push(scope);
@@ -224,6 +225,7 @@ public sealed partial class LlvmModuleGenerator
                 if (clause.BindingName is not null && clause.ExceptionType is not null)
                     values[clause.BindingName] = builder.BuildBitCast(caught,
                         ToLlvmType(FromTypeSyntax(clause.ExceptionType, model), model), "caught.exception");
+                EmitRestoreTraceDepth(builder, savedTraceDepth);
                 BuildNoThrowCall(builder, _exceptionEndCatch, []);
                 var pushedCatch = PushExceptionTarget(escape);
                 _caughtObjects.Push(caught);
@@ -232,6 +234,8 @@ public sealed partial class LlvmModuleGenerator
                 _caughtObjects.Pop();
                 if (pushedCatch)
                     _exceptionContexts.Pop();
+                if (!returned)
+                    EmitReleaseCaughtTrace(builder, caught);
                 if (!returned && !(scope is not null && EmitFinallyCopy(context, builder, function, scope, values,
                         storage, model, llvmFunctions, emittedReturnType, loops)))
                     builder.BuildBr(end);

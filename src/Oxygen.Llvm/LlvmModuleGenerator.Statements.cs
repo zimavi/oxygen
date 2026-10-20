@@ -31,6 +31,23 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int1Type, alive ? 1UL : 0UL, false), _dropFlags[slot]);
 
     // growing the stack on every iteration, and mem2reg can promote the slot.
+    // A `try` saves the trace depth before its body. The depth lives in the entry block, so that a catch funclet can read it on Windows.
+    private LLVMValueRef EmitSaveTraceDepth(LLVMBuilderRef builder)
+    {
+        var saved = BuildEntryAlloca(builder, _context.Int64Type, "try.trace.depth");
+        builder.BuildStore(builder.BuildCall2(_traceDepth.FunctionType, _traceDepth, [], (ReadOnlySpan<char>)"trace.depth"), saved);
+        return saved;
+    }
+
+    // A catch restores the depth its try saved: the functions that the exception left never popped their frames.
+    private void EmitRestoreTraceDepth(LLVMBuilderRef builder, LLVMValueRef saved) =>
+        builder.BuildCall2(_traceRestore.FunctionType, _traceRestore,
+            [builder.BuildLoad2(_context.Int64Type, saved, "trace.depth")], (ReadOnlySpan<char>)string.Empty);
+
+    // The trace of a caught exception is released when its catch body completes. A body that leaves early keeps the trace.
+    private void EmitReleaseCaughtTrace(LLVMBuilderRef builder, LLVMValueRef caught) =>
+        builder.BuildCall2(_releaseExceptionTrace.FunctionType, _releaseExceptionTrace, [caught], (ReadOnlySpan<char>)string.Empty);
+
     private LLVMValueRef BuildEntryAlloca(LLVMBuilderRef builder, LLVMTypeRef type, string name)
     {
         var entry = builder.InsertBlock.Parent.EntryBasicBlock;
@@ -181,6 +198,13 @@ public sealed partial class LlvmModuleGenerator
                     // `Class.field = value` stores to the static field's global.
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                         model.ExpressionTypes[assignment.Target], model), _globalVariables[model.GlobalReferences[staticField]]);
+                }
+                else if (assignment.Target is CallExpression bareProperty && model.StaticPropertySetters.ContainsKey(bareProperty))
+                {
+                    // `Class<T>.Name = value` calls the setter of that instance, with the value converted to the property type.
+                    EmitStaticPropertySet(builder, StaticPropertyAccessor(model, bareProperty, model.StaticPropertySetters[bareProperty]),
+                        CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                            model.ExpressionTypes[assignment.Target], model), llvmFunctions);
                 }
                 else if (assignment.Target is CallExpression bareStatic && model.GlobalReferences.ContainsKey(bareStatic))
                 {
@@ -739,9 +763,9 @@ public sealed partial class LlvmModuleGenerator
                     return false;
                 }
             case ThrowStatement { Value: null }:
-                // `throw;` throws again the object of the innermost catch clause. The runtime's record of the caught exception is
-                // already released when the catch body runs, so the object is taken from the catch clause, not from the runtime.
-                EmitThrowObject(builder, _caughtObjects.Peek());
+                // `throw;` continues the unwinding of the object of the innermost catch clause. It is the same object, and it keeps the
+                // trace captured at its original throw, so no new exception is created and no trace is captured.
+                EmitRaiseObject(builder, _caughtObjects.Peek(), _exceptionContinueThrow);
                 return true;
             case ThrowStatement throwStatement:
                 {
@@ -776,6 +800,7 @@ public sealed partial class LlvmModuleGenerator
         var body = function.AppendBasicBlock("try.body");
         var normal = function.AppendBasicBlock("try.normal");
         var landing = function.AppendBasicBlock("try.landingpad");
+        var savedTraceDepth = EmitSaveTraceDepth(builder);
         builder.BuildBr(body);
         builder.PositionAtEnd(body);
         var outerExceptionContext = _exceptionContexts.Count == 0 ? null : _exceptionContexts.Peek();
@@ -846,6 +871,7 @@ public sealed partial class LlvmModuleGenerator
             if (clause.BindingName is not null && clause.ExceptionType is not null)
                 values[clause.BindingName] = builder.BuildBitCast(objectValue,
                     ToLlvmType(FromTypeSyntax(clause.ExceptionType, model), model), "caught.exception");
+            EmitRestoreTraceDepth(builder, savedTraceDepth);
             builder.BuildCall2(_exceptionEndCatch.FunctionType, _exceptionEndCatch,
                 Array.Empty<LLVMValueRef>(), (ReadOnlySpan<char>)string.Empty);
             if (outerExceptionContext is not null)
@@ -857,7 +883,10 @@ public sealed partial class LlvmModuleGenerator
             if (outerExceptionContext is not null)
                 _exceptionContexts.Pop();
             if (!returned)
+            {
+                EmitReleaseCaughtTrace(builder, objectValue);
                 builder.BuildBr(end);
+            }
         }
 
         builder.PositionAtEnd(normal);

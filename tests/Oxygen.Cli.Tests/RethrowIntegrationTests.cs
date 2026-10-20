@@ -49,6 +49,106 @@ public sealed class RethrowIntegrationTests : IDisposable
         Assert.Equal("1\n2\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    [SkippableFact]
+    public void ThrowInsideACatchKeepsTheOriginalTraceAndMessage()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            void inner() {
+                throw new RuntimeException("boom");
+            }
+
+            void middle() {
+                inner();
+            }
+
+            i32 main() {
+                try {
+                    try {
+                        middle();
+                    } catch (RuntimeException e) {
+                        io.println(e.stack_trace.count);
+                        throw;
+                    }
+                } catch (RuntimeException e) {
+                    io.println(e.stack_trace.count);
+                    io.println(e.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        // The outer catch sees the trace of the original throw, main, middle and inner, not a new capture at the rethrow.
+        Assert.Equal("3\n3\nboom\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void FinallyRunsWhileAThrowInsideACatchUnwinds()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            i32 main() {
+                try {
+                    try {
+                        throw new RuntimeException("x");
+                    } catch (RuntimeException e) {
+                        io.println(1);
+                        throw;
+                    } finally {
+                        io.println(2);
+                    }
+                } catch (RuntimeException e) {
+                    io.println(3);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("1\n2\n3\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void UncaughtThrowInsideACatchReportsTheOriginalTrace()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            void inner() {
+                throw new RuntimeException("boom");
+            }
+
+            i32 main() {
+                try {
+                    inner();
+                } catch (RuntimeException e) {
+                    io.println("caught");
+                    throw;
+                }
+                return 0;
+            }
+            """);
+
+        Assert.NotEqual(0, run.ExitCode);
+        Assert.Contains("Unhandled RuntimeException: boom", run.Error.Replace("\r\n", "\n"));
+        Assert.Contains("at inner", run.Error);
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }
