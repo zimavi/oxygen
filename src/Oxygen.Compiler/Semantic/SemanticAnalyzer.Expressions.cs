@@ -734,7 +734,7 @@ public sealed partial class SemanticAnalyzer
             throw ErrorWithCode(DiagnosticCode.OperandRequirement,
                 $"Operator '{expression.Operator}' combines values of a @flags enum, and {flags} is not declared @flags", expression.Location);
         if (left != right)
-            throw ErrorWithCode(DiagnosticCode.OperandRequirement,
+            throw ErrorWithCode(DiagnosticCode.MixedFlagsTypes,
                 $"Operator '{expression.Operator}' combines values of one @flags enum, got {left} and {right}", expression.Location);
         return left;
     }

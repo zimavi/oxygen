@@ -153,6 +153,8 @@ internal static class DiagnosticAdvice
             "Types are declared in modules, and a name that a module declares and an import also brings in denotes two types. The name alone does not say which one is meant.",
         DiagnosticCode.MixedOperandTypes =>
             "A binary operator needs operands with one common type. An operand converts implicitly only to a type that holds every one of its values, such as i32 to i64. No other numeric conversion is implicit, so for example u64 and i32 have no common type.",
+        DiagnosticCode.MixedFlagsTypes =>
+            "The bitwise operators |, & and ^ combine the values of one @flags enum, so both operands have that enum type. An integer or a value of another enum is not combined implicitly.",
         _ => null
     };
 
@@ -202,6 +204,8 @@ internal static class DiagnosticAdvice
             "Write the qualified name of the type you mean, such as std.exception.Exception, or the module's import alias with the name.",
         DiagnosticCode.MixedOperandTypes =>
             "Convert one operand to the other operand's type with cast<T>(value), such as cast<u64>(count) + total, so that both operands have the same type.",
+        DiagnosticCode.MixedFlagsTypes =>
+            "Give both operands the same @flags enum type. An integer converts to that enum with cast<E>(value), where E is the enum.",
         _ => null
     };
 }

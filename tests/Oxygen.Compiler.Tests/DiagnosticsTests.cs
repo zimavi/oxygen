@@ -239,6 +239,22 @@ public sealed class DiagnosticsTests
         Assert.Contains("cast<u64>(count)", diagnostic.Suggestion);
     }
 
+    [Theory]
+    [InlineData("Access.Read | Mode.Fast", "Access and Mode")]
+    [InlineData("Mode.Fast | Access.Read", "Mode and Access")]
+    [InlineData("Access.Read | 1", "Access and i32")]
+    public void MixedFlagsOperandsReportBothTypesWithIntegerConversionAdvice(string combination, string types)
+    {
+        var source = "@flags enum Access { Read = 1 } @flags enum Mode { Fast = 1 } " +
+            "i32 main() { Access a = " + combination + "; return 0; }";
+
+        var diagnostic = AnalyzeForError(source);
+
+        Assert.Equal(DiagnosticCode.MixedFlagsTypes, diagnostic.Code);
+        Assert.Contains(types, diagnostic.Message);
+        Assert.Contains("cast<E>(value)", diagnostic.Suggestion);
+    }
+
     [Fact]
     public void ALosslessWideningIsAnImplicitConversionNotAMixedOperandError()
     {

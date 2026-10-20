@@ -28,4 +28,5 @@ public static class DiagnosticCode
     public const string FlagsMember = "OX0210";
     public const string AmbiguousType = "OX0211";
     public const string MixedOperandTypes = "OX0212";
+    public const string MixedFlagsTypes = "OX0213";
 }

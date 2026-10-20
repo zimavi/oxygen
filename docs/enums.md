@@ -74,8 +74,10 @@ i32 main() {
 - A flags value is compared with the integer literal `0` for equality, as in
   `(a & Access.Read) != 0`. The literal takes the enum's type. Any other integer
   comparison is an error; use the members instead.
-- Bitwise operators on an enum that is not `@flags`, combining values of two
-  different enums, or applying `~` to a non-flags enum are compile-time errors.
+- Bitwise operators on an enum that is not `@flags`, or applying `~` to a
+  non-flags enum, are compile-time errors. Combining values of two different
+  enums, or a flags value with an integer, is `OX0213`; an integer converts to
+  the enum with `cast<E>(value)`, as in `Access.Read | cast<Access>(1)`.
 - Other enum operations are unchanged. An enum without `@flags` keeps only its
   declared members and compares for equality.
 - `@flags` is the only annotation an enum accepts. An unknown enum annotation is an
