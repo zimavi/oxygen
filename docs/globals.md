@@ -34,9 +34,10 @@ void bump() {
 - **Scope.** A local, a parameter or, in a method, a field with the same name
   shadows the global within its scope. A module cannot declare two globals with
   the same name.
-- **Visibility.** A global is private to its module. Access from an importing
-  module is not supported yet. Import-aware names are planned with module scoping
-  (see the milestone plan).
+- **Visibility.** A global is private to its module. Globals have no visibility
+  keyword yet, so access from an importing module is not supported. Type names
+  are module-scoped and import-aware (see [modules](modules.md)); globals are not
+  part of that yet.
 
 ## Lifetime and storage
 

@@ -352,8 +352,11 @@ reference is not destroyed by the inner scope. This is a transfer of the
 reference's ownership, not a hidden allocation or `oxygen_free` call, and
 manual pointer management remains unchanged.
 
-Destructor dispatch is direct for the declared class. Virtual destructor
-dispatch and partially initialized-constructor cleanup are not yet enabled.
+A destructor runs through the object's runtime type, so a `virtual` destructor
+runs for the object's real class when the object is deleted through a base
+reference. A destructor does not chain to its base class's destructor yet, so
+only the derived destructor runs. Partially initialized-constructor cleanup is
+not yet enabled.
 Interface method and property declarations use an explicit receiver ABI.
 Interface calls extract the object word from the fat value before invoking the
 selected callable. Table entries contain the generated class implementation

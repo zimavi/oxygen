@@ -89,7 +89,10 @@ Useful CLI options include:
 - `--emit-metadata` — write `.oxmeta` native-module metadata
 - `--runtime`, `-r` — static Oxygen runtime archive to link
 - `--stdlib` — optional dynamic standard-library dependencies
+- `--clang`, `-c` — LLVM compiler driver used for object generation and linking
 - `--debug` — generate debug symbols
+- `--manual-memory`, `-mm` — manual memory mode for every function (C++ style)
+- `--warnings-as-errors` — treat semantic warnings as errors
 - `--optimization`, `-O` — optimization level passed to native code generation
 - `--jobs`, `-j` — backend worker count / ThinLTO parallelism
 

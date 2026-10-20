@@ -35,7 +35,10 @@ The standard library exposes `std.strings.to_c_string` and
 bytes into a newly allocated, NUL-terminated buffer and returns an `i8*`.
 That buffer is owned by the runtime and there is intentionally no deallocator
 yet; callers must treat it as temporary until the ownership API is defined.
-The conversion rejects embedded zero bytes by returning a null pointer.
+A string with an embedded zero byte is not handled yet. The current runtime
+returns the string's own bytes, which are not NUL-terminated, so the result is
+not a valid C string. The planned contract (an owned copy, or null for an
+embedded zero) is pending a decision, tracked in the implementation plan.
 
 `from_c_string` accepts an `i8*` and creates an Oxygen string view whose length
 is measured up to the first NUL byte. The C pointer must remain valid for the
