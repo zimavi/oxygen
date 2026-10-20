@@ -180,4 +180,20 @@ public sealed class DiagnosticsTests
         Assert.Null(result.Model);
         Assert.Equal(2, result.Diagnostics.Where(diagnostic => diagnostic.Message.Contains("is not declared")).Count());
     }
+
+    [Fact]
+    public void ReportsEveryErrorInOneBodyButNotTheFollowOnUsesOfAFailedDeclaration()
+    {
+        var tokenizer = new Tokenizer();
+        var tokens = tokenizer.TokenizeWithDiagnostics(
+            "i32 main() { i32 a = nope1; i32 b = nope2; return a + b; }", "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+
+        var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer()
+            .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        var errors = result.Diagnostics.Where(diagnostic => diagnostic.Message.Contains("is not declared")).ToList();
+        Assert.Equal(new[] { "Variable 'nope1' is not declared", "Variable 'nope2' is not declared" },
+            errors.Select(diagnostic => diagnostic.Message));
+    }
 }

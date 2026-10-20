@@ -25,6 +25,8 @@ public sealed partial class SemanticAnalyzer
         var outerLoopDepth = _loopDepth;
         var outerBreakableDepth = _breakableDepth;
         var outerCatchDepth = _catchDepth;
+        var outerStatementErrorReported = _statementErrorReported;
+        var outerFailedDeclarations = _failedDeclarations.ToArray();
         try
         {
             AnalyzeFunctionBody(function, functions, moduleName, imports, expressionTypes, resolvedCalls, constructor);
@@ -34,6 +36,9 @@ public sealed partial class SemanticAnalyzer
             _loopDepth = outerLoopDepth;
             _breakableDepth = outerBreakableDepth;
             _catchDepth = outerCatchDepth;
+            _statementErrorReported = outerStatementErrorReported;
+            _failedDeclarations.Clear();
+            _failedDeclarations.UnionWith(outerFailedDeclarations);
             RestoreFlowContext(outerFlow);
         }
     }
@@ -88,6 +93,8 @@ public sealed partial class SemanticAnalyzer
         _loopDepth = 0;
         _breakableDepth = 0;
         _catchDepth = 0;
+        _statementErrorReported = false;
+        _failedDeclarations.Clear();
         if (constructor is not null && _currentOwnerClass is not null)
         {
             AnalyzeFieldInitializers(_currentOwnerClass, scope, functions, moduleName, imports,
@@ -98,7 +105,7 @@ public sealed partial class SemanticAnalyzer
         AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         // A non-void function must not reach its end. Reachability follows every path, including switch fall-through,
         // breaks and loops that never end, so it decides this rather than whether the last statement returns.
-        if (!function.ReturnType.IsVoid && _reachable)
+        if (!function.ReturnType.IsVoid && _reachable && !_statementErrorReported)
         {
             throw Error($"Function '{function.Name}' must return a value", function.Declaration.Location);
         }
@@ -260,6 +267,50 @@ public sealed partial class SemanticAnalyzer
         }
     }
 
+    // What a statement can change in the analyzer's state. A statement that fails is undone to this state, so that the next
+    // statement is analysed from a consistent one.
+    private sealed record StatementState(
+        int LoopDeletes, int BreakStates, int SwitchFlows, int LoopDepth, int BreakableDepth, int SwitchExitDepth,
+        int CatchDepth, bool Reachable, bool Receiver);
+
+    // Whether a statement of the body has reported an error, so that the body is not checked for its return as well.
+    private bool _statementErrorReported;
+
+    // The variables whose declaration failed. They are not declared, so a later use of one is a follow-on error.
+    private readonly HashSet<string> _failedDeclarations = new(StringComparer.Ordinal);
+
+    private StatementState SnapshotStatementState() => new(
+        _loopDeletes.Count, _breakStates.Count, _switchFlows.Count, _loopDepth, _breakableDepth, _switchExitDepth,
+        _catchDepth, _reachable, _receiverUse);
+
+    private void RestoreStatementState(StatementState state)
+    {
+        while (_loopDeletes.Count > state.LoopDeletes)
+            _loopDeletes.Pop();
+        while (_breakStates.Count > state.BreakStates)
+            _breakStates.Pop();
+        while (_switchFlows.Count > state.SwitchFlows)
+            _switchFlows.Pop();
+        _loopDepth = state.LoopDepth;
+        _breakableDepth = state.BreakableDepth;
+        _switchExitDepth = state.SwitchExitDepth;
+        _catchDepth = state.CatchDepth;
+        _reachable = state.Reachable;
+        _receiverUse = state.Receiver;
+    }
+
+    // Reports the error of a statement, and lets the rest of the body be analysed.
+    private void RecordStatementError(Statement statement, SemanticException exception)
+    {
+        _statementErrorReported = true;
+        if (_failedDeclarations.Any(name => exception.Message == $"Variable '{name}' is not declared"))
+            return;
+        _diagnostics!.Add(DiagnosticPhase.Semantic, exception.Message, exception.Location, exception.Length,
+            exception.IsSourceAttributed ? exception.SourceName : _sourceName);
+        if (statement is VariableDeclarationStatement declaration)
+            _failedDeclarations.Add(declaration.Name);
+    }
+
     private bool AnalyzeBlock(
         BlockStatement block,
         Scope parent,
@@ -285,7 +336,17 @@ public sealed partial class SemanticAnalyzer
                 reportedUnreachable = true;
             }
 
-            hasReturn |= AnalyzeStatement(statement, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            var saved = SnapshotStatementState();
+            try
+            {
+                hasReturn |= AnalyzeStatement(statement, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            }
+            catch (SemanticException exception) when (_diagnostics is not null)
+            {
+                // The error is reported, and the rest of the body is still checked.
+                RestoreStatementState(saved);
+                RecordStatementError(statement, exception);
+            }
         }
 
         return hasReturn;
