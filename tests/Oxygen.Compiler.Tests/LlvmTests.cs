@@ -540,6 +540,21 @@ public sealed class LlvmTests
     }
 
     [Fact]
+    public void PassesEveryExternalStringParameterByPointer()
+    {
+        var model = Analyze(
+            "@extern(\"oxygen_string_to_c_string\") extern i8* to_c_string(string value); " +
+            "@extern(\"oxygen_custom_takes_two\") extern void takes_two(string first, i32 count, string second); " +
+            "i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("declare ptr @oxygen_string_to_c_string(ptr)", ir);
+        Assert.Contains("declare void @oxygen_custom_takes_two(ptr, i32, ptr)", ir);
+    }
+
+    [Fact]
     public void EmitsBooleanNegationAndEquality()
     {
         // A parameter is not a compile-time constant, so the operations stay in the IR.

@@ -90,9 +90,9 @@ public sealed partial class LlvmModuleGenerator
         || model.Classes.Values.Any(cls => cls.Methods.Contains(symbol))
         || model.Interfaces.Values.Any(iface => iface.Methods.Contains(symbol));
 
-    private bool UsesPointerStringAbi(FunctionSymbol symbol) =>
-        symbol.IsExternal &&
-        symbol.NativeName is "oxygen_write_stdout" or "oxygen_write_stderr";
+    // The string ABI of external functions: every `string` parameter is passed by pointer to an oxygen_string, and a string result is
+    // returned through a trailing out-pointer. The rule is the same for every external function, so the C side is one rule to document.
+    private bool UsesPointerStringAbi(FunctionSymbol symbol) => symbol.IsExternal;
 
     private LLVMTypeRef ToLlvmType(SemanticType type, SemanticModel model)
     {

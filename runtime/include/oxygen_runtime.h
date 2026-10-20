@@ -129,7 +129,7 @@ void oxygen_write_stdout(const oxygen_string *value);
 void oxygen_write_stderr(const oxygen_string *value);
 void oxygen_write_stdout_byte(uint8_t value);
 
-const char *oxygen_string_to_c_string(oxygen_string value);
+const char *oxygen_string_to_c_string(const oxygen_string *value);
 void oxygen_c_string_to_string(const char *value, oxygen_string *result);
 
 #ifdef __cplusplus

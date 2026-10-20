@@ -63,6 +63,26 @@ public sealed class StringIntegrationTests : IDisposable
         Assert.Contains("Oxygen string index 9 is out of bounds for length 3", run.Error + run.Output);
     }
 
+    [SkippableFact]
+    public void StringRoundTripsThroughTheCStringConversion()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.strings;
+
+            i32 main() {
+                io.println(from_c_string(to_c_string("round trip")));
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("round trip\n", run.Output.Replace("\r\n", "\n"));
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }

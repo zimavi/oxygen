@@ -32,7 +32,14 @@ provided by `std.strings`: `to_c_string(string)` returns a runtime-owned
 NUL-terminated `i8*`, and `from_c_string(i8*)` returns an Oxygen string view
 whose length ends at the first NUL. The runtime allocation has no public
 deallocator yet, and null pointers are invalid inputs to the reverse
-conversion. Structs, variadic functions, and platform-specific ABI details
+conversion.
+
+The string ABI is one rule for every external function. Each `string` parameter
+is passed as a pointer to an `oxygen_string`, which the C side declares as
+`const oxygen_string *`. A `string` result is returned through a trailing
+out-pointer, `oxygen_string *`, which the C side fills in. Strings are never
+passed by value, so the call does not depend on how each platform classifies a
+two-word struct. Structs, variadic functions, and platform-specific ABI details
 remain unsupported until their Oxygen representations are defined.
 
 `@packed` and `@align` are parsed and validated for struct declarations. `@align`
