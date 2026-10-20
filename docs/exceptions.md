@@ -64,8 +64,8 @@ handler, the runtime prints the exception type, message, and stack trace to
 standard error, flushes the stream, and terminates with a non-zero exit status.
 
 Runtime failures are different. Indexing out of bounds, integer division by zero,
-an invalid shift or enum value, a failed allocation, and a stack trace frame out
-of range each print a message and end the program with exit code 101. A runtime
+an invalid shift or enum value, a failed allocation, a failed write to standard
+output or error, and a stack trace frame out of range each print a message and end the program with exit code 101. A runtime
 failure does not raise an exception that a catch can handle.
 
 This is distinct from compiler diagnostics, which are reported before native
