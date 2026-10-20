@@ -83,6 +83,48 @@ public sealed class ArrayLiteralIntegrationTests : IDisposable
         Assert.Contains("Oxygen array index 9 is out of bounds for length 3", run.Error + run.Output);
     }
 
+    [SkippableFact]
+    public void ZeroBraceLiteralZeroFillsEveryElementOfAnArray()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32[3] values = {0};
+                io.println(values[0] + values[1] + values[2]);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("0\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void TheAddressOfAnArrayElementPointsIntoTheArray()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32[3] values = { 4, 5, 6 };
+                i32* middle = &values[1];
+                *middle = 9;
+                io.println(values[1]);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("9\n", run.Output.Replace("\r\n", "\n"));
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }

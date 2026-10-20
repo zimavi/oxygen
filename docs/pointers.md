@@ -11,7 +11,10 @@ i32 main() {
 }
 ```
 
-`&` takes the address of an addressable variable or dereferenced pointer.
+`&` takes the address of an addressable variable, a field, an element of an
+array or pointer, or a dereferenced pointer. The address of an array element
+points into the array, so it is valid while the array is. A string element has
+no address, because string bytes are read-only (`OX0205`).
 `*` dereferences a pointer and can be used both as an expression and as an
 assignment target. Pointer types are exact: implicit conversions between
 pointee types are not performed.

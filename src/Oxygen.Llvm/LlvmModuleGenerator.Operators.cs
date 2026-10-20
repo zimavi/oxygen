@@ -330,6 +330,8 @@ public sealed partial class LlvmModuleGenerator
                 return VariableAddress(identifier, storage, model);
             if (expression.Operand is MemberAccessExpression)
                 return EmitLValueAddress(context, builder, expression.Operand, values, storage, model, llvmFunctions);
+            if (expression.Operand is IndexExpression element)
+                return EmitArrayAddress(context, builder, element, values, storage, model, llvmFunctions);
             if (expression.Operand is UnaryExpression
                 { Operator: TokenKind.Star, Operand: var dereferenced })
                 return EmitExpression(context, builder, dereferenced, values, storage, model, llvmFunctions);

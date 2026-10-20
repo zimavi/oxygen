@@ -3914,6 +3914,24 @@ public sealed class SemanticTests
         Assert.NotNull(model.MainFunction);
     }
 
+    [Fact]
+    public void ABraceLiteralOfOneNonZeroValueDoesNotFillAnArray()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32[3] values = {1}; return 0; }"));
+
+        Assert.Contains("expects 3 element(s), got 1", exception.Message);
+    }
+
+    [Fact]
+    public void TheAddressOfAStringElementIsRejectedBecauseStringBytesAreReadOnly()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { string s = \"abc\"; u8* q = &s[1]; return 0; }"));
+
+        Assert.Contains("string bytes are read-only", exception.Message);
+    }
+
     private SemanticModel AnalyzeModules(params string[] sources)
     {
         var units = sources.Select(source => new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse()).ToList();

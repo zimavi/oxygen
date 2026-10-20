@@ -16,6 +16,15 @@ element must have the same type.
 Array element types may be primitive types, pointers, strings, structs, or
 other fixed-size arrays.
 
+`{0}` as an array value sets every element to the zero value of the element
+type, as it does for a struct. It is the only literal with one element that
+fills an array of a different length:
+
+```oxygen
+i32[3] counts = {0};   // 0, 0, 0
+i32[3] bad = {1};      // error: expects 3 elements, got 1
+```
+
 Indexing uses `array[index]` and can be used as either a value or an
 assignment target:
 

@@ -171,6 +171,10 @@ public sealed partial class SemanticAnalyzer
                 throw Error("A struct brace literal must be {0}, which zero-fills every field", literal.Location);
             return expectedType;
         }
+        // `{0}` as an array value zero-fills every element, as it does for a struct.
+        if (expectedType is { IsArray: true } && literal.Elements is [IntegerLiteralExpression arrayZero]
+            && long.TryParse(arrayZero.Lexeme, out var arrayZeroValue) && arrayZeroValue == 0)
+            return expectedType;
         if (literal.Elements.Count == 0) throw Error("Array literals cannot be empty", literal.Location);
         if (expectedType is { IsArray: true, ElementType: { } expectedElement })
         {
@@ -525,6 +529,11 @@ public sealed partial class SemanticAnalyzer
         {
             if (!IsAddressable(expression.Operand, scope) && !IsFieldOfClassObject(expression.Operand, expressionTypes))
                 throw ErrorWithCode(DiagnosticCode.OperandRequirement, "The '&' operator requires an addressable operand", expression.Location);
+            // A string's bytes are read-only, so no pointer into them may be formed.
+            if (expression.Operand is IndexExpression { Target: var stringTarget }
+                && expressionTypes.TryGetValue(stringTarget, out var indexedType) && indexedType.Kind == SemanticTypeKind.String)
+                throw ErrorWithCode(DiagnosticCode.OperandRequirement,
+                    "The '&' operator cannot take the address of a string element, because string bytes are read-only", expression.Location);
             return SemanticType.PointerTo(operandType);
         }
 

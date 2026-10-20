@@ -264,9 +264,12 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        // `{0}` as a struct value is the zero value of the struct, which the analyzer allows only for a struct.
-        if (model.ExpressionTypes[literal].IsStruct)
-            return LLVMValueRef.CreateConstNull(ToLlvmType(NormalizeAggregateType(model.ExpressionTypes[literal], model), model));
+        // `{0}` as a struct or array value is the zero value of the type, which the analyzer allows only for those types.
+        var literalType = model.ExpressionTypes[literal];
+        var zeroFill = literalType.IsStruct
+            || literalType.IsArray && literal.Elements is [IntegerLiteralExpression zero] && long.TryParse(zero.Lexeme, out var zeroValue) && zeroValue == 0;
+        if (zeroFill)
+            return LLVMValueRef.CreateConstNull(ToLlvmType(NormalizeAggregateType(literalType, model), model));
         var result = LLVMValueRef.CreateConstNull(ToLlvmType(model.ExpressionTypes[literal], model));
         // Each element converts to the array's element type, which can differ from the element's own type.
         var elementType = model.ExpressionTypes[literal].ElementType!;
