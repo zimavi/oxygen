@@ -1,19 +1,17 @@
-#include <stdlib.h>
 #include <string.h>
 #include "oxygen_runtime.h"
 
+/* Returns a new NUL-terminated copy of the string's bytes. The caller owns the copy and frees it with std.memory.free. A string with
+ * an embedded NUL byte cannot be a C string, so the result is NULL. */
 const char *oxygen_string_to_c_string(const oxygen_string *value)
 {
     for (uint64_t index = 0; index < value->length; index++)
     {
         if (value->data[index] == '\0')
-            return value->data;
+            return NULL;
     }
 
-    char *result = malloc((size_t)value->length + 1);
-    if (result == NULL)
-        return NULL;
-
+    char *result = oxygen_alloc(value->length + 1);
     if (value->length > 0)
         memcpy(result, value->data, (size_t)value->length);
     result[value->length] = '\0';

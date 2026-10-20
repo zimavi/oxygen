@@ -102,6 +102,38 @@ public sealed class PrintingIntegrationTests : IDisposable
         Assert.Equal("!\n97 a\n'\"\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    [SkippableFact]
+    public void PrintsTheSignOfNegativeZeroAndOfValuesThatRoundToZeroAndSpecialFloats()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source,
+            """
+            import std.io;
+
+            i32 main() {
+                f64 zero = 0.0;
+                f64 negativeZero = zero * -1.0;
+                io.println(negativeZero);
+                io.println(-0.0000001);
+                io.println(-2.5);
+                io.println(zero);
+                io.println(zero / zero);
+                io.println(1.0 / zero);
+                return 0;
+            }
+            """);
+        var executable = Path.Combine(_directory, "main.exe");
+
+        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "-o", executable, "-r", NativeProgram.RuntimeLibrary]);
+        Assert.True(build.ExitCode == 0, build.Error);
+
+        var run = NativeProgram.RunProcess(executable, []);
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("-0\n-0\n-2.5\n0\nnan\ninf\n", run.Output.Replace("\r\n", "\n"));
+    }
+
     // Printing builds its digits in local arrays, so the printing functions must not call the allocator. The check reads the
     // emitted IR, because the program's output does not show allocations.
     [SkippableFact]

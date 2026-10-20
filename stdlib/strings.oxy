@@ -1,5 +1,7 @@
 module std.strings;
 
+// Returns a new NUL-terminated copy of the bytes. The caller owns the copy and frees it with std.memory.free. The result is null
+// when the string has an embedded zero byte, since a C string cannot hold one.
 @extern("oxygen_string_to_c_string")
 public extern i8* to_c_string(string value);
 

@@ -71,10 +71,13 @@ public sealed class StringIntegrationTests : IDisposable
         var run = BuildAndRun(
             """
             import std.io;
+            import std.memory;
             import std.strings;
 
             i32 main() {
-                io.println(from_c_string(to_c_string("round trip")));
+                i8* copy = to_c_string("round trip");
+                io.println(from_c_string(copy));
+                memory.free(copy);
                 return 0;
             }
             """);

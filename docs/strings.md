@@ -31,14 +31,22 @@ A string has two read-only members and an element type:
   not defined on strings.
 
 The standard library exposes `std.strings.to_c_string` and
-`std.strings.from_c_string` for C interop. `to_c_string` copies the UTF-8
-bytes into a newly allocated, NUL-terminated buffer and returns an `i8*`.
-That buffer is owned by the runtime and there is intentionally no deallocator
-yet; callers must treat it as temporary until the ownership API is defined.
-A string with an embedded zero byte is not handled yet. The current runtime
-returns the string's own bytes, which are not NUL-terminated, so the result is
-not a valid C string. The planned contract (an owned copy, or null for an
-embedded zero) is pending a decision, tracked in the implementation plan.
+`std.strings.from_c_string` for C interop. `to_c_string` returns a new
+NUL-terminated copy of the UTF-8 bytes as an `i8*`. The caller owns the copy and
+frees it with `std.memory.free`. A string with an embedded zero byte has no C
+string, so `to_c_string` returns `null` for it. Check the result before using it:
+
+```oxygen
+import std.io;
+import std.memory;
+import std.strings;
+
+i8* copy = to_c_string(text);
+if (copy != null) {
+    io.write_stdout(from_c_string(copy));
+    memory.free(copy);
+}
+```
 
 `from_c_string` accepts an `i8*` and creates an Oxygen string view whose length
 is measured up to the first NUL byte. The C pointer must remain valid for the
@@ -96,7 +104,9 @@ the primitive types implement it by a built-in rule; each one is written by a
   rounded half up, with trailing zeros removed (`0.1 + 0.2` is `0.3`, `3.0` is
   `3`). NaN is written as `nan`, and infinities as `inf` or `-inf`. A finite
   value of 2^64 or more is written as its exact integer value, so `2^96` prints
-  all 29 digits.
+  all 29 digits. A negative value keeps its sign even when it rounds to zero, and
+  negative zero is written as `-0`, so `-0.0000001` prints `-0`. Positive zero is
+  written as `0`.
 
 A class prints by implementing `Printable` with a `void write()` method:
 

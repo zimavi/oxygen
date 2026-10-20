@@ -33,6 +33,12 @@ public sealed class RuntimeLibraryTests : IDisposable
     }
 
     [SkippableFact]
+    public void AStringWithAnEmbeddedZeroHasNoCStringAndGivesNull()
+    {
+        AssertCasePasses("string-with-embedded-zero-has-no-c-string");
+    }
+
+    [SkippableFact]
     public void ArraySizesWithinRangeAreTheirProduct()
     {
         AssertCasePasses("array-size-within-range");

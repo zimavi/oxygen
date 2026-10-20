@@ -48,6 +48,14 @@ static int string_to_c_string_copies_and_terminates(void)
     return 0;
 }
 
+static int string_with_embedded_zero_has_no_c_string(void)
+{
+    static const char bytes[] = "a\0b";
+    oxygen_string value = {bytes, 3};
+    CHECK(oxygen_string_to_c_string(&value) == NULL);
+    return 0;
+}
+
 static int array_size_within_range(void)
 {
     CHECK(oxygen_array_size(10, 4) == 40);
@@ -128,6 +136,7 @@ static const test_case cases[] = {
     {"c-string-from-null", c_string_from_null},
     {"c-string-from-text", c_string_from_text},
     {"string-to-c-string-copies-and-terminates", string_to_c_string_copies_and_terminates},
+    {"string-with-embedded-zero-has-no-c-string", string_with_embedded_zero_has_no_c_string},
     {"array-size-within-range", array_size_within_range},
     {"array-size-overflow-stops-the-program", array_size_overflow_stops_the_program},
     {"calloc-zeroes-every-byte", calloc_zeroes_every_byte},
