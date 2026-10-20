@@ -204,8 +204,10 @@ public sealed class SemanticModel
         IReadOnlyList<GlobalVariableSymbol>? globals = null,
         IReadOnlyDictionary<IdentifierExpression, GlobalVariableSymbol>? globalReferences = null,
         IReadOnlySet<CallExpression>? baseCalls = null,
-        IReadOnlyDictionary<ClassConstructionExpression, CallExpression>? constructionCalls = null)
+        IReadOnlyDictionary<ClassConstructionExpression, CallExpression>? constructionCalls = null,
+        IReadOnlyDictionary<SyntaxNode, int[]>? argumentOrders = null)
     {
+        ArgumentOrders = argumentOrders ?? new Dictionary<SyntaxNode, int[]>();
         ConstructionCalls = constructionCalls ?? new Dictionary<ClassConstructionExpression, CallExpression>();
         BaseCalls = baseCalls ?? new HashSet<CallExpression>();
         Globals = globals ?? [];
@@ -236,6 +238,10 @@ public sealed class SemanticModel
 
     // The `Name(...)` expressions that call a function named Name, mapped to that call.
     public IReadOnlyDictionary<ClassConstructionExpression, CallExpression> ConstructionCalls { get; }
+
+    // How each call, construction, or constructor initializer binds its arguments to parameters: for each parameter, the index
+    // of the argument that fills it, or -1 for its default. Calls without named arguments are bound in position.
+    public IReadOnlyDictionary<SyntaxNode, int[]> ArgumentOrders { get; }
 
     // The calls written as base.name(...), which are direct calls to the base class's method.
     public IReadOnlySet<CallExpression> BaseCalls { get; }

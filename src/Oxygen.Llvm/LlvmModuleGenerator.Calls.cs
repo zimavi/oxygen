@@ -29,7 +29,7 @@ public sealed partial class LlvmModuleGenerator
             return result;
         }
         var function = model.ResolvedCalls[expression];
-        var argumentsWithDefaults = ArgumentsWithDefaults(function.Parameters, expression.Arguments);
+        var argumentsWithDefaults = ArgumentsInParameterOrder(model, expression, function.Parameters, expression.Arguments);
         if (model.ReceiverArgumentCalls.Contains(expression))
             return EmitReceiverArgumentCall(context, builder, expression, function, values, storage, model, llvmFunctions);
         var method = IsClassMethod(function, model);
@@ -153,7 +153,7 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var argumentsWithDefaults = ArgumentsWithDefaults(function.Parameters.Skip(1).ToList(), expression.Arguments);
+        var argumentsWithDefaults = ArgumentsInParameterOrder(model, expression, function.Parameters.Skip(1).ToList(), expression.Arguments);
         var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
         LLVMValueRef receiverValue;
         if (expression.Receiver is not null)
@@ -177,6 +177,18 @@ public sealed partial class LlvmModuleGenerator
         }
         return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function],
             arguments.ToArray(), function.ReturnType.IsVoid ? string.Empty : "call");
+    }
+
+    // The arguments of a call in the order of the parameters they fill. The binding is the analyzer's: a named argument is
+    // emitted where its parameter is, and an omitted parameter takes its default. A call without a binding is in position.
+    private static IReadOnlyList<Expression> ArgumentsInParameterOrder(
+        SemanticModel model, SyntaxNode call, IReadOnlyList<ParameterSymbol> parameters, IReadOnlyList<Expression> arguments)
+    {
+        if (!model.ArgumentOrders.TryGetValue(call, out var order))
+            return ArgumentsWithDefaults(parameters, arguments);
+        return order.Select((index, position) => index < 0
+            ? parameters[position].Declaration.DefaultValue!
+            : arguments[index] is NamedArgumentExpression named ? named.Value : arguments[index]).ToList();
     }
 
     // The arguments of a call followed by the default of each parameter it omits, so that every parameter has an argument.

@@ -68,6 +68,7 @@ public sealed partial class LlvmModuleGenerator
                 context, builder, conditional, values, storage, model, llvmFunctions),
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
             CallExpression call => EmitCall(context, builder, call, values, storage, model, llvmFunctions),
+            NamedArgumentExpression named => EmitExpression(context, builder, named.Value, values, storage, model, llvmFunctions),
             _ => throw new InvalidOperationException($"Unsupported expression '{expression.GetType().Name}'.")
         };
 
@@ -145,7 +146,7 @@ public sealed partial class LlvmModuleGenerator
         var className = NormalizeAggregateType(model.ExpressionTypes[expression], model).StructName
             ?? expression.Type.NamedType
             ?? throw new InvalidOperationException("Class construction requires a named type.");
-        return EmitClassConstruction(context, builder, className, expression.Arguments, true,
+        return EmitClassConstruction(context, builder, className, expression, expression.Arguments, true,
             model.ConstructorSelections[expression], values, storage, model, llvmFunctions);
     }
 
@@ -155,12 +156,12 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
         EmitClassConstruction(context, builder,
             NormalizeAggregateType(model.ExpressionTypes[expression], model).StructName ?? expression.TypeName,
-            expression.Arguments, false, model.ConstructorSelections[expression],
+            expression, expression.Arguments, false, model.ConstructorSelections[expression],
             values, storage, model, llvmFunctions);
 
     private LLVMValueRef EmitClassConstruction(
         LLVMContextRef context, LLVMBuilderRef builder, string className,
-        IReadOnlyList<Expression> arguments, bool heapAllocated, int constructorIndex,
+        SyntaxNode construction, IReadOnlyList<Expression> arguments, bool heapAllocated, int constructorIndex,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
@@ -170,7 +171,7 @@ public sealed partial class LlvmModuleGenerator
         var instance = AllocateClassInstance(builder, className, cls, heapAllocated, model, llvmFunctions);
         var ctor = cls.Constructors[constructorIndex];
         var args = new List<LLVMValueRef> { instance };
-        var argumentsWithDefaults = ArgumentsWithDefaults(ctor.Parameters, arguments);
+        var argumentsWithDefaults = ArgumentsInParameterOrder(model, construction, ctor.Parameters, arguments);
         for (var i = 0; i < argumentsWithDefaults.Count; i++)
             args.Add(CoerceValue(builder, EmitExpression(context, builder, argumentsWithDefaults[i], values, storage, model, llvmFunctions),
                 model.ExpressionTypes[argumentsWithDefaults[i]], ctor.Parameters[i].Type, model));

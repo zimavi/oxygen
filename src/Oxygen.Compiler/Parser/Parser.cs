@@ -407,15 +407,7 @@ public sealed partial class Parser
             : Match(TokenKind.Base) ? ConstructorInitializerKind.Base
             : throw Error(DiagnosticCode.ExpectedToken, "Expected 'this' or 'base' after ':' in a constructor declaration.", Current);
         Consume(TokenKind.OpenParenthesis, "Expected '(' after 'this' or 'base' in a constructor initializer.");
-        var arguments = new List<Expression>();
-        if (!Check(TokenKind.CloseParenthesis))
-        {
-            do
-            {
-                arguments.Add(ParseExpression());
-            } while (Match(TokenKind.Comma));
-        }
-        Consume(TokenKind.CloseParenthesis, "Expected ')' after constructor initializer arguments.");
+        var arguments = ParseArguments("Expected ')' after constructor initializer arguments.");
         return new ConstructorInitializer(kind, arguments, location);
     }
 
@@ -1029,19 +1021,33 @@ public sealed partial class Parser
     }
 
     // The arguments of a call, after its '(' and up to and including its ')'.
-    private List<Expression> ParseArguments()
+    private List<Expression> ParseArguments(string closeMessage = "Expected ')' after arguments.")
     {
         var arguments = new List<Expression>();
         if (!Check(TokenKind.CloseParenthesis))
         {
             do
             {
-                arguments.Add(ParseExpression());
+                arguments.Add(ParseArgument());
             } while (Match(TokenKind.Comma));
         }
 
-        Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+        Consume(TokenKind.CloseParenthesis, closeMessage);
         return arguments;
+    }
+
+    // One argument: a value, or `name: value` for the parameter called `name`. A label is recognized only at the start of an
+    // argument, so the ':' of `?:` in a value is never taken for a label.
+    private Expression ParseArgument()
+    {
+        if (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Colon)
+        {
+            var name = Advance();
+            Advance();
+            return new NamedArgumentExpression(name.Lexeme, ParseExpression(), name.Location);
+        }
+
+        return ParseExpression();
     }
 
     private Expression ParsePostfixExpression()
@@ -1062,16 +1068,7 @@ public sealed partial class Parser
                 // analyzer resolves from the receiver's name.
                 if (expression is ThisExpression && Match(TokenKind.OpenParenthesis))
                 {
-                    var arguments = new List<Expression>();
-                    if (!Check(TokenKind.CloseParenthesis))
-                    {
-                        do
-                        {
-                            arguments.Add(ParseExpression());
-                        } while (Match(TokenKind.Comma));
-                    }
-
-                    Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+                    var arguments = ParseArguments("Expected ')' after arguments.");
                     expression = new CallExpression($"this.{member.Lexeme}", arguments, expression.Location);
                     continue;
                 }
@@ -1106,15 +1103,7 @@ public sealed partial class Parser
                 {
                     var type = ParseType(allowInferred: false);
                     Consume(TokenKind.OpenParenthesis, "Expected '(' after type in new expression.");
-                    var arguments = new List<Expression>();
-                    if (!Check(TokenKind.CloseParenthesis))
-                    {
-                        do
-                        {
-                            arguments.Add(ParseExpression());
-                        } while (Match(TokenKind.Comma));
-                    }
-                    Consume(TokenKind.CloseParenthesis, "Expected ')' after constructor arguments.");
+                    var arguments = ParseArguments("Expected ')' after constructor arguments.");
                     return new NewExpression(type, arguments, token.Location);
                 }
             case TokenKind.OpenBrace:
@@ -1139,16 +1128,7 @@ public sealed partial class Parser
                 name = string.Join(".", qualifiedParts);
                 if (Match(TokenKind.OpenParenthesis))
                 {
-                    var arguments = new List<Expression>();
-                    if (!Check(TokenKind.CloseParenthesis))
-                    {
-                        do
-                        {
-                            arguments.Add(ParseExpression());
-                        } while (Match(TokenKind.Comma));
-                    }
-
-                    Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+                    var arguments = ParseArguments("Expected ')' after arguments.");
                     // `a.b.name(...)` with more than one dot calls a method on the value of `a.b`, unless the chain names a module
                     // function, which the analyzer decides. Explicit type arguments keep the name form, for generic functions.
                     if (qualifiedParts.Count > 2 && typeArguments is null)
@@ -1199,16 +1179,7 @@ public sealed partial class Parser
                     Consume(TokenKind.Dot, "Expected '.' after 'base'.");
                     var method = ConsumeIdentifierLike("Expected a method name after 'base.'.");
                     Consume(TokenKind.OpenParenthesis, "Only calls are supported after 'base.', such as base.name(...).");
-                    var arguments = new List<Expression>();
-                    if (!Check(TokenKind.CloseParenthesis))
-                    {
-                        do
-                        {
-                            arguments.Add(ParseExpression());
-                        } while (Match(TokenKind.Comma));
-                    }
-
-                    Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+                    var arguments = ParseArguments("Expected ')' after arguments.");
                     return new CallExpression($"base.{method.Lexeme}", arguments, token.Location);
                 }
             case TokenKind.IntegerLiteral:

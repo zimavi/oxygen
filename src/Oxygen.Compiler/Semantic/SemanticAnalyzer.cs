@@ -703,7 +703,8 @@ public sealed partial class SemanticAnalyzer
             _globals.ToList(),
             new Dictionary<IdentifierExpression, GlobalVariableSymbol>(_globalReferences, ReferenceEqualityComparer.Instance),
             new HashSet<CallExpression>(_baseCalls, ReferenceEqualityComparer.Instance),
-            new Dictionary<ClassConstructionExpression, CallExpression>(_constructionCalls, ReferenceEqualityComparer.Instance));
+            new Dictionary<ClassConstructionExpression, CallExpression>(_constructionCalls, ReferenceEqualityComparer.Instance),
+            new Dictionary<SyntaxNode, int[]>(_argumentOrders, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

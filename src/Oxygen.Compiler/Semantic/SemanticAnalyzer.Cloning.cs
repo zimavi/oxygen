@@ -175,6 +175,10 @@ public sealed partial class SemanticAnalyzer
                     CloneExpression(argument, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)).ToArray(),
                 TypeArguments = item.TypeArguments?.Select(type => RewriteTypeSyntax(type, substitutions, aggregateNames)).ToArray()
             },
+            NamedArgumentExpression item => item with
+            {
+                Value = CloneExpression(item.Value, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
+            },
             ClassConstructionExpression item => item with
             {
                 TypeName = RewriteNamedAggregate(item.TypeName, SemanticTypeKind.Class, substitutions, aggregateNames),
@@ -242,6 +246,8 @@ public sealed partial class SemanticAnalyzer
         }
         if (_constructorSelections.TryGetValue(source, out var selection))
             _constructorSelections[result] = selection;
+        if (_argumentOrders.TryGetValue(source, out var argumentOrder))
+            _argumentOrders[result] = argumentOrder;
         return result;
     }
 
@@ -252,11 +258,19 @@ public sealed partial class SemanticAnalyzer
         Dictionary<Expression, SemanticType> expressionTypes,
         object owner,
         Dictionary<CallExpression, FunctionSymbol> resolvedCalls) =>
-        source with
+        CopyArgumentOrder(source, source with
         {
             Arguments = source.Arguments.Select(argument =>
                 CloneExpression(argument, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)).ToArray()
-        };
+        });
+
+    // The binding of a clone's arguments is the binding of its source: the clone's arguments are in the same order.
+    private T CopyArgumentOrder<T>(SyntaxNode source, T clone) where T : SyntaxNode
+    {
+        if (_argumentOrders.TryGetValue(source, out var order))
+            _argumentOrders[clone] = order;
+        return clone;
+    }
 
     private PropertyDeclaration CloneProperty(
         PropertyDeclaration source,

@@ -70,6 +70,8 @@ public sealed partial class SemanticAnalyzer
             ConditionalExpression conditional => AnalyzeConditional(
                 conditional, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             CallExpression call => AnalyzeCallExpression(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid),
+            // A named argument is analyzed as its value. The call that it belongs to binds it to a parameter by its name.
+            NamedArgumentExpression named => AnalyzeExpression(named.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             ClassConstructionExpression creation => AnalyzeClassConstructionExpression(
                 creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             NewExpression creation => AnalyzeNewExpression(
@@ -380,27 +382,40 @@ public sealed partial class SemanticAnalyzer
             ? null
             : cls.DeclaredTypeParameters.Zip(explicitTypeArguments, (name, type) => (name, type))
                 .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
-        var accepting = cls.Constructors
+        // Each accessible constructor binds the arguments to its parameters, then infers the class's type arguments from them.
+        var bound = cls.Constructors
             .Where(constructor => IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName))
-            .Where(constructor => constructor.AcceptsArgumentCount(arguments.Count))
-            .Select(constructor => (constructor, bindings: explicitBindings
-                ?? InferConstructorTypeArguments(cls, constructor, argumentTypes, expectedType)))
+            .Select(constructor =>
+            {
+                var order = BindArguments(constructor.Parameters, arguments, cls.Name, out var problem);
+                var bindings = order is null
+                    ? null
+                    : explicitBindings ?? InferConstructorTypeArguments(cls, constructor, argumentTypes, order, expectedType);
+                return (constructor, order, problem, bindings);
+            })
             .ToList();
-        var matches = accepting
-            .Where(item => item.bindings is not null && item.constructor.Parameters.Take(arguments.Count)
-                .Select((parameter, index) => CanAssign(
-                    SubstituteGenericType(parameter.Type, item.bindings),
-                    arguments[index],
-                    argumentTypes[index]))
-                .All(match => match))
+        var matches = bound
+            .Where(item => item.order is not null && item.bindings is not null
+                && Enumerable.Range(0, item.order.Length)
+                    .Where(position => item.order[position] != DefaultArgument)
+                    .All(position => CanAssign(
+                        SubstituteGenericType(item.constructor.Parameters[position].Type, item.bindings),
+                        ValueOf(arguments[item.order[position]]),
+                        argumentTypes[item.order[position]])))
             .ToArray();
         if (matches.Length == 0)
         {
             EnsureConstructorAccessible(cls, arguments.Count, moduleName, location);
+            var accepting = bound.Where(item => item.order is not null).ToList();
             if (explicitBindings is null && cls.DeclaredTypeParameters.Count > 0 && accepting.Count > 0
                 && accepting.All(item => item.bindings is null))
                 throw ErrorWithCode(DiagnosticCode.CannotInfer,
                     $"Cannot infer the type arguments of '{cls.Name}' from its arguments; write them explicitly, such as {cls.Name}<T>(...)",
+                    location, cls.Name.Length);
+            if (HasNamedArguments(arguments))
+                throw ErrorWithCode(DiagnosticCode.ArgumentCount,
+                    bound.Select(item => item.problem).FirstOrDefault(text => text is not null)
+                        ?? $"No constructor of '{cls.Name}' takes these arguments",
                     location, cls.Name.Length);
             throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", location);
         }
@@ -409,6 +424,7 @@ public sealed partial class SemanticAnalyzer
 
         var chosen = matches[0];
         _constructorSelections[construction] = IndexOfConstructor(cls, chosen.constructor);
+        _argumentOrders[construction] = chosen.order!;
         var typeArguments = cls.DeclaredTypeParameters.Select(name => chosen.bindings![name]).ToArray();
         ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, typeArguments, location);
         return SemanticType.Class(cls.Name, cls.DeclaredTypeParameters.Count == 0 ? null : typeArguments);

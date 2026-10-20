@@ -46,6 +46,7 @@ public sealed partial class SemanticAnalyzer
             ConditionalExpression item => EnumerateExpressions(item.Condition)
                 .Concat(EnumerateExpressions(item.WhenTrue)).Concat(EnumerateExpressions(item.WhenFalse)),
             IsExpression item => EnumerateExpressions(item.Operand),
+            NamedArgumentExpression item => EnumerateExpressions(item.Value),
             CallExpression item => (item.Receiver is null ? [] : EnumerateExpressions(item.Receiver)).Concat(item.Arguments.SelectMany(EnumerateExpressions)),
             ClassConstructionExpression item => item.Arguments.SelectMany(EnumerateExpressions),
             NewExpression item => item.Arguments.SelectMany(EnumerateExpressions),
@@ -208,6 +209,9 @@ public sealed partial class SemanticAnalyzer
                 CollectExpressionSyntax(item.Condition, parameters, add);
                 CollectExpressionSyntax(item.WhenTrue, parameters, add);
                 CollectExpressionSyntax(item.WhenFalse, parameters, add);
+                break;
+            case NamedArgumentExpression item:
+                CollectExpressionSyntax(item.Value, parameters, add);
                 break;
             case CallExpression item:
                 foreach (var type in item.ExplicitTypeArguments) add(type, parameters);

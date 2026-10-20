@@ -407,6 +407,12 @@ public sealed record StructLiteralField(
     Expression Value,
     SourceLocation Location);
 
+// `name: value` in a call's arguments. It is only valid as an argument, where the call binds it to the parameter called `name`.
+public sealed record NamedArgumentExpression(
+    string Name,
+    Expression Value,
+    SourceLocation Location) : Expression(Location);
+
 public sealed record MemberAccessExpression(
     Expression Target,
     string MemberName,

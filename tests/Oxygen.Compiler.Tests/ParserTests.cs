@@ -747,6 +747,18 @@ public sealed class ParserTests
         Assert.IsType<UnaryExpression>(parameters[1].DefaultValue);
     }
 
+    [Fact]
+    public void ParsesNamedArgumentsAndKeepsTheConditionalOperatorAsAValue()
+    {
+        var unit = Parse("i32 main() { return scale(flag ? 1 : 2, value: 3); }");
+
+        var call = Assert.IsType<CallExpression>(((ReturnStatement)Assert.Single(unit.Functions[0].Body.Statements)).Value);
+        Assert.IsType<ConditionalExpression>(call.Arguments[0]);
+        var named = Assert.IsType<NamedArgumentExpression>(call.Arguments[1]);
+        Assert.Equal("value", named.Name);
+        Assert.IsType<IntegerLiteralExpression>(named.Value);
+    }
+
     private ParseResult ParseWithDiagnostics(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).ParseWithDiagnostics("main.oxy");
 

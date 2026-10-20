@@ -14,6 +14,7 @@ public sealed partial class SemanticAnalyzer
     private IReadOnlyDictionary<string, SemanticType>? InferGenericSubstitutions(
         FunctionSymbol generic,
         IReadOnlyList<SemanticType> argumentTypes,
+        int[] order,
         SemanticType? expectedReturnType,
         out string? problem)
     {
@@ -21,9 +22,11 @@ public sealed partial class SemanticAnalyzer
         var bindings = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
         problem = null;
         // Only the arguments are read: a parameter that is omitted takes its default, which cannot have a generic type.
-        for (var index = 0; index < argumentTypes.Count; index++)
+        for (var position = 0; position < order.Length; position++)
         {
-            if (!InferFromArgument(generic.Parameters[index].Type, argumentTypes[index], parameters, bindings))
+            if (order[position] == DefaultArgument)
+                continue;
+            if (!InferFromArgument(generic.Parameters[position].Type, argumentTypes[order[position]], parameters, bindings))
             {
                 problem = $"The arguments of '{generic.Name}' do not agree on its type arguments: a type parameter would need " +
                     "two types that share no supertype, or an argument does not have the shape of its parameter";
@@ -48,13 +51,16 @@ public sealed partial class SemanticAnalyzer
         ClassSymbol cls,
         ConstructorSymbol constructor,
         IReadOnlyList<SemanticType> argumentTypes,
+        int[] order,
         SemanticType? expectedType)
     {
         var parameters = cls.DeclaredTypeParameters;
         var bindings = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
-        for (var index = 0; index < argumentTypes.Count; index++)
+        for (var position = 0; position < order.Length; position++)
         {
-            if (!InferFromArgument(constructor.Parameters[index].Type, argumentTypes[index], parameters, bindings))
+            if (order[position] == DefaultArgument)
+                continue;
+            if (!InferFromArgument(constructor.Parameters[position].Type, argumentTypes[order[position]], parameters, bindings))
                 return null;
         }
 

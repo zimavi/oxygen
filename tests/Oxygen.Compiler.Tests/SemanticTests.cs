@@ -3030,6 +3030,66 @@ public sealed class SemanticTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
     }
 
+    [Fact]
+    public void BindsNamedArgumentsToTheirParametersInAnyOrder()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 pair(i32 a, i32 b) { return a - b; } i32 main() { return pair(b: 1, a: 10); }");
+
+        Assert.NotNull(result.Model);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RejectsAParameterThatIsGivenTwice()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 scale(i32 value, i32 factor = 2) { return value * factor; } i32 main() { return scale(5, value: 4); }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("Parameter 'value' of 'scale' is given more than once", diagnostic.Message);
+        Assert.Equal(DiagnosticCode.ArgumentCount, diagnostic.Code);
+    }
+
+    [Fact]
+    public void RejectsARequiredParameterThatNoArgumentFills()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 scale(i32 value, i32 factor = 2) { return value * factor; } i32 main() { return scale(factor: 3); }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("Parameter 'value' of 'scale' needs an argument", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsANameThatIsNoParameter()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 scale(i32 value, i32 factor = 2) { return value * factor; } i32 main() { return scale(vale: 4); }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("has no parameter named 'vale'", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsAPositionalArgumentAfterANamedOne()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 scale(i32 value, i32 factor = 2) { return value * factor; } i32 main() { return scale(value: 4, 3); }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("A positional argument cannot follow a named argument", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsANamedArgumentForAUnionPayload()
+    {
+        var result = AnalyzeWithDiagnostics(OptionUnion + "i32 main() { var o = Option.Some(value: 4); return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("is given by position, not by name", diagnostic.Message);
+    }
+
     private const string OptionUnion = "union Option<T> { Some(T); None; } ";
 
     [Fact]

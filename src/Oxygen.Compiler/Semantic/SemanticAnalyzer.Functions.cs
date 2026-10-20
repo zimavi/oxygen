@@ -203,11 +203,17 @@ public sealed partial class SemanticAnalyzer
             .Zip(typeArguments ?? [], (name, type) => (name, type))
             .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
 
-        var matches = target.Constructors.Select((overload, position) => (overload, position))
-            .Where(item => item.overload.AcceptsArgumentCount(arguments.Count))
-            .Where(item => item.overload.Parameters.Take(arguments.Count).Select((parameter, index) => CanAssign(
-                SubstituteGenericType(parameter.Type, substitutions), arguments[index], argumentTypes[index]))
-                .All(match => match))
+        var bound = target.Constructors.Select((overload, position) =>
+            {
+                var order = BindArguments(overload.Parameters, arguments, target.Name, out var problem);
+                return (overload, position, order, problem);
+            })
+            .ToList();
+        var matches = bound
+            .Where(item => item.order is not null && Enumerable.Range(0, item.order.Length)
+                .Where(position => item.order[position] != DefaultArgument)
+                .All(position => CanAssign(SubstituteGenericType(item.overload.Parameters[position].Type, substitutions),
+                    ValueOf(arguments[item.order[position]]), argumentTypes[item.order[position]])))
             .ToArray();
         var location = initializer?.Location ?? constructor.Location;
         if (matches.Length == 0)
@@ -217,11 +223,18 @@ public sealed partial class SemanticAnalyzer
                     $"Constructor of '{owner.Name}' must call a base constructor because '{target.Name}' has no " +
                     "parameterless constructor; add ': base(...)' to the constructor",
                     location);
+            if (HasNamedArguments(arguments))
+                throw ErrorWithCode(DiagnosticCode.ArgumentCount,
+                    bound.Select(item => item.problem).FirstOrDefault(text => text is not null)
+                        ?? $"No constructor of '{target.Name}' takes these arguments",
+                    location, "base".Length);
             throw Error($"No constructor of '{target.Name}' matches the supplied arguments", location);
         }
         if (matches.Length > 1)
             throw Error($"Constructor call for '{target.Name}' is ambiguous", location);
         _constructorChainTargets[constructor] = matches[0].position;
+        if (initializer is not null)
+            _argumentOrders[initializer] = matches[0].order!;
     }
 
     private static int IndexOfConstructor(ClassSymbol cls, ConstructorSymbol constructor)

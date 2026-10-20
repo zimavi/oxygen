@@ -380,6 +380,7 @@ public sealed partial class SemanticAnalyzer
                 WhenFalse = Expression(item.WhenFalse)
             },
             IsExpression item => item with { TargetType = Type(item.TargetType), Operand = Expression(item.Operand) },
+            NamedArgumentExpression item => item with { Value = Expression(item.Value) },
             CallExpression item => item with
             {
                 Receiver = item.Receiver is null ? null : Expression(item.Receiver),

@@ -73,6 +73,8 @@ public sealed partial class SemanticAnalyzer
         var unionParts = call.Name.Split('.');
         if (unionParts.Length == 2 && _unionsByName.TryGetValue(unionParts[0], out var union))
         {
+            if (HasNamedArguments(call.Arguments))
+                throw Error($"The payload of union case '{unionParts[1]}' is given by position, not by name", call.Location);
             if (!union.CasesByName.TryGetValue(unionParts[1], out var item))
                 throw Error($"Union '{union.Name}' has no case '{unionParts[1]}'", call.Location);
             if ((item.PayloadType is null && call.Arguments.Count != 0)
@@ -81,35 +83,35 @@ public sealed partial class SemanticAnalyzer
             // Explicit type arguments bind the parameters in order. Otherwise the payload binds them, and then the expected type
             // binds the parameters that the payload left open, such as `Option.None` where a return type is expected.
             var typeParameters = union.DeclaredTypeParameters;
-            var bindings = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
+            var typeBindings = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
             for (var index = 0; index < call.ExplicitTypeArguments.Count && index < typeParameters.Count; index++)
-                bindings[typeParameters[index]] = ResolveType(call.ExplicitTypeArguments[index]);
+                typeBindings[typeParameters[index]] = ResolveType(call.ExplicitTypeArguments[index]);
             var actual = item.PayloadType is null
                 ? null
                 : AnalyzeExpression(call.Arguments[0], scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
             if (call.ExplicitTypeArguments.Count == 0)
             {
-                if (actual is not null && !InferFromArgument(item.PayloadType!, actual, typeParameters, bindings))
+                if (actual is not null && !InferFromArgument(item.PayloadType!, actual, typeParameters, typeBindings))
                     throw Error($"Union case '{item.Name}' expects {item.PayloadType}, got {actual}", call.Location);
                 if (expectedType is not null)
                     BindFromExpectedType(
                         SemanticType.Union(union.Name, typeParameters.Select(SemanticType.GenericParameter).ToArray()),
-                        expectedType, typeParameters, bindings);
+                        expectedType, typeParameters, typeBindings);
             }
 
-            var missing = typeParameters.FirstOrDefault(name => !bindings.ContainsKey(name));
+            var missing = typeParameters.FirstOrDefault(name => !typeBindings.ContainsKey(name));
             if (missing is not null)
                 throw ErrorWithCode(DiagnosticCode.CannotInfer,
                     $"Cannot infer type parameter '{missing}' of union case '{item.Name}'; write its type arguments explicitly, such as {union.Name}<T>.{item.Name}(...)",
                     call.Location, item.Name.Length);
             if (actual is not null)
             {
-                var payload = SubstituteGenericType(item.PayloadType!, bindings);
+                var payload = SubstituteGenericType(item.PayloadType!, typeBindings);
                 if (!CanAssign(payload, call.Arguments[0], actual))
                     throw Error($"Union case '{item.Name}' expects {payload}, got {actual}", call.Location);
             }
 
-            var unionArguments = typeParameters.Count == 0 ? null : typeParameters.Select(name => bindings[name]).ToArray();
+            var unionArguments = typeParameters.Count == 0 ? null : typeParameters.Select(name => typeBindings[name]).ToArray();
             return SemanticType.Union(union.Name, unionArguments);
         }
         // `functionName` is the name the overloads are looked up by. It is the call name, except for a receiver chain that
@@ -162,7 +164,7 @@ public sealed partial class SemanticAnalyzer
             .ToList();
         foreach (var argument in call.Arguments)
         {
-            if (argument is IdentifierExpression identifier
+            if (ValueOf(argument) is IdentifierExpression identifier
                 && IsOwnedClass(scope.Lookup(identifier.Name, identifier.Location).Type)
                 && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
                 _escapingClassLocals.Add(declaration);
@@ -190,13 +192,22 @@ public sealed partial class SemanticAnalyzer
         else
         {
             var attempts = overloads
-                .Where(candidate => candidate.IsGeneric && candidate.AcceptsArgumentCount(argumentTypes.Count))
-                .Select(candidate => (candidate, substitutions: InferGenericSubstitutions(candidate, argumentTypes, expectedType,
-                    out var problem), problem))
+                .Where(candidate => candidate.IsGeneric)
+                .Select(candidate =>
+                {
+                    var order = BindArguments(candidate.Parameters, call.Arguments, functionName, out var bindingProblem);
+                    if (order is null)
+                        return (candidate, order: (int[]?)null, substitutions: (IReadOnlyDictionary<string, SemanticType>?)null,
+                            problem: bindingProblem);
+                    var substitutions = InferGenericSubstitutions(candidate, argumentTypes, order, expectedType, out var problem);
+                    return (candidate, order, substitutions, problem);
+                })
                 .ToList();
             var inferred = attempts.Where(item => item.substitutions is not null).ToList();
-            // When no generic overload is inferred, the reason from the first attempt is the one to report, if there is one.
-            inferenceProblem = inferred.Count == 0 ? attempts.Select(item => item.problem).FirstOrDefault(text => text is not null) : null;
+            // When no generic overload is inferred, the reason from the first attempt that the arguments fit is the one to report.
+            inferenceProblem = inferred.Count == 0
+                ? attempts.Where(item => item.order is not null).Select(item => item.problem).FirstOrDefault(text => text is not null)
+                : null;
             // Specializations made by other calls are not candidates: the type arguments inferred here select the
             // specializations this call considers. Each generic overload the arguments fit is a candidate, and the ranking
             // below chooses among them. The expected return type does not choose, so overloads tied on their arguments
@@ -209,15 +220,28 @@ public sealed partial class SemanticAnalyzer
                 overloads = overloads.Append(specialized).ToList();
             }
         }
-        var candidates = overloads
-            .Where(function => function.AcceptsArgumentCount(argumentTypes.Count))
+        var bindings = overloads
             .Where(function => !function.IsGeneric)
+            .Select(function =>
+            {
+                var order = BindArguments(function.Parameters, call.Arguments, functionName, out var problem);
+                return (function, order, problem);
+            })
+            .ToList();
+        var candidates = bindings
+            .Where(item => item.order is not null)
+            .Select(item => (item.function, order: item.order!))
             .ToList();
 
         if (candidates.Count == 0)
         {
             if (inferenceProblem is not null)
                 throw ErrorWithCode(DiagnosticCode.CannotInfer, inferenceProblem, call.Location, functionName.Length);
+            if (HasNamedArguments(call.Arguments))
+                throw ErrorWithCode(DiagnosticCode.ArgumentCount,
+                    bindings.Select(item => item.problem).FirstOrDefault(text => text is not null)
+                        ?? $"No overload of '{functionName}' takes these arguments",
+                    call.Location, functionName.Length);
             if (overloads.Count == 1)
             {
                 throw ErrorWithCode(DiagnosticCode.ArgumentCount, 
@@ -233,16 +257,15 @@ public sealed partial class SemanticAnalyzer
         // The closest candidates win: each is ranked by its worst argument conversion, and only those tied for the best
         // rank remain. The return type never selects an overload.
         var ranked = candidates
-            .Select(function => (function, cost: CandidateCost(function, call, argumentTypes)))
+            .Select(candidate => (candidate.function, candidate.order,
+                cost: CandidateCost(candidate.function, call, argumentTypes, candidate.order)))
             .Where(item => item.cost is not null)
-            .Select(item => (item.function, cost: item.cost!.Value))
+            .Select(item => (item.function, item.order, cost: item.cost!.Value))
             .ToList();
         var matches = ranked.Count == 0
-            ? new List<FunctionSymbol>()
-            : ranked.Where(item => item.cost.CompareTo(ranked.Min(other => other.cost)) == 0)
-                .Select(item => item.function)
-                .ToList();
-        if (matches.Select(match => match.ModuleName).Distinct(StringComparer.Ordinal).Count() > 1)
+            ? []
+            : ranked.Where(item => item.cost.CompareTo(ranked.Min(other => other.cost)) == 0).ToList();
+        if (matches.Select(match => match.function.ModuleName).Distinct(StringComparer.Ordinal).Count() > 1)
             throw Error($"Function '{functionName}' is ambiguous; use a module prefix", call.Location, functionName.Length);
         if (matches.Count > 1)
             throw Error($"Function '{functionName}' is ambiguous: no overload is closer than the others", call.Location, functionName.Length);
@@ -250,25 +273,38 @@ public sealed partial class SemanticAnalyzer
         {
             if (candidates.Count == 1)
             {
-                var mismatchIndex = candidates[0].Parameters
-                    .Select((parameter, index) => (parameter, index))
-                    .First(pair => pair.parameter.Type != argumentTypes[pair.index]);
-                throw Error(
-                    $"Argument {mismatchIndex.index + 1} of '{functionName}' has type {argumentTypes[mismatchIndex.index]}; expected {mismatchIndex.parameter.Type}",
-                    call.Arguments[mismatchIndex.index].Location);
+                var (candidate, order) = candidates[0];
+                var mismatches = Enumerable.Range(0, order.Length)
+                    .Where(position => order[position] != DefaultArgument
+                        && candidate.Parameters[position].Type != argumentTypes[order[position]])
+                    .ToList();
+                if (mismatches.Count > 0)
+                {
+                    var position = mismatches[0];
+                    // A named argument is named by its parameter, since its position in the call is the caller's choice.
+                    var label = HasNamedArguments(call.Arguments)
+                        ? $"'{candidate.Parameters[position].Name}'"
+                        : $"{order[position] + 1}";
+                    throw Error(
+                        $"Argument {label} of '{functionName}' has type {argumentTypes[order[position]]}; expected {candidate.Parameters[position].Type}",
+                        ValueOf(call.Arguments[order[position]]).Location);
+                }
             }
 
             throw Error($"No overload of '{functionName}' matches the argument types", call.Location);
         }
 
-        var function = matches[0];
-        for (var index = 0; index < call.Arguments.Count; index++)
+        var (function, chosenOrder, _) = matches[0];
+        for (var position = 0; position < chosenOrder.Length; position++)
         {
-            if (call.Arguments[index] is NullLiteralExpression
-                && function.Parameters[index].Type.IsPointer)
-                expressionTypes[call.Arguments[index]] = function.Parameters[index].Type;
+            if (chosenOrder[position] == DefaultArgument)
+                continue;
+            var argument = ValueOf(call.Arguments[chosenOrder[position]]);
+            if (argument is NullLiteralExpression && function.Parameters[position].Type.IsPointer)
+                expressionTypes[argument] = function.Parameters[position].Type;
         }
         resolvedCalls[call] = function;
+        _argumentOrders[call] = chosenOrder;
         _usedFunctions.Add(function);
         if (function.ReturnType.IsVoid && !allowVoid)
         {
@@ -306,27 +342,31 @@ public sealed partial class SemanticAnalyzer
             var methodArgumentTypes = call.Arguments.Select(argument =>
                 AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
             // Same ranking as free functions: the closest candidates win, and the return type never selects one.
-            var methodRanked = methodCandidates.Where(method => method.AcceptsArgumentCount(methodArgumentTypes.Length))
-                .Select(method => (method, cost: CandidateCost(method, call, methodArgumentTypes, substitutions)))
+            var bound = methodCandidates
+                .Select(method => (method, order: BindArguments(method.Parameters, call.Arguments, methodName, out _)))
+                .Where(item => item.order is not null)
+                .Select(item => (item.method, order: item.order!))
+                .ToList();
+            var methodRanked = bound
+                .Select(item => (item.method, item.order,
+                    cost: CandidateCost(item.method, call, methodArgumentTypes, item.order, substitutions)))
                 .Where(item => item.cost is not null)
-                .Select(item => (item.method, cost: item.cost!.Value))
+                .Select(item => (item.method, item.order, cost: item.cost!.Value))
                 .ToList();
             var methodMatches = methodRanked.Count == 0
-                ? Array.Empty<FunctionSymbol>()
-                : methodRanked
-                    .Where(item => item.cost.CompareTo(methodRanked.Min(other => other.cost)) == 0)
-                    .Select(item => item.method)
-                    .ToArray();
-            if (methodMatches.Length == 1)
+                ? []
+                : methodRanked.Where(item => item.cost.CompareTo(methodRanked.Min(other => other.cost)) == 0).ToList();
+            if (methodMatches.Count == 1)
             {
-                resolvedCalls[call] = methodMatches[0];
-                _usedFunctions.Add(methodMatches[0]);
-                return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
+                resolvedCalls[call] = methodMatches[0].method;
+                _argumentOrders[call] = methodMatches[0].order;
+                _usedFunctions.Add(methodMatches[0].method);
+                return SubstituteGenericType(methodMatches[0].method.ReturnType, substitutions);
             }
-            if (methodMatches.Length > 1)
+            if (methodMatches.Count > 1)
                 throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
             if (methodCandidates.Length > 0)
-                throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
+                throw NoMatchingMethod(call, methodName, methodCandidates.Select(method => method.Parameters));
         }
         else if (receiverType.IsInterface && _interfacesByName.TryGetValue(receiverType.StructName!, out var receiverInterface))
         {
@@ -336,20 +376,31 @@ public sealed partial class SemanticAnalyzer
                 .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
             var methodArgumentTypes = call.Arguments.Select(argument =>
                 AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
-            var methodMatches = methodCandidates.Where(method => method.AcceptsArgumentCount(methodArgumentTypes.Length))
-                .Where(method => method.Parameters.Take(methodArgumentTypes.Length).Select((parameter, index) =>
-                    CanAssign(SubstituteGenericType(parameter.Type, substitutions),
-                        call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
-            if (methodMatches.Length == 1)
+            var methodMatches = new List<(FunctionSymbol method, int[] order)>();
+            foreach (var method in methodCandidates)
             {
-                resolvedCalls[call] = methodMatches[0];
-                _usedFunctions.Add(methodMatches[0]);
-                return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
+                var order = BindArguments(method.Parameters, call.Arguments, methodName, out _);
+                if (order is null)
+                    continue;
+                var fits = Enumerable.Range(0, order.Length)
+                    .Where(position => order[position] != DefaultArgument)
+                    .All(position => CanAssign(SubstituteGenericType(method.Parameters[position].Type, substitutions),
+                        ValueOf(call.Arguments[order[position]]), methodArgumentTypes[order[position]]));
+                if (fits)
+                    methodMatches.Add((method, order));
             }
-            if (methodMatches.Length > 1)
+
+            if (methodMatches.Count == 1)
+            {
+                resolvedCalls[call] = methodMatches[0].method;
+                _argumentOrders[call] = methodMatches[0].order;
+                _usedFunctions.Add(methodMatches[0].method);
+                return SubstituteGenericType(methodMatches[0].method.ReturnType, substitutions);
+            }
+            if (methodMatches.Count > 1)
                 throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
             if (methodCandidates.Length > 0)
-                throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
+                throw NoMatchingMethod(call, methodName, methodCandidates.Select(method => method.Parameters));
         }
         else if (!receiverType.IsClass && !receiverType.IsInterface)
         {
@@ -364,20 +415,31 @@ public sealed partial class SemanticAnalyzer
             if (receiverType.Kind is SemanticTypeKind.Primitive or SemanticTypeKind.String
                 && functions.TryGetValue($"{PrintableModule}.{methodName}", out var builtin))
                 receiverCandidates = receiverCandidates.Concat(builtin).Distinct().ToList();
-            var functionMatches = receiverCandidates
-                .Where(function => function.AcceptsArgumentCount(receiverArguments.Length + 1)
-                    && function.Parameters[0].Type == receiverType)
-                .Where(function => function.Parameters.Skip(1).Take(receiverArguments.Length).Select((parameter, index) =>
-                    CanAssign(parameter.Type, call.Arguments[index], receiverArguments[index])).All(match => match))
-                .ToArray();
-            if (functionMatches.Length == 1)
+            // The receiver is the first parameter, so the arguments bind to the parameters after it.
+            var functionMatches = new List<(FunctionSymbol function, int[] order)>();
+            foreach (var function in receiverCandidates.Where(candidate => candidate.Parameters.Count > 0
+                && candidate.Parameters[0].Type == receiverType))
             {
-                resolvedCalls[call] = functionMatches[0];
-                _usedFunctions.Add(functionMatches[0]);
-                _receiverArgumentCalls.Add(call);
-                return functionMatches[0].ReturnType;
+                var order = BindArguments(function.Parameters.Skip(1).ToList(), call.Arguments, methodName, out _);
+                if (order is null)
+                    continue;
+                var fits = Enumerable.Range(0, order.Length)
+                    .Where(position => order[position] != DefaultArgument)
+                    .All(position => CanAssign(function.Parameters[position + 1].Type,
+                        ValueOf(call.Arguments[order[position]]), receiverArguments[order[position]]));
+                if (fits)
+                    functionMatches.Add((function, order));
             }
-            if (functionMatches.Length > 1)
+
+            if (functionMatches.Count == 1)
+            {
+                resolvedCalls[call] = functionMatches[0].function;
+                _argumentOrders[call] = functionMatches[0].order;
+                _usedFunctions.Add(functionMatches[0].function);
+                _receiverArgumentCalls.Add(call);
+                return functionMatches[0].function.ReturnType;
+            }
+            if (functionMatches.Count > 1)
                 throw Error($"Method call '{methodName}' is ambiguous for a receiver of type {receiverType}",
                     call.Location);
             throw Error($"No function '{methodName}' accepts a receiver of type {receiverType}", call.Location);
@@ -399,15 +461,19 @@ public sealed partial class SemanticAnalyzer
         FunctionSymbol function,
         CallExpression call,
         IReadOnlyList<SemanticType> argumentTypes,
+        int[] order,
         IReadOnlyDictionary<string, SemanticType>? substitutions = null)
     {
         var worst = ConversionCost.Exact;
-        for (var index = 0; index < argumentTypes.Count; index++)
+        for (var position = 0; position < order.Length; position++)
         {
+            if (order[position] == DefaultArgument)
+                continue;
+            var index = order[position];
             var parameterType = substitutions is null
-                ? function.Parameters[index].Type
-                : SubstituteGenericType(function.Parameters[index].Type, substitutions);
-            var cost = ConversionCostOf(parameterType, call.Arguments[index], argumentTypes[index]);
+                ? function.Parameters[position].Type
+                : SubstituteGenericType(function.Parameters[position].Type, substitutions);
+            var cost = ConversionCostOf(parameterType, ValueOf(call.Arguments[index]), argumentTypes[index]);
             if (cost is null)
                 return null;
             if (cost.Value.CompareTo(worst) > 0)

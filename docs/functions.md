@@ -65,3 +65,37 @@ i32 pair(i32 a, i64 b = 0) { return a; }   // fine: they differ at the second pa
 A call that matches several overloads chooses the closest one, as described in
 the overload rules of the compiler: an exact match beats a conversion, so
 `pair(1, cast<i32>(2))` calls the first.
+
+## Named arguments
+
+An argument can name the parameter it fills, with `name: value`:
+
+```oxygen
+i32 scale(i32 value, i32 factor = 2) {
+    return value * factor;
+}
+
+scale(factor: 3, value: 5); // 15
+scale(value: 4);            // 8, factor takes its default
+```
+
+The rules are:
+
+- **Positional arguments come first**, then named ones. A positional argument
+  after a named one is an error.
+- **Each name must be a parameter** of the function, and each parameter is filled
+  once. Filling a parameter both by position and by name is an error.
+- **A parameter without a default must be filled.** A named call that leaves one
+  out is an error, and the message names the parameter.
+- **Overloads are chosen among those the names fit.** An overload that has no
+  parameter with a given name, or that leaves a required parameter unfilled, is
+  not a candidate. The usual ranking then applies to the arguments in parameter
+  order.
+- **Named arguments work everywhere a call does**: free functions, methods,
+  receiver calls, `new`, class construction, and the `this(...)` and `base(...)`
+  initializers of a constructor.
+- **Union case payloads are given by position only**, as `Option.Some(value)`.
+
+A label is recognized only at the start of an argument, so the `:` of a
+conditional expression inside an argument is still that operator:
+`scale(flag ? 1 : 2)` passes a conditional value.
