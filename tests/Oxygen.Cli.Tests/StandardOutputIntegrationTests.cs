@@ -18,6 +18,26 @@ public sealed class StandardOutputIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void OutputIsWrittenAsBytesWithoutCarriageReturnsAndKeepsUtf8()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = NativeProgram.BuildAndRun(_directory,
+            """
+            import std.io;
+
+            i32 main() {
+                io.println("a");
+                io.println("é");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("a\né\n", run.Output);
+    }
+
+    [SkippableFact]
     public void AFailedWriteToStandardOutputStopsTheProgramWithExitCode101()
     {
         NativeProgram.RequireNativeToolchain();
