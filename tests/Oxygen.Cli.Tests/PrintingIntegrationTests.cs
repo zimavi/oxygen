@@ -102,6 +102,66 @@ public sealed class PrintingIntegrationTests : IDisposable
         Assert.Equal("!\n97 a\n'\"\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    // Printing builds its digits in local arrays, so the printing functions must not call the allocator. The check reads the
+    // emitted IR, because the program's output does not show allocations.
+    [SkippableFact]
+    public void PrintingNumbersDoesNotAllocate()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source,
+            """
+            import std.io;
+
+            i32 main() {
+                io.println(12345);
+                io.println(-7);
+                io.println(2.5);
+                io.println(1e300);
+                return 0;
+            }
+            """);
+        var executable = Path.Combine(_directory, "main.exe");
+        var ir = Path.Combine(_directory, "main.ll");
+
+        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "-o", executable, "-r", NativeProgram.RuntimeLibrary]);
+        Assert.True(build.ExitCode == 0, build.Error);
+        // --emit-ir writes the IR without linking, so it is a second build.
+        var emit = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "-o", Path.Combine(_directory, "ir.exe"), "-r", NativeProgram.RuntimeLibrary, "--emit-ir", ir]);
+        Assert.True(emit.ExitCode == 0, emit.Error);
+
+        var lines = File.ReadAllLines(ir);
+        foreach (var name in new[] { "write_unsigned", "write_exact_integer", "write_float" })
+        {
+            var body = FunctionBody(lines, name);
+            Assert.NotEmpty(body);
+            Assert.DoesNotContain(body, line => line.Contains("oxygen_alloc", StringComparison.Ordinal)
+                || line.Contains("oxygen_calloc", StringComparison.Ordinal)
+                || line.Contains("oxygen_realloc", StringComparison.Ordinal));
+        }
+
+        var run = NativeProgram.RunProcess(executable, []);
+        Assert.Equal(0, run.ExitCode);
+        var printed = run.Output.Replace("\r\n", "\n").Split('\n');
+        Assert.Equal(["12345", "-7", "2.5"], printed[..3]);
+        // 1e300 is an integer-valued double of more than 2^64, written exactly: 301 digits.
+        Assert.Equal(301, printed[3].Length);
+        Assert.True(printed[3].All(char.IsAsciiDigit));
+    }
+
+    // The lines of the IR function whose mangled name contains the Oxygen name, from its define line to its closing brace.
+    private static List<string> FunctionBody(string[] lines, string name)
+    {
+        var start = Array.FindIndex(lines, line => line.StartsWith("define", StringComparison.Ordinal)
+            && line.Contains($"f{name.Length}{name}_", StringComparison.Ordinal));
+        if (start < 0)
+            return [];
+        var end = Array.IndexOf(lines, "}", start);
+        return lines[start..end].ToList();
+    }
+
     [SkippableFact]
     public void PrintsUsizeAndIsizeValuesPassedThroughFunctionParameters()
     {

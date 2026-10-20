@@ -77,6 +77,8 @@ first two functions call the runtime's `oxygen_write_stdout` and
 including embedded zero bytes. `print_char` and `println_char` write one byte
 through the runtime's `oxygen_write_stdout_byte` primitive. `println` appends a newline after the supplied value.
 
+Printing a number builds its digits in local arrays, so it does not allocate.
+
 Standard output is buffered. The runtime writes the buffer when the program
 returns from `main`, before any message to standard error, and before a runtime
 failure stops the program, so the two streams show the output in the order it
