@@ -218,6 +218,14 @@ public sealed partial class LlvmModuleGenerator
     {
         if (source == target)
             return value;
+        // The null literal is a null pointer until it is given a reference type: a class reference is that pointer, and an interface
+        // is a zero interface value whose object pointer is null.
+        if (source.IsPointer && IsReferenceType(target, model))
+        {
+            if (target.IsInterface)
+                return builder.BuildInsertValue(LLVMValueRef.CreateConstNull(ToLlvmType(target, model)), value, 0, "interface.null");
+            return value.TypeOf == ToLlvmType(target, model) ? value : builder.BuildBitCast(value, ToLlvmType(target, model), "class.null");
+        }
         if (source.IsClass && target.IsClass)
             return builder.BuildBitCast(value, ToLlvmType(target, model), "class.upcast");
         if (source.IsClass && target.IsInterface)

@@ -285,6 +285,18 @@ function. Copies are shallow for the initial implementation. Value classes may
 declare fields, methods, constructors, and destructors, but cannot inherit,
 implement interfaces, or declare virtual/override methods.
 
+## Reference comparison
+
+`==` and `!=` compare class and interface references by identity: two references are equal when they
+name the same object. A reference compares with a reference of a related type, meaning one that converts
+implicitly to the other, or with `null`. Comparing references of unrelated classes is an error.
+
+`null` is the null reference of a class or interface type, as it is the zero value of a field of that
+type, so a variable of such a type can be initialized or assigned with `null`. An interface reference
+equals the object it names, so `x == a` holds when `x` holds `a`.
+
+A value class has no identity, so its values cannot be compared with `==` or `!=`. Compare their fields.
+
 ## Reference conversions
 
 Class references may be assigned to a base-class or implemented-interface

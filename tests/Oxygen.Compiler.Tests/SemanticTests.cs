@@ -3181,6 +3181,37 @@ public sealed class SemanticTests
         Assert.Contains("must be initialized with a literal or an integer constant expression", diagnostic.Message);
     }
 
+    [Fact]
+    public void AcceptsIdentityComparisonOfReferencesAndComparisonWithNull()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "interface Named { i32 id(); } class Node : Named { i32 id() { return 1; } } " +
+            "i32 main() { Node a = new Node(); Named x = a; Node n = null; Named y = null; " +
+            "if (a == a && x == a && n == null && y != x && a != null) { return 1; } return 0; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RejectsComparingReferencesOfUnrelatedClasses()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "class A { } class B { } i32 main() { A a = new A(); B b = new B(); if (a == b) { return 1; } return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("references compare only when one of them converts to the other", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsComparingValueClassesBecauseTheyHaveNoIdentity()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "@value class P { i32 x; P(i32 x) { this.x = x; } } i32 main() { P a = P(1); P b = P(1); if (a == b) { return 1; } return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("has no identity", diagnostic.Message);
+    }
+
     private const string OptionUnion = "union Option<T> { Some(T); None; } ";
 
     [Fact]

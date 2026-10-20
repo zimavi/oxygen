@@ -586,6 +586,17 @@ public sealed partial class SemanticAnalyzer
             return SemanticType.FromPrimitive(PrimitiveType.Bool);
         }
 
+        // Reference classes and interfaces compare by identity: two references are equal when they name the same object, and a
+        // null reference equals only null. A value class has no identity, so its values are not compared.
+        if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals && IsReferenceComparison(expression, left, right))
+        {
+            RequireIdentityComparison(expression, left, right, expressionTypes);
+            return SemanticType.FromPrimitive(PrimitiveType.Bool);
+        }
+        if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals && (IsValueClassType(left) || IsValueClassType(right)))
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement,
+                "A value class has no identity, so its values cannot be compared with == or !=; compare their fields", expression.Location);
+
         if (left.IsPointer || right.IsPointer)
         {
             if (left.IsPointer && right.IsInteger

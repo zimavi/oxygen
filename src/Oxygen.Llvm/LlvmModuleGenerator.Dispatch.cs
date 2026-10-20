@@ -182,6 +182,10 @@ public sealed partial class LlvmModuleGenerator
     private int FieldOffset(ClassSymbol cls, SemanticModel model, int fieldIndex) =>
         cls.IsValue ? fieldIndex : 1 + _virtualSlotCount + fieldIndex;
 
+    // The data pointer of a reference value: an interface value holds it in its first field.
+    private LLVMValueRef ObjectIdentity(LLVMBuilderRef builder, LLVMValueRef value, SemanticType type) =>
+        type.IsInterface ? builder.BuildExtractValue(value, 0, "interface.data") : value;
+
     private static bool IsValueClass(SemanticType type, SemanticModel model) =>
         type.IsClass && model.Classes.TryGetValue(type.StructName!, out var cls) && cls.IsValue;
 

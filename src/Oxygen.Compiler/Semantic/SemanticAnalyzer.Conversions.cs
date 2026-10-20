@@ -74,6 +74,42 @@ public sealed partial class SemanticAnalyzer
     private bool CanAssign(SemanticType target, Expression value, SemanticType actual) =>
         ConversionCostOf(target, value, actual) is not null;
 
+    // A reference type: an interface, or a class that is not a value class. Its values are references to objects, or null.
+    private bool IsReferenceType(SemanticType type) =>
+        type.IsInterface || (type.IsClass && !IsValueClassType(type));
+
+    private bool IsValueClassType(SemanticType type) =>
+        type.IsClass && _classesByName.TryGetValue(type.StructName!, out var cls) && cls.IsValue;
+
+    // Whether a comparison is between references: a reference compared with a reference of a related type, or with null.
+    private bool IsReferenceComparison(BinaryExpression expression, SemanticType left, SemanticType right) =>
+        (IsReferenceType(left) && (IsReferenceType(right) || expression.Right is NullLiteralExpression))
+        || (IsReferenceType(right) && expression.Left is NullLiteralExpression);
+
+    // References compare when one converts to the other, and a null operand takes the other operand's type, so that it is
+    // emitted as a null reference of that type.
+    private void RequireIdentityComparison(
+        BinaryExpression expression,
+        SemanticType left,
+        SemanticType right,
+        IDictionary<Expression, SemanticType> expressionTypes)
+    {
+        if (expression.Left is NullLiteralExpression)
+        {
+            expressionTypes[expression.Left] = right;
+            return;
+        }
+        if (expression.Right is NullLiteralExpression)
+        {
+            expressionTypes[expression.Right] = left;
+            return;
+        }
+        if (!CanAssign(left, expression.Right, right) && !CanAssign(right, expression.Left, left))
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement,
+                $"Cannot compare {left} with {right}: references compare only when one of them converts to the other",
+                expression.Location);
+    }
+
     // How far an implicit conversion is from an exact match; smaller is closer. The fields are compared in order: any
     // conversion loses to an exact match; a conversion within one kind (integer to integer, float to float) beats one
     // that crosses kinds; a narrowing conversion (only ever of a fitting constant) loses to a widening one; and a class
@@ -98,6 +134,9 @@ public sealed partial class SemanticAnalyzer
                 || SemanticTypeComparer.Instance.Equals(target, actual)))
             return ConversionCost.Exact;
         if (target.IsPointer && value is NullLiteralExpression)
+            return ConversionCost.Exact;
+        // The null reference of a class or interface, which is a zero value of that type.
+        if (value is NullLiteralExpression && IsReferenceType(target))
             return ConversionCost.Exact;
         if (IsReferenceCast(actual, target, out var implicitConversion) && implicitConversion)
             return new ConversionCost(1, 0, 0, HierarchyDistance(actual.StructName!, target.StructName!));

@@ -131,6 +131,17 @@ public sealed partial class LlvmModuleGenerator
             left = CoerceValue(builder, left, leftType, common, model);
             right = CoerceValue(builder, right, rightType, common, model);
         }
+        if (op is TokenKind.EqualsEquals or TokenKind.BangEquals
+            && (IsReferenceType(leftType, model) || IsReferenceType(rightType, model)))
+        {
+            // References compare by identity: the object each names, which for an interface is its data pointer. A null reference
+            // names no object.
+            var identityPredicate = op == TokenKind.EqualsEquals
+                ? LLVMIntPredicate.LLVMIntEQ
+                : LLVMIntPredicate.LLVMIntNE;
+            return builder.BuildICmp(identityPredicate, ObjectIdentity(builder, left, leftType),
+                ObjectIdentity(builder, right, rightType), "identity.compare");
+        }
         if ((leftType.IsPointer || rightType.IsPointer)
             && op is TokenKind.EqualsEquals or TokenKind.BangEquals)
         {
