@@ -1,0 +1,120 @@
+﻿module std.math;
+
+public f64 abs(f64 x) {
+    return c_fabs_f64(x);
+}
+
+public f32 floor(f32 x) {
+    return c_floor_f32(x);
+}
+
+public f64 floor(f64 x) {
+    return c_floor_f64(x);
+}
+
+public f32 ceil(f32 x) {
+    return c_ceil_f32(x);
+}
+
+public f64 ceil(f64 x) {
+    return c_ceil_f64(x);
+}
+
+public f32 trunc(f32 x) {
+    return c_trunc_f32(x);
+}
+
+public f64 trunc(f64 x) {
+    return c_trunc_f64(x);
+}
+
+public f32 round(f32 x) {
+    return c_round_f32(x);
+}
+
+public f64 round(f64 x) {
+    return c_round_f64(x);
+}
+
+public f32 fmod(f32 x, f32 y) {
+    return c_fmod_f32(x, y);
+}
+
+public f64 fmod(f64 x, f64 y) {
+    return c_fmod_f64(x, y);
+}
+
+public f32 min(f32 x, f32 y) {
+    return c_fmin_f32(x, y);
+}
+
+public f64 min(f64 x, f64 y) {
+    return c_fmin_f64(x, y);
+}
+
+public f32 max(f32 x, f32 y) {
+    return c_fmax_f32(x, y);
+}
+
+public f64 max(f64 x, f64 y) {
+    return c_fmax_f64(x, y);
+}
+
+public f32 copysign(f32 x, f32 sign) {
+    return c_copysign_f32(x, sign);
+}
+
+public f64 copysign(f64 x, f64 sign) {
+    return c_copysign_f64(x, sign);
+}
+
+@extern("floorf")
+extern f32 c_floor_f32(f32 x);
+
+@extern("ceilf")
+extern f32 c_ceil_f32(f32 x);
+
+@extern("truncf")
+extern f32 c_trunc_f32(f32 x);
+
+@extern("roundf")
+extern f32 c_round_f32(f32 x);
+
+@extern("fmodf")
+extern f32 c_fmod_f32(f32 x, f32 y);
+
+@extern("fminf")
+extern f32 c_fmin_f32(f32 x, f32 y);
+
+@extern("fmaxf")
+extern f32 c_fmax_f32(f32 x, f32 y);
+
+@extern("copysignf")
+extern f32 c_copysign_f32(f32 x, f32 sign);
+
+@extern("fabs")
+extern f64 c_fabs_f64(f64 x);
+
+@extern("floor")
+extern f64 c_floor_f64(f64 x);
+
+@extern("ceil")
+extern f64 c_ceil_f64(f64 x);
+
+@extern("trunc")
+extern f64 c_trunc_f64(f64 x);
+
+@extern("round")
+extern f64 c_round_f64(f64 x);
+
+@extern("fmod")
+extern f64 c_fmod_f64(f64 x, f64 y);
+
+@extern("fmin")
+extern f64 c_fmin_f64(f64 x, f64 y);
+
+@extern("fmax")
+extern f64 c_fmax_f64(f64 x, f64 y);
+
+@extern("copysign")
+extern f64 c_copysign_f64(f64 x, f64 sign);
