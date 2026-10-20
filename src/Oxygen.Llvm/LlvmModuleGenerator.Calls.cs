@@ -244,4 +244,31 @@ public sealed partial class LlvmModuleGenerator
         return result;
     }
 
+    // Calls the contract method of an interface value through its table, the way an interface method call does. The method
+    // receives the object that the interface value holds.
+    private LLVMValueRef EmitInterfaceCall(
+        LLVMBuilderRef builder,
+        LLVMValueRef interfaceValue,
+        SemanticType interfaceType,
+        FunctionSymbol contract,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var table = builder.BuildExtractValue(interfaceValue, 1, "interface.table");
+        var receiver = builder.BuildExtractValue(interfaceValue, 0, "interface.data");
+        EmitNullReferenceCheck(builder, receiver, contract.Name, "called", model, llvmFunctions);
+        var iface = model.Interfaces[interfaceType.StructName!];
+        var slots = _interfaceSlots[iface.QualifiedName].ToList();
+        var slot = slots.IndexOf(contract);
+        if (slot < 0)
+            slot = slots.FindIndex(candidate => candidate.Name == contract.Name
+                && candidate.Parameters.Select(parameter => parameter.Type)
+                    .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type)));
+        var entry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+            table, [LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)slot, false)],
+            (ReadOnlySpan<char>)"interface.slot");
+        var target = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), entry, "interface.target");
+        return EmitCallOrInvoke(builder, llvmFunctions[contract].FunctionType, target, [receiver], "for.in.next");
+    }
+
 }

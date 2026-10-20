@@ -182,13 +182,16 @@ public static class ParameterCounts
         Required(parameters) == parameters.Count ? $"{parameters.Count}" : $"{Required(parameters)} to {parameters.Count}";
 }
 
+// The protocol of a for-in loop over a collection with iter(). IteratorType is the type that iter() returns: a class, whose next()
+// is called directly, or an interface, whose next() is the interface contract called through the interface table.
 public sealed record IteratorProtocol(
     Expression Collection,
     CallExpression IterCall,
     FunctionSymbol Iter,
     FunctionSymbol Next,
     SemanticType ElementType,
-    SemanticType OptionType);
+    SemanticType OptionType,
+    SemanticType IteratorType);
 
 // A module-level variable. Value is its constant starting value: a bool, a BigInteger for an integer type, a double for a
 // float type, or null when the variable starts as zero.

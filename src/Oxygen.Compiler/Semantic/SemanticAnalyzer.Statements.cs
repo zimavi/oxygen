@@ -141,18 +141,37 @@ public sealed partial class SemanticAnalyzer
                         // collection and of its iterator are substituted into them, so the element type is concrete.
                         var iteratorType = SubstituteGenericType(iter.ReturnType,
                             TypeArgumentSubstitutions(collectionClass, collectionType));
-                        if (!iteratorType.IsClass || !_classesByName.TryGetValue(iteratorType.StructName!, out var iteratorClass))
-                            throw ErrorWithCode(DiagnosticCode.MustReturn, "Iterator 'iter()' must return an iterator class", iterCall.Location);
-                        // The receiver for next() is represented by the iterator value
-                        // in the lowering; resolve the declared method directly here.
-                        var nextCandidates = GetClassMethods(iteratorClass.QualifiedName, [])
-                            .Where(method => method.Name == "next" && method.Parameters.Count == 0).ToArray();
-                        if (nextCandidates.Length != 1)
-                            throw Error($"Iterator class '{iteratorClass.Name}' must declare exactly one next() method",
-                                forInStatement.Collection.Location);
-                        var next = nextCandidates[0];
-                        var option = SubstituteGenericType(next.ReturnType,
-                            TypeArgumentSubstitutions(iteratorClass, iteratorType));
+                        FunctionSymbol next;
+                        SemanticType option;
+                        if (iteratorType.IsClass && _classesByName.TryGetValue(iteratorType.StructName!, out var iteratorClass))
+                        {
+                            // The receiver for next() is represented by the iterator value
+                            // in the lowering; resolve the declared method directly here.
+                            var nextCandidates = GetClassMethods(iteratorClass.QualifiedName, [])
+                                .Where(method => method.Name == "next" && method.Parameters.Count == 0).ToArray();
+                            if (nextCandidates.Length != 1)
+                                throw Error($"Iterator class '{iteratorClass.Name}' must declare exactly one next() method",
+                                    forInStatement.Collection.Location);
+                            next = nextCandidates[0];
+                            option = SubstituteGenericType(next.ReturnType,
+                                TypeArgumentSubstitutions(iteratorClass, iteratorType));
+                        }
+                        else if (iteratorType.IsInterface && _interfacesByName.TryGetValue(iteratorType.StructName!, out var iteratorInterface))
+                        {
+                            // An interface iterator is called through its contract, as an interface method call is.
+                            var nextCandidates = iteratorInterface.Methods
+                                .Where(method => method.Name == "next" && method.Parameters.Count == 0).ToArray();
+                            if (nextCandidates.Length != 1)
+                                throw Error($"Iterator interface '{iteratorInterface.Name}' must declare exactly one next() method",
+                                    forInStatement.Collection.Location);
+                            next = nextCandidates[0];
+                            option = SubstituteGenericType(next.ReturnType,
+                                iteratorInterface.DeclaredTypeParameters
+                                    .Zip(iteratorType.TypeArguments ?? [], (name, type) => (name, type))
+                                    .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal));
+                        }
+                        else
+                            throw ErrorWithCode(DiagnosticCode.MustReturn, "Iterator 'iter()' must return a class or an interface", iterCall.Location);
                         if (!option.IsUnion || !string.Equals(option.EnumName, OptionUnion, StringComparison.Ordinal)
                             || option.TypeArguments is not { Count: 1 })
                             throw ErrorWithCode(DiagnosticCode.MustReturn, "Iterator next() must return Option<T> with the iteration element type",
@@ -163,7 +182,7 @@ public sealed partial class SemanticAnalyzer
                         resolvedCalls[iterCall] = iter;
                         _callReceiverTypes[iterCall] = collectionType;
                         _iteratorProtocols[forInStatement] = new IteratorProtocol(
-                            forInStatement.Collection, iterCall, iter, next, iterationElement, option);
+                            forInStatement.Collection, iterCall, iter, next, iterationElement, option, iteratorType);
                         _usedFunctions.Add(iter);
                         _usedFunctions.Add(next);
                     }

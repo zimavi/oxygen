@@ -292,12 +292,15 @@ public sealed partial class SemanticAnalyzer
         foreach (var (loop, protocol) in _iteratorProtocols.ToArray())
         {
             var iter = newResolvedCalls[protocol.IterCall];
-            var iteratorOwner = iter.ReturnType.StructName;
+            // The iterator type is named as its instance (an interface such as Iterator<i32> is Iterator__ox_i32), so its
+            // specialized next() is found under that name.
+            var iteratorType = NormalizeAggregate(iter.ReturnType, aggregateNames);
+            var iteratorOwner = iteratorType.StructName;
             var next = iteratorOwner is not null
                 && specializedMethods.TryGetValue((protocol.Next.Declaration, iteratorOwner), out var specializedNext)
                 ? specializedNext
                 : protocol.Next;
-            _iteratorProtocols[loop] = protocol with { Iter = iter, Next = next };
+            _iteratorProtocols[loop] = protocol with { Iter = iter, Next = next, IteratorType = iteratorType };
         }
 
         expressionTypes.Clear();

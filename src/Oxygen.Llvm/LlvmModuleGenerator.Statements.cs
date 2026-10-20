@@ -597,10 +597,13 @@ public sealed partial class LlvmModuleGenerator
                         var protocolEndBlock = function.AppendBasicBlock("for.in.protocol.end");
                         builder.BuildBr(protocolConditionBlock);
                         builder.PositionAtEnd(protocolConditionBlock);
-                        var nextResult = builder.BuildCall2(
-                            llvmFunctions[protocol.Next].FunctionType,
-                            llvmFunctions[protocol.Next],
-                            (ReadOnlySpan<LLVMValueRef>)new[] { iteratorValue }, (ReadOnlySpan<char>)"for.in.next");
+                        var nextResult = protocol.IteratorType.IsInterface
+                            ? EmitInterfaceCall(builder, iteratorValue, NormalizeAggregateType(protocol.IteratorType, model),
+                                protocol.Next, model, llvmFunctions)
+                            : builder.BuildCall2(
+                                llvmFunctions[protocol.Next].FunctionType,
+                                llvmFunctions[protocol.Next],
+                                (ReadOnlySpan<LLVMValueRef>)new[] { iteratorValue }, (ReadOnlySpan<char>)"for.in.next");
                         var tag = builder.BuildExtractValue(nextResult, 0, "for.in.option.tag");
                         var hasValue = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, tag,
                             LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false), "for.in.has_value");

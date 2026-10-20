@@ -79,7 +79,7 @@ interface Iterable<T> {
 // A growable list. append adds a value at the end and doubles the storage when it is full. get and pop return an Option,
 // because an index past the end and an empty list are expected outcomes. The list owns its storage, which it frees when it
 // is destroyed.
-public class List<T> {
+public class List<T> : Iterable<T> {
     private T* data;
     public u64 length { get; private set; }
     public u64 capacity { get; private set; }
@@ -107,7 +107,7 @@ public class List<T> {
         return Option<T>.Some(data[index]);
     }
 
-    public ListIterator<T> iter() {
+    public Iterator<T> iter() {
         return new ListIterator<T>(this);
     }
 

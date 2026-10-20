@@ -3932,6 +3932,15 @@ public sealed class SemanticTests
         Assert.Contains("string bytes are read-only", exception.Message);
     }
 
+    [Fact]
+    public void ForInRejectsAnIteratorThatIsNeitherAClassNorAnInterface()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Bad { i32 iter() { return 1; } } i32 main() { Bad bad = new Bad(); for (var v in bad) { } return 0; }"));
+
+        Assert.Contains("must return a class or an interface", exception.Message);
+    }
+
     private SemanticModel AnalyzeModules(params string[] sources)
     {
         var units = sources.Select(source => new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse()).ToList();

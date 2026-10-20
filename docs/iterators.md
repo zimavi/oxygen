@@ -17,8 +17,9 @@ Fixed arrays are an intrinsic exception to the method protocol below; they do
 not require user-visible `iter()`/`next()` methods.
 
 The compiler recognizes a user-defined protocol on class collections:
-`collection.iter()` must return an iterator class, and that class must provide
-`next()` returning `Option<T>`. `Some` is tag zero and `None` is tag one.
+`collection.iter()` must return an iterator, either a class or an interface, and
+the iterator must provide `next()` returning `Option<T>`. An interface iterator's
+`next()` is called through the interface, as any interface method is. `Some` is tag zero and `None` is tag one.
 The LLVM representation uses a tag plus a type-aware payload slot, so
 primitive, pointer, class, and other currently supported payload types use
 their native LLVM representation. `std.collection` provides the canonical
@@ -27,6 +28,6 @@ generic tagged union `Option<T>` (`Some(T)` and `None`).
 `std.collection` also provides `List<T>`, a growable list. `append` doubles the
 storage when it is full, and `get(index)` and `pop()` return an `Option<T>`,
 since an index past the end and an empty list are expected outcomes. Its
-`iter()` returns the class `ListIterator<T>`, which `for` accepts. `List<T>`
-does not implement `Iterable<T>`, because an interface method's return type
-must match exactly and `iter()` must return the class itself.
+`iter()` returns the interface `Iterator<T>`, and `List<T>` implements
+`Iterable<T>`. The loop does not free the iterator that `iter()` returns, so
+each loop over a list leaves one small iterator object allocated.

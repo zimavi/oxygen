@@ -227,6 +227,57 @@ public sealed class CollectionIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void ForInAcceptsAnIteratorThatIsAnInterface()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.collection;
+
+            class CountdownIterator : Iterator<i32> {
+                private i32 remaining;
+
+                public CountdownIterator(i32 start) {
+                    this.remaining = start;
+                }
+
+                public Option<i32> next() {
+                    if (remaining == 0) {
+                        return Option<i32>.None;
+                    }
+                    remaining = remaining - 1;
+                    return Option<i32>.Some(remaining + 1);
+                }
+            }
+
+            class Countdown {
+                private i32 start;
+
+                public Countdown(i32 start) {
+                    this.start = start;
+                }
+
+                public Iterator<i32> iter() {
+                    return new CountdownIterator(start);
+                }
+            }
+
+            i32 main() {
+                Countdown countdown = new Countdown(3);
+                for (var value in countdown) {
+                    io.println(value);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("3\n2\n1\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
     public void PopOfAnEmptyListAndGetPastTheEndAreNone()
     {
         NativeProgram.RequireNativeToolchain();
