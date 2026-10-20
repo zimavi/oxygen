@@ -278,7 +278,9 @@ public sealed partial class LlvmModuleGenerator
             var candidate = BuildNoThrowCall(builder, _isInstance, [objectValue, GetTypeName(builder, possibleType)], "type.match");
             match = builder.BuildOr(match, candidate, "type.match");
         }
-        return match;
+        // The runtime reports a match as an i8. A test is a boolean (i1) wherever it is used: as a value, a condition or an operand.
+        return builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, match,
+            LLVMValueRef.CreateConstInt(_context.Int8Type, 0, false), "type.is");
     }
 
     private LLVMValueRef EmitPatternBindingValue(
