@@ -406,7 +406,7 @@ public sealed partial class SemanticAnalyzer
         var operandType = AnalyzeExpression(expression.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         if (expression.Operator == TokenKind.Ampersand)
         {
-            if (!IsAddressable(expression.Operand, scope))
+            if (!IsAddressable(expression.Operand, scope) && !IsFieldOfClassObject(expression.Operand, expressionTypes))
                 throw Error("The '&' operator requires an addressable operand", expression.Location);
             return SemanticType.PointerTo(operandType);
         }
@@ -443,7 +443,8 @@ public sealed partial class SemanticAnalyzer
 
         if (expression.Operator is TokenKind.PlusPlus or TokenKind.MinusMinus)
         {
-            if (!IsAddressable(expression.Operand, scope))
+            // A member is changed through its field or its setter, so it is a valid target even when it has no address.
+            if (!IsAddressable(expression.Operand, scope) && expression.Operand is not MemberAccessExpression)
                 throw Error($"The '{expression.Operator}' operator requires an addressable operand", expression.Location);
             ValidateWritableTarget(expression.Operand, scope, expressionTypes);
             if (!operandType.IsInteger && !operandType.IsPointer)
@@ -541,6 +542,10 @@ public sealed partial class SemanticAnalyzer
             && left == boolean && right == boolean)
             return boolean;
 
+        // Two values of one enum compare for equality, by their members.
+        if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals && left.IsEnum && left == right)
+            return SemanticType.FromPrimitive(PrimitiveType.Bool);
+
         var requiresInteger = expression.Operator is TokenKind.Ampersand or TokenKind.Pipe or TokenKind.Caret
             or TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan or TokenKind.Percent;
         if (requiresInteger && (!left.IsInteger || !right.IsInteger))
@@ -601,6 +606,13 @@ public sealed partial class SemanticAnalyzer
             $"Conditional branches must have compatible types, got {whenTrue} and {whenFalse}",
             expression.Location);
     }
+
+    // A field of a class object has an address. A property has none: it is read and written through its accessors.
+    private bool IsFieldOfClassObject(Expression expression, IDictionary<Expression, SemanticType> expressionTypes) =>
+        expression is MemberAccessExpression member
+        && expressionTypes.TryGetValue(member.Target, out var targetType)
+        && IsOwnedClass(targetType)
+        && FindProperty(_classesByName[targetType.StructName!], member.MemberName) is null;
 
     private static bool IsAddressable(Expression expression, Scope scope) =>
         expression switch

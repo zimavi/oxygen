@@ -491,8 +491,9 @@ public sealed partial class Parser
             int? value = null;
             if (Match(TokenKind.Equals))
             {
+                var negative = Match(TokenKind.Minus);
                 var number = Consume(TokenKind.IntegerLiteral, "Expected an integer enum member value.");
-                if (!int.TryParse(number.Lexeme, out var parsed))
+                if (!int.TryParse((negative ? "-" : "") + number.Lexeme, out var parsed))
                     throw Error("Enum member values must fit in a signed 32-bit integer.", number);
                 value = parsed;
             }

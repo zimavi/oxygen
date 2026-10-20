@@ -285,9 +285,13 @@ public sealed partial class LlvmModuleGenerator
     {
         if (expression.Operator is TokenKind.PlusPlus or TokenKind.MinusMinus)
         {
-            var address = EmitLValueAddress(context, builder, expression.Operand, values, storage, model, llvmFunctions);
             var type = model.ExpressionTypes[expression.Operand];
-            var oldValue = builder.BuildLoad2(ToLlvmType(type, model), address, "increment.old");
+            // A member is changed through its place, which also covers a property. Any other target has an address.
+            var place = expression.Operand is MemberAccessExpression
+                ? EmitPlace(context, builder, expression.Operand, values, storage, model, llvmFunctions)
+                : MemoryPlace(builder, ToLlvmType(type, model),
+                    EmitLValueAddress(context, builder, expression.Operand, values, storage, model, llvmFunctions), "increment.old");
+            var oldValue = place.Load();
             LLVMValueRef updated;
             if (type.IsPointer)
             {
@@ -305,7 +309,7 @@ public sealed partial class LlvmModuleGenerator
                     : builder.BuildSub(oldValue, one, "decrement");
             }
 
-            builder.BuildStore(updated, address);
+            place.Store(updated);
             return expression.IsPostfix ? oldValue : updated;
         }
 
@@ -313,6 +317,8 @@ public sealed partial class LlvmModuleGenerator
         {
             if (expression.Operand is IdentifierExpression identifier)
                 return VariableAddress(identifier, storage, model);
+            if (expression.Operand is MemberAccessExpression)
+                return EmitLValueAddress(context, builder, expression.Operand, values, storage, model, llvmFunctions);
             if (expression.Operand is UnaryExpression
                 { Operator: TokenKind.Star, Operand: var dereferenced })
                 return EmitExpression(context, builder, dereferenced, values, storage, model, llvmFunctions);
@@ -345,6 +351,8 @@ public sealed partial class LlvmModuleGenerator
         return expression switch
         {
             IdentifierExpression identifier => VariableAddress(identifier, storage, model),
+            MemberAccessExpression => EmitPlace(context, builder, expression, values, storage, model, llvmFunctions).Address
+                ?? throw new InvalidOperationException("Internal compiler error: this member has no address."),
             UnaryExpression { Operator: TokenKind.Star, Operand: var pointer } =>
                 EmitExpression(context, builder, pointer, values, storage, model, llvmFunctions),
             IndexExpression index => EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions),

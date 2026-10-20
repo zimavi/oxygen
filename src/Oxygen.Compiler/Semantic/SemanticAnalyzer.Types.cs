@@ -8,6 +8,15 @@ namespace Oxygen.Compiler.Semantic;
 // Types: resolving type syntax, generic type parameters and struct layout.
 public sealed partial class SemanticAnalyzer
 {
+    // The type of something that holds a value, such as a field, a parameter or an array element. It cannot be void.
+    private SemanticType ResolveValueType(TypeSyntax syntax, string subject, SourceLocation location)
+    {
+        var type = ResolveType(syntax);
+        if (type.IsVoid)
+            throw Error($"{subject} cannot have type void", location);
+        return type;
+    }
+
     private SemanticType ResolveType(TypeSyntax syntax)
     {
         if (syntax.IsInferred)
@@ -16,7 +25,8 @@ public sealed partial class SemanticAnalyzer
         }
 
         if (syntax.IsArray)
-            return SemanticType.ArrayOf(ResolveType(syntax.ElementType!), syntax.ArrayLength!.Value);
+            return SemanticType.ArrayOf(ResolveValueType(syntax.ElementType!, "An array element", syntax.ElementType!.Location),
+                syntax.ArrayLength!.Value);
         if (syntax.IsString)
             return syntax.IsPointer
                 ? SemanticType.PointerTo(ResolveType(syntax.Pointee!))

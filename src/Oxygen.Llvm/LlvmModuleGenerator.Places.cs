@@ -9,7 +9,8 @@ public sealed partial class LlvmModuleGenerator
 {
     // A location that a compound assignment reads and then writes. The parts that find the location, such as an object or an
     // index, are evaluated once, when the place is built, so `x op= y` evaluates x once.
-    private sealed record Place(Func<LLVMValueRef> Load, Action<LLVMValueRef> Store);
+    // Address is set for a location that is storage, such as a variable or a field of a class object. A property has no address.
+    private sealed record Place(Func<LLVMValueRef> Load, Action<LLVMValueRef> Store, LLVMValueRef? Address = null);
 
     private Place EmitPlace(
         LLVMContextRef context,
@@ -39,7 +40,7 @@ public sealed partial class LlvmModuleGenerator
     }
 
     private static Place MemoryPlace(LLVMBuilderRef builder, LLVMTypeRef type, LLVMValueRef address, string name) =>
-        new(() => builder.BuildLoad2(type, address, name), value => builder.BuildStore(value, address));
+        new(() => builder.BuildLoad2(type, address, name), value => builder.BuildStore(value, address), address);
 
     private Place EmitMemberPlace(
         LLVMContextRef context,

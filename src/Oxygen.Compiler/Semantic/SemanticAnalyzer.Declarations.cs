@@ -67,7 +67,8 @@ public sealed partial class SemanticAnalyzer
                 throw Error($"Parameter '{parameter.Name}' is declared more than once", parameter.Location, parameter.Name.Length);
             }
 
-            parameters.Add(new ParameterSymbol(parameter.Name, ResolveType(parameter.Type), parameter));
+            parameters.Add(new ParameterSymbol(parameter.Name,
+                ResolveValueType(parameter.Type, $"Parameter '{parameter.Name}'", parameter.Location), parameter));
         }
 
         return new FunctionSymbol(

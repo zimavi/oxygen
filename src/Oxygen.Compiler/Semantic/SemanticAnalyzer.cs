@@ -291,7 +291,7 @@ public sealed partial class SemanticAnalyzer
             {
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.Fields.Select(field =>
-                            new ClassFieldSymbol(field.Name, ResolveType(field.Type), field, field.Visibility, field.IsConst))
+                            new ClassFieldSymbol(field.Name, ResolveValueType(field.Type, $"Field '{field.Name}'", field.Location), field, field.Visibility, field.IsConst))
                         .Concat(declaration.DeclaredProperties
                             .Where(property => property.Accessors.Any(accessor => accessor.Kind is PropertyAccessorKind.Get
                                 or PropertyAccessorKind.Set or PropertyAccessorKind.Init))
@@ -373,7 +373,7 @@ public sealed partial class SemanticAnalyzer
             foreach (var declaration in unit.Structs)
             {
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () => declaration.Fields
-                    .Select(field => new StructFieldSymbol(field.Name, ResolveType(field.Type), field))
+                    .Select(field => new StructFieldSymbol(field.Name, ResolveValueType(field.Type, $"Field '{field.Name}'", field.Location), field))
                     .ToArray());
                 if (fields.Select(field => field.Name).Distinct(StringComparer.Ordinal).Count() != fields.Length)
                     throw Error($"Struct '{declaration.Name}' contains duplicate fields", declaration.Location,

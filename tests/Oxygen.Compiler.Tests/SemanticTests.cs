@@ -1812,6 +1812,43 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void FieldOfAClassObjectCanBeAddressed()
+    {
+        var model = Analyze("class A { i32 x; } i32 main() { A a = new A(); i32* p = &a.x; return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void PropertyCannotBeAddressed()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class A { public i32 P { get; set; } } i32 main() { A a = new A(); i32* p = &a.P; return 0; }"));
+
+        Assert.Contains("requires an addressable operand", exception.Message);
+    }
+
+    [Fact]
+    public void VoidParameterFieldAndArrayElementAreRejected()
+    {
+        Assert.Contains("Parameter 'v' cannot have type void", Assert.Throws<SemanticException>(() =>
+            Analyze("void f(void v) { } i32 main() { return 0; }")).Message);
+        Assert.Contains("Field 'v' cannot have type void", Assert.Throws<SemanticException>(() =>
+            Analyze("class A { void v; } i32 main() { return 0; }")).Message);
+        Assert.Contains("An array element cannot have type void", Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { void[2] a; return 0; }")).Message);
+    }
+
+    [Fact]
+    public void EnumValuesOfOneEnumCompareForEquality()
+    {
+        var model = Analyze(
+            "enum Code : i32 { Low = -1, High = 1 } i32 main() { Code c = Code.Low; bool same = c == Code.High; return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void SetOnlyPropertyCanBeAssigned()
     {
         var model = Analyze(
