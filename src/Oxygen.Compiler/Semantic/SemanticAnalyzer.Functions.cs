@@ -204,8 +204,8 @@ public sealed partial class SemanticAnalyzer
             .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
 
         var matches = target.Constructors.Select((overload, position) => (overload, position))
-            .Where(item => item.overload.Parameters.Count == arguments.Count)
-            .Where(item => item.overload.Parameters.Select((parameter, index) => CanAssign(
+            .Where(item => item.overload.AcceptsArgumentCount(arguments.Count))
+            .Where(item => item.overload.Parameters.Take(arguments.Count).Select((parameter, index) => CanAssign(
                 SubstituteGenericType(parameter.Type, substitutions), arguments[index], argumentTypes[index]))
                 .All(match => match))
             .ToArray();

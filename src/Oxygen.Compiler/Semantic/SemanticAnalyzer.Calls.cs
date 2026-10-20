@@ -173,7 +173,7 @@ public sealed partial class SemanticAnalyzer
         else
         {
             var inferred = overloads
-                .Where(candidate => candidate.IsGeneric && candidate.Parameters.Count == argumentTypes.Count)
+                .Where(candidate => candidate.IsGeneric && candidate.AcceptsArgumentCount(argumentTypes.Count))
                 .Select(candidate => (candidate, substitutions: InferGenericSubstitutions(candidate, argumentTypes, expectedType)))
                 .Where(item => item.substitutions is not null)
                 .ToList();
@@ -190,7 +190,7 @@ public sealed partial class SemanticAnalyzer
             }
         }
         var candidates = overloads
-            .Where(function => function.Parameters.Count == argumentTypes.Count)
+            .Where(function => function.AcceptsArgumentCount(argumentTypes.Count))
             .Where(function => !function.IsGeneric)
             .ToList();
 
@@ -199,7 +199,7 @@ public sealed partial class SemanticAnalyzer
             if (overloads.Count == 1)
             {
                 throw ErrorWithCode(DiagnosticCode.ArgumentCount, 
-                    $"Function '{functionName}' expects {overloads[0].Parameters.Count} argument(s), got {call.Arguments.Count}",
+                    $"Function '{functionName}' expects {overloads[0].ArgumentCountDescription} argument(s), got {call.Arguments.Count}",
                     call.Location);
             }
 
@@ -284,7 +284,7 @@ public sealed partial class SemanticAnalyzer
             var methodArgumentTypes = call.Arguments.Select(argument =>
                 AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
             // Same ranking as free functions: the closest candidates win, and the return type never selects one.
-            var methodRanked = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
+            var methodRanked = methodCandidates.Where(method => method.AcceptsArgumentCount(methodArgumentTypes.Length))
                 .Select(method => (method, cost: CandidateCost(method, call, methodArgumentTypes, substitutions)))
                 .Where(item => item.cost is not null)
                 .Select(item => (item.method, cost: item.cost!.Value))
@@ -314,8 +314,8 @@ public sealed partial class SemanticAnalyzer
                 .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
             var methodArgumentTypes = call.Arguments.Select(argument =>
                 AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
-            var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
-                .Where(method => method.Parameters.Select((parameter, index) =>
+            var methodMatches = methodCandidates.Where(method => method.AcceptsArgumentCount(methodArgumentTypes.Length))
+                .Where(method => method.Parameters.Take(methodArgumentTypes.Length).Select((parameter, index) =>
                     CanAssign(SubstituteGenericType(parameter.Type, substitutions),
                         call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
             if (methodMatches.Length == 1)
@@ -343,9 +343,9 @@ public sealed partial class SemanticAnalyzer
                 && functions.TryGetValue($"{PrintableModule}.{methodName}", out var builtin))
                 receiverCandidates = receiverCandidates.Concat(builtin).Distinct().ToList();
             var functionMatches = receiverCandidates
-                .Where(function => function.Parameters.Count == receiverArguments.Length + 1
+                .Where(function => function.AcceptsArgumentCount(receiverArguments.Length + 1)
                     && function.Parameters[0].Type == receiverType)
-                .Where(function => function.Parameters.Skip(1).Select((parameter, index) =>
+                .Where(function => function.Parameters.Skip(1).Take(receiverArguments.Length).Select((parameter, index) =>
                     CanAssign(parameter.Type, call.Arguments[index], receiverArguments[index])).All(match => match))
                 .ToArray();
             if (functionMatches.Length == 1)

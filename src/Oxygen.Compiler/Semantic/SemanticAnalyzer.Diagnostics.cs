@@ -13,14 +13,15 @@ public sealed partial class SemanticAnalyzer
         string message,
         SourceLocation location,
         int length = 1,
-        string? sourceName = null)
+        string? sourceName = null,
+        string? code = null)
     {
         if (diagnostics is null)
         {
-            throw Error(message, location, length);
+            throw code is null ? Error(message, location, length) : ErrorWithCode(code, message, location, length);
         }
 
-        diagnostics.Add(DiagnosticPhase.Semantic, message, location, length, sourceName);
+        diagnostics.Add(DiagnosticPhase.Semantic, message, location, length, sourceName, code);
     }
 
     private static void RequireType(SemanticType actual, SemanticType expected, SourceLocation location, string context)

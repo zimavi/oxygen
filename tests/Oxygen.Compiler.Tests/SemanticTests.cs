@@ -2946,6 +2946,87 @@ public sealed class SemanticTests
         Assert.Equal(DiagnosticCode.NotDeclared, diagnostic.Code);
     }
 
+    [Fact]
+    public void AcceptsCallsThatOmitTrailingParametersWithDefaults()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 scale(i32 value, i32 factor = 2) { return value * factor; } i32 main() { return scale(5); }");
+
+        Assert.NotNull(result.Model);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RejectsARequiredParameterAfterOneWithADefault()
+    {
+        var result = AnalyzeWithDiagnostics("i32 f(i32 a = 1, i32 b) { return a + b; } i32 main() { return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("follows a parameter that has one", diagnostic.Message);
+        Assert.Equal(DiagnosticCode.DefaultParameter, diagnostic.Code);
+    }
+
+    [Fact]
+    public void RejectsADefaultThatIsNotAConstant()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 pick() { return 3; } i32 f(i32 a = pick()) { return a; } i32 main() { return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("must be a bool literal, a number, or an integer constant expression", diagnostic.Message);
+        Assert.Equal(DiagnosticCode.DefaultParameter, diagnostic.Code);
+    }
+
+    [Fact]
+    public void RejectsADefaultThatDoesNotConvertToTheParameterType()
+    {
+        var result = AnalyzeWithDiagnostics("u8 f(u8 a = 300) { return a; } i32 main() { return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("The default value of 'a' has type i32; expected u8", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsDefaultsOnExternFunctions()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "@extern(\"puts\") extern i32 puts(i32 value = 0); i32 main() { return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("cannot have a default value", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsDefaultsOnParametersOfGenericType()
+    {
+        var result = AnalyzeWithDiagnostics("i32 gen<T>(T x = 1) { return 0; } i32 main() { return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("has a generic type, so it cannot have a default value", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsOverloadsThatACallCouldMatchBoth()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 process(i32 code) { return code; } i32 process(i32 code, i32 extra = 0) { return code + extra; } " +
+            "i32 main() { return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("a call could match both", diagnostic.Message);
+        Assert.Equal(DiagnosticCode.OverloadConflict, diagnostic.Code);
+    }
+
+    [Fact]
+    public void AcceptsOverloadsThatDifferInATypeAtEveryPositionTheyCouldBeCalledWith()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 pair(i32 a, i32 b) { return a - b; } i32 pair(i32 a, i64 b = 0) { return a; } " +
+            "i32 main() { return pair(1, cast<i32>(2)); }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
     private SemanticModel Analyze(string source)
     {
         var unit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();

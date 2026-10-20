@@ -216,10 +216,12 @@ public sealed record TypeParameterSyntax(
     public IReadOnlyList<string> Constraints { get; init; } = [];
 }
 
+// A parameter. DefaultValue is the constant a call uses when it omits the argument; null when the parameter is required.
 public sealed record ParameterDeclaration(
     TypeSyntax Type,
     string Name,
-    SourceLocation Location) : SyntaxNode(Location);
+    SourceLocation Location,
+    Expression? DefaultValue = null) : SyntaxNode(Location);
 
 public enum PrimitiveType
 {

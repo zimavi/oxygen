@@ -329,8 +329,8 @@ public sealed partial class SemanticAnalyzer
             .Zip(constructedType.TypeArguments ?? [], (name, type) => (name, type))
             .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
         var matches = cls.Constructors.Where(constructor => IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName))
-            .Where(constructor => constructor.Parameters.Count == arguments.Length)
-            .Where(constructor => constructor.Parameters.Select((parameter, index) =>
+            .Where(constructor => constructor.AcceptsArgumentCount(arguments.Length))
+            .Where(constructor => constructor.Parameters.Take(arguments.Length).Select((parameter, index) =>
             {
                 if (expression.Type.DeclaredTypeArguments.Count == 0)
                     InferClassTypeArguments(parameter.Type, arguments[index], cls.DeclaredTypeParameters, substitutions);
@@ -388,8 +388,8 @@ public sealed partial class SemanticAnalyzer
                 substitutions[name] = type;
         }
         var matches = cls.Constructors.Where(constructor => IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName))
-            .Where(constructor => constructor.Parameters.Count == arguments.Length)
-            .Where(constructor => constructor.Parameters.Select((parameter, index) =>
+            .Where(constructor => constructor.AcceptsArgumentCount(arguments.Length))
+            .Where(constructor => constructor.Parameters.Take(arguments.Length).Select((parameter, index) =>
             {
                 if (expression.ExplicitTypeArguments.Count == 0)
                     InferClassTypeArguments(parameter.Type, arguments[index], cls.DeclaredTypeParameters, substitutions);

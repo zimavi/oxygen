@@ -389,7 +389,8 @@ public sealed partial class Parser
                 var parameterLocation = Current.Location;
                 var type = ParseType(allowInferred: false);
                 var parameterName = Consume(TokenKind.Identifier, "Expected a parameter name.").Lexeme;
-                parameters.Add(new ParameterDeclaration(type, parameterName, parameterLocation));
+                var defaultValue = Match(TokenKind.Equals) ? ParseExpression() : null;
+                parameters.Add(new ParameterDeclaration(type, parameterName, parameterLocation, defaultValue));
             } while (Match(TokenKind.Comma));
         }
         Consume(TokenKind.CloseParenthesis, "Expected ')' after parameters.");
@@ -591,7 +592,8 @@ public sealed partial class Parser
                 var parameterLocation = Current.Location;
                 var type = ParseType(allowInferred: false);
                 var parameterName = Consume(TokenKind.Identifier, "Expected a parameter name.").Lexeme;
-                parameters.Add(new ParameterDeclaration(type, parameterName, parameterLocation));
+                var defaultValue = Match(TokenKind.Equals) ? ParseExpression() : null;
+                parameters.Add(new ParameterDeclaration(type, parameterName, parameterLocation, defaultValue));
             } while (Match(TokenKind.Comma));
         }
 

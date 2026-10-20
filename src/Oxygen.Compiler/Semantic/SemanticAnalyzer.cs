@@ -313,6 +313,8 @@ public sealed partial class SemanticAnalyzer
                 if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1
                     && group.Select(method => method.ReturnType).Distinct().Count() == 1))
                     throw Error($"Class '{declaration.Name}' contains duplicate methods", declaration.Location);
+                if (methods.GroupBy(method => method.Name).Any(group => HasConflictingPair(group.ToList(), method => method.Parameters)))
+                    throw Error($"Class '{declaration.Name}' contains methods whose overloads conflict: a call could match both", declaration.Location);
                 var constructors = WithGenericTypes(declaration.DeclaredTypeParameters, () => declaration.Constructors.Select(constructor =>
                 {
                     var parameterNames = new HashSet<string>(StringComparer.Ordinal);
@@ -323,8 +325,7 @@ public sealed partial class SemanticAnalyzer
                             parameter.Name, ResolveType(parameter.Type), parameter)).ToArray(),
                         constructor, constructor.Visibility);
                 }).ToArray());
-                if (constructors.GroupBy(constructor => string.Join(",", constructor.Parameters.Select(parameter => parameter.Type)))
-                    .Any(group => group.Count() > 1))
+                if (HasConflictingPair(constructors, constructor => constructor.Parameters))
                     throw Error($"Class '{declaration.Name}' contains duplicate constructors", declaration.Location);
                 if (constructors.Length == 0)
                     constructors = [new ConstructorSymbol(declaration.Name, [],
@@ -451,7 +452,7 @@ public sealed partial class SemanticAnalyzer
                         overloads = [];
                         functionsByName.Add(key, overloads);
                     }
-                    if (!overloads.Any(existing => HasSameParameterTypes(existing, symbol)))
+                    if (!overloads.Any(existing => OverloadsConflict(existing.Parameters, symbol.Parameters)))
                     {
                         overloads.Add(symbol);
                         functions[declaration] = symbol;
@@ -484,14 +485,16 @@ public sealed partial class SemanticAnalyzer
                 }
 
                 // Overloads are told apart by parameter types only; a return type never distinguishes them.
-                if (overloads.Any(existing => HasSameParameterTypes(existing, symbol)))
+                var conflicting = overloads.FirstOrDefault(existing => OverloadsConflict(existing.Parameters, symbol.Parameters));
+                if (conflicting is not null)
                 {
                     ReportOrThrow(
                         diagnostics,
-                        $"A function named '{symbol.Name}' with the same parameter types is already declared",
+                        OverloadConflictMessage(symbol.Name, conflicting.Parameters, symbol.Parameters),
                         declaration.Location,
                         symbol.Name.Length,
-                        sourceName);
+                        sourceName,
+                        DiagnosticCode.OverloadConflict);
                     continue;
                 }
 
@@ -535,6 +538,7 @@ public sealed partial class SemanticAnalyzer
 
         var expressionTypes = new Dictionary<Expression, SemanticType>(ReferenceEqualityComparer.Instance);
         DeclareGlobalVariables(compilationUnits, sourceNames, functionsByName, expressionTypes, resolvedCalls);
+        ValidateDefaultParameters(functionsByName, functionSources, functionModules, expressionTypes, resolvedCalls, diagnostics);
         foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads).ToList())
         {
             if (symbol.IsExternal)

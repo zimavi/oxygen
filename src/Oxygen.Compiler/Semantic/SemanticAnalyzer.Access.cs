@@ -12,7 +12,7 @@ public sealed partial class SemanticAnalyzer
     private void EnsureConstructorAccessible(ClassSymbol cls, int argumentCount, string moduleName, SourceLocation location)
     {
         var hidden = cls.Constructors.FirstOrDefault(constructor =>
-            constructor.Parameters.Count == argumentCount
+            constructor.AcceptsArgumentCount(argumentCount)
             && !IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName));
         if (hidden is not null)
             throw Error(

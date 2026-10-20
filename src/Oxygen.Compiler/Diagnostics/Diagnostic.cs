@@ -141,6 +141,10 @@ internal static class DiagnosticAdvice
             "This operation is only defined for the operand types described by the language type rules.",
         DiagnosticCode.ConstAssignment =>
             "A const variable is assigned only by its declaration, so it cannot change after that.",
+        DiagnosticCode.DefaultParameter =>
+            "A parameter with a default value may be omitted by a call, so the parameters with defaults come after the required ones, and each default is a constant of the parameter's type.",
+        DiagnosticCode.OverloadConflict =>
+            "Two overloads conflict when one call could match both: an argument count fits both, and their first parameters of that count have the same types.",
         _ => null
     };
 
@@ -178,6 +182,10 @@ internal static class DiagnosticAdvice
             "Use operands of the types the operator accepts.",
         DiagnosticCode.ConstAssignment =>
             "Declare the variable without const if it must change, or assign the value only once.",
+        DiagnosticCode.DefaultParameter =>
+            "Move the parameters with defaults to the end, and write a bool literal, a number, or an integer constant of the parameter's type as the default.",
+        DiagnosticCode.OverloadConflict =>
+            "Give the overloads different parameter types at a position that both can be called with, or remove the default that makes them overlap.",
         _ => null
     };
 }

@@ -114,7 +114,7 @@ public sealed partial class LlvmModuleGenerator
         var targetClass = targetsThis ? cls : model.Classes[cls.BaseTypeName!];
         var target = targetClass.Constructors[model.ConstructorChainTargets[declaration]];
         var targetFunction = _constructors[ConstructorKey(targetClass, target)];
-        var arguments = declaration.Initializer?.Arguments ?? [];
+        var arguments = ArgumentsWithDefaults(target.Parameters, declaration.Initializer?.Arguments ?? []);
         var args = new List<LLVMValueRef> { values["this"] };
         for (var i = 0; i < arguments.Count; i++)
             args.Add(CoerceValue(builder, EmitExpression(context, builder, arguments[i], values, storage, model, llvmFunctions),

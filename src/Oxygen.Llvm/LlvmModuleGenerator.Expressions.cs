@@ -170,9 +170,10 @@ public sealed partial class LlvmModuleGenerator
         var instance = AllocateClassInstance(builder, className, cls, heapAllocated, model, llvmFunctions);
         var ctor = cls.Constructors[constructorIndex];
         var args = new List<LLVMValueRef> { instance };
-        for (var i = 0; i < arguments.Count; i++)
-            args.Add(CoerceValue(builder, EmitExpression(context, builder, arguments[i], values, storage, model, llvmFunctions),
-                model.ExpressionTypes[arguments[i]], ctor.Parameters[i].Type, model));
+        var argumentsWithDefaults = ArgumentsWithDefaults(ctor.Parameters, arguments);
+        for (var i = 0; i < argumentsWithDefaults.Count; i++)
+            args.Add(CoerceValue(builder, EmitExpression(context, builder, argumentsWithDefaults[i], values, storage, model, llvmFunctions),
+                model.ExpressionTypes[argumentsWithDefaults[i]], ctor.Parameters[i].Type, model));
         builder.BuildCall2(_constructors[ConstructorKey(cls, ctor)].FunctionType,
             _constructors[ConstructorKey(cls, ctor)], args.ToArray(), (ReadOnlySpan<char>)string.Empty);
         return cls.IsValue ? builder.BuildLoad2(classType, instance, "value") : instance;

@@ -737,6 +737,16 @@ public sealed class ParserTests
         Assert.Null(call.Receiver);
     }
 
+    [Fact]
+    public void ParsesDefaultParameterValuesAndLeavesRequiredParametersWithoutOne()
+    {
+        var unit = Parse("i32 scale(i32 value, i32 factor = -2) { return value; }");
+
+        var parameters = unit.Functions[0].Parameters;
+        Assert.Null(parameters[0].DefaultValue);
+        Assert.IsType<UnaryExpression>(parameters[1].DefaultValue);
+    }
+
     private ParseResult ParseWithDiagnostics(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).ParseWithDiagnostics("main.oxy");
 

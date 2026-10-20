@@ -37,7 +37,10 @@ public sealed record ConstructorSymbol(
     IReadOnlyList<ParameterSymbol> Parameters,
     ConstructorDeclaration Declaration,
     Visibility Visibility,
-    bool IsSynthesized = false);
+    bool IsSynthesized = false)
+{
+    public bool AcceptsArgumentCount(int count) => ParameterCounts.Accepts(Parameters, count);
+}
 public sealed record ClassSymbol(
     string Name,
     string ModuleName,
@@ -133,6 +136,28 @@ public sealed record FunctionSymbol(
     public IReadOnlyList<string> DeclaredGenericParameters => GenericParameters ?? [];
     public bool IsGeneric => DeclaredGenericParameters.Count != 0;
     public bool IsSpecialized => SpecializationArguments is not null;
+
+    public int RequiredParameterCount => ParameterCounts.Required(Parameters);
+
+    public bool AcceptsArgumentCount(int count) => ParameterCounts.Accepts(Parameters, count);
+
+    public string ArgumentCountDescription => ParameterCounts.Describe(Parameters);
+}
+
+// The argument counts that a parameter list accepts. Parameters with default values come last, so the required parameters
+// are the leading ones without a default. A call may pass from that many up to all of them, and the omitted ones take
+// their defaults.
+public static class ParameterCounts
+{
+    public static int Required(IReadOnlyList<ParameterSymbol> parameters) =>
+        parameters.TakeWhile(parameter => parameter.Declaration.DefaultValue is null).Count();
+
+    public static bool Accepts(IReadOnlyList<ParameterSymbol> parameters, int count) =>
+        count >= Required(parameters) && count <= parameters.Count;
+
+    // For a diagnostic: "2", or "1 to 3" when some parameters have defaults.
+    public static string Describe(IReadOnlyList<ParameterSymbol> parameters) =>
+        Required(parameters) == parameters.Count ? $"{parameters.Count}" : $"{Required(parameters)} to {parameters.Count}";
 }
 
 public sealed record IteratorProtocol(

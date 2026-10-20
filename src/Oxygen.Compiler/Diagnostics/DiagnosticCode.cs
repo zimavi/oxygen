@@ -22,4 +22,6 @@ public static class DiagnosticCode
     public const string ArgumentCount = "OX0204";
     public const string OperandRequirement = "OX0205";
     public const string ConstAssignment = "OX0206";
+    public const string DefaultParameter = "OX0207";
+    public const string OverloadConflict = "OX0208";
 }

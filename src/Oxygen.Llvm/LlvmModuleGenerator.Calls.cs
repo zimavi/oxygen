@@ -29,6 +29,7 @@ public sealed partial class LlvmModuleGenerator
             return result;
         }
         var function = model.ResolvedCalls[expression];
+        var argumentsWithDefaults = ArgumentsWithDefaults(function.Parameters, expression.Arguments);
         if (model.ReceiverArgumentCalls.Contains(expression))
             return EmitReceiverArgumentCall(context, builder, expression, function, values, storage, model, llvmFunctions);
         var method = IsClassMethod(function, model);
@@ -73,9 +74,9 @@ public sealed partial class LlvmModuleGenerator
                 // Opaque pointers: the loaded pointer is called with the function type directly.
                 var interfaceTarget = rawTarget;
                 arguments.Add(receiverValue);
-                for (var index = 0; index < expression.Arguments.Count; index++)
+                for (var index = 0; index < argumentsWithDefaults.Count; index++)
                 {
-                    var argument = expression.Arguments[index];
+                    var argument = argumentsWithDefaults[index];
                     var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
                     arguments.Add(CoerceValue(builder, value, model.ExpressionTypes[argument],
                         function.Parameters[index].Type, model));
@@ -90,9 +91,9 @@ public sealed partial class LlvmModuleGenerator
                 EmitNullReferenceCheck(builder, receiverValue, function.Name, "called", model, llvmFunctions);
             arguments.Add(receiverValue);
         }
-        for (var index = 0; index < expression.Arguments.Count; index++)
+        for (var index = 0; index < argumentsWithDefaults.Count; index++)
         {
-            var argument = expression.Arguments[index];
+            var argument = argumentsWithDefaults[index];
             var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
             value = CoerceValue(builder, value, model.ExpressionTypes[argument], function.Parameters[index].Type, model);
             if (UsesPointerStringAbi(function) && function.Parameters[index].Type.Kind == SemanticTypeKind.String)
@@ -152,6 +153,7 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        var argumentsWithDefaults = ArgumentsWithDefaults(function.Parameters.Skip(1).ToList(), expression.Arguments);
         var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
         LLVMValueRef receiverValue;
         if (expression.Receiver is not null)
@@ -166,9 +168,9 @@ public sealed partial class LlvmModuleGenerator
                 : builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiverName], receiverName);
         }
         var arguments = new List<LLVMValueRef> { receiverValue };
-        for (var index = 0; index < expression.Arguments.Count; index++)
+        for (var index = 0; index < argumentsWithDefaults.Count; index++)
         {
-            var argument = expression.Arguments[index];
+            var argument = argumentsWithDefaults[index];
             var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
             arguments.Add(CoerceValue(builder, value, model.ExpressionTypes[argument],
                 function.Parameters[index + 1].Type, model));
@@ -176,6 +178,11 @@ public sealed partial class LlvmModuleGenerator
         return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function],
             arguments.ToArray(), function.ReturnType.IsVoid ? string.Empty : "call");
     }
+
+    // The arguments of a call followed by the default of each parameter it omits, so that every parameter has an argument.
+    private static IReadOnlyList<Expression> ArgumentsWithDefaults(
+        IReadOnlyList<ParameterSymbol> parameters, IReadOnlyList<Expression> arguments) =>
+        arguments.Concat(parameters.Skip(arguments.Count).Select(parameter => parameter.Declaration.DefaultValue!)).ToList();
 
     // Calls a runtime helper that does not throw. Inside a Windows funclet the call must carry the funclet bundle;
     // without it the callee does not get the funclet's frame, and the code faults at run time.
