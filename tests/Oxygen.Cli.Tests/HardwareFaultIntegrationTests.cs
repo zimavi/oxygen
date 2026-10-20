@@ -22,7 +22,6 @@ public sealed class HardwareFaultIntegrationTests : IDisposable
         Skip.IfNot(OperatingSystem.IsWindows(), "Hardware faults are reported by the Windows fault handler.");
         NativeProgram.RequireNativeToolchain();
 
-        // Optimization is off so the store is performed; an optimized build may treat the null store as undefined behaviour.
         var run = NativeProgram.BuildAndRun(_directory,
             """
             import std.io;
@@ -40,7 +39,7 @@ public sealed class HardwareFaultIntegrationTests : IDisposable
                 io.println(2);
                 return 0;
             }
-            """, optimization: "0");
+            """);
 
         Assert.Equal(101, run.ExitCode);
         Assert.Equal(string.Empty, run.Output);

@@ -75,11 +75,11 @@ address, and ends the program with exit code 101. No catch clause and no
 targets do not report hardware faults; the operating system ends the program
 with the signal, as it does for any native program.
 
-Dereferencing a null raw pointer is not defined yet. Without optimization, the
-store or load faults and is reported as above. With optimization, the compiler
-may treat the null access as undefined behaviour and emit a trap instead, which
-Windows ends without the report. Tests that fault on purpose build with
-`--optimization O0`.
+Dereferencing a null raw pointer is a hardware fault. Every generated function
+allows an access through address zero (LLVM's `null_pointer_is_valid`), so an
+optimized build keeps the access and the fault is reported as above, instead of
+treating the access as undefined behaviour. A stack overflow is reported the same
+way.
 
 This is distinct from compiler diagnostics, which are reported before native
 code is generated. Compiler diagnostics are structured reports for invalid

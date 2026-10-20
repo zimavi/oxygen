@@ -263,6 +263,7 @@ public sealed partial class LlvmModuleGenerator
             }
 
             EmitNativeMain(context, builder, module, model, llvmFunctions);
+            AllowNullPointerAccess(context, module);
 
             LlvmModuleVerifier.Verify(module);
 
@@ -293,6 +294,26 @@ public sealed partial class LlvmModuleGenerator
             context.Dispose();
             throw;
         }
+    }
+
+    // An access through a null pointer is a hardware fault (docs/exceptions.md), so LLVM must not assume that address 0 is
+    // unmapped. Without this attribute an optimized build can turn such an access into a trap, which the fault handler never sees.
+    private static void AllowNullPointerAccess(LLVMContextRef context, LLVMModuleRef module)
+    {
+        var attribute = CreateNullPointerIsValidAttribute(context);
+        for (var function = module.FirstFunction; function.Handle != IntPtr.Zero; function = function.NextFunction)
+            if (!function.IsDeclaration)
+                function.AddAttributeAtIndex(LLVMAttributeIndex.LLVMAttributeFunctionIndex, attribute);
+    }
+
+    // LLVM reads this as an enum attribute, the one clang emits for -fno-delete-null-pointer-checks. A string attribute with the
+    // same name is ignored.
+    private static unsafe LLVMAttributeRef CreateNullPointerIsValidAttribute(LLVMContextRef context)
+    {
+        ReadOnlySpan<byte> name = "null_pointer_is_valid"u8;
+        fixed (byte* pointer = name)
+            return context.CreateEnumAttribute(
+                LLVM.GetEnumAttributeKindForName((sbyte*)pointer, (nuint)name.Length), 0);
     }
 
     private static bool IsWindowsNativeSehTarget() =>
