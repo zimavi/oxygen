@@ -55,6 +55,9 @@ public sealed partial class LlvmModuleGenerator
                 context, builder, creation, values, storage, model, llvmFunctions),
             IndexExpression index => builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[index], model),
                 EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions), "array.element"),
+            // `Class.Name` reads a static property by calling its getter. The analyzer recorded the getter for this member access.
+            MemberAccessExpression staticProperty when model.StaticPropertyGetters.ContainsKey(staticProperty) =>
+                EmitStaticPropertyGet(builder, model.StaticPropertyGetters[staticProperty], llvmFunctions),
             // `Class.field` reads the static field's global. The analyzer records the member access that names a static field.
             MemberAccessExpression staticMember when model.GlobalReferences.ContainsKey(staticMember) => builder.BuildLoad2(
                 ToLlvmType(model.ExpressionTypes[staticMember], model),
@@ -72,6 +75,11 @@ public sealed partial class LlvmModuleGenerator
             ConditionalExpression conditional => EmitConditional(
                 context, builder, conditional, values, storage, model, llvmFunctions),
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
+            // `Class<T>.field` reads the static field of one instance. The analyzer recorded the call as a reference to that field.
+            CallExpression bareStatic when model.GlobalReferences.ContainsKey(bareStatic) => builder.BuildLoad2(
+                ToLlvmType(model.ExpressionTypes[bareStatic], model),
+                _globalVariables[model.GlobalReferences[bareStatic]],
+                "static.field"),
             CallExpression call => EmitCall(context, builder, call, values, storage, model, llvmFunctions),
             NamedArgumentExpression named => EmitExpression(context, builder, named.Value, values, storage, model, llvmFunctions),
             _ => throw new InvalidOperationException($"Unsupported expression '{expression.GetType().Name}'.")
@@ -250,6 +258,9 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        // `{0}` as a struct value is the zero value of the struct, which the analyzer allows only for a struct.
+        if (model.ExpressionTypes[literal].IsStruct)
+            return LLVMValueRef.CreateConstNull(ToLlvmType(NormalizeAggregateType(model.ExpressionTypes[literal], model), model));
         var result = LLVMValueRef.CreateConstNull(ToLlvmType(model.ExpressionTypes[literal], model));
         // Each element converts to the array's element type, which can differ from the element's own type.
         var elementType = model.ExpressionTypes[literal].ElementType!;
@@ -388,7 +399,7 @@ public sealed partial class LlvmModuleGenerator
             var value = enumSymbol.Members.First(candidate => candidate.Name == member.MemberName).Value;
             return LLVMValueRef.CreateConstInt(
                 ToLlvmType(enumType, model),
-                unchecked((ulong)value),
+                EnumBits(value),
                 false);
         }
         if (member.Target is ThisExpression)

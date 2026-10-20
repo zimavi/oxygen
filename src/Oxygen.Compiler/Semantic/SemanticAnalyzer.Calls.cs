@@ -65,6 +65,7 @@ public sealed partial class SemanticAnalyzer
         bool allowVoid)
     {
         var type = AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid);
+        RequireStackArgumentsNotKept(call, scope, resolvedCalls);
         if (resolvedCalls.TryGetValue(call, out var callee) && callee.Name == "iter" && callee.Parameters.Count == 0
             && (callee.ReturnType.IsClass || callee.ReturnType.IsInterface))
             throw Error("Calling iter() by hand is not supported yet, because its result would never be freed; iterate with for-in instead",
@@ -349,6 +350,9 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
         bool allowVoid = true)
     {
+        // A method has no type parameters of its own: its class's type arguments come with the receiver's type.
+        if (call.ExplicitTypeArguments.Count != 0)
+            throw Error($"Method '{methodName}' does not accept explicit type arguments", call.Location, methodName.Length);
         _callReceiverTypes[call] = receiverType;
         // A type parameter has the methods of its constraint interfaces, so a call on it is resolved as a call on that interface.
         if (receiverType.IsGenericParameter

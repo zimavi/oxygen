@@ -17,7 +17,10 @@ assignment target. Pointer types are exact: implicit conversions between
 pointee types are not performed.
 
 The keyword `null` is the null pointer value. It converts to any pointer type. The integer
-literal `0` is not a null pointer. Dereferencing a compile-time-known null literal is rejected. Other
+literal `0` is not a null pointer. Dereferencing a null literal is rejected, and so is dereferencing a
+pointer variable that is null on every path to the dereference. A pointer that is null on only some paths
+is accepted, because the compiler does not track it further. A loop or a `try` statement forgets the
+pointers it assigns, since they may hold a value on the path that leads back into it. Other
 validity and lifetime rules are the programmer's responsibility; pointers to
 local variables are allowed, but must not outlive the storage they reference.
 

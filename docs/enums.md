@@ -37,7 +37,9 @@ compile time. A conversion of a runtime integer checks that the value is a
 declared member and terminates through the runtime failure handler if it is
 invalid. Enum-to-integer conversions produce the declared underlying type.
 
-Member names and values must be unique within an enum. Payload-bearing
+Member values must fit the underlying type, which includes implicit values. A
+`u64` enum holds values up to 18446744073709551615, and `enum Small : u8 { A = 255, B }`
+is an error, because `B` would be 256. Member names and values must be unique within an enum. Payload-bearing
 variants and pattern matching are not part of the current enum model.
 
 ## Flags enums

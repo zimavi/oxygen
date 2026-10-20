@@ -42,7 +42,7 @@ public sealed partial class SemanticAnalyzer
         {
             Type = NormalizeAggregate(SubstituteAggregate(property.Type, substitutions, aggregateNames), aggregateNames),
             Declaration = CloneProperty(property.Declaration, substitutions, aggregateNames, expressionTypes,
-                source, resolvedCalls)
+                source, resolvedCalls, instantiation.AccessorBodies)
         }).ToArray();
         var methods = source.Methods.Select(method =>
             SpecializeMethod(method, instantiation.Methods.GetValueOrDefault(method.Declaration) ?? method.Declaration,
@@ -114,7 +114,8 @@ public sealed partial class SemanticAnalyzer
                 Initializer = FieldInitializer(field)
             }).ToArray(),
             Properties = declaration.DeclaredProperties.Select(property =>
-                CloneProperty(property, substitutions, aggregateNames, expressionTypes, source, resolvedCalls)).ToArray(),
+                CloneProperty(property, substitutions, aggregateNames, expressionTypes, source, resolvedCalls,
+                    instantiation.AccessorBodies)).ToArray(),
             Methods = methods.Concat(staticMethods).Select(method => method.Declaration).ToArray(),
             Constructors = constructors.Select(constructor => constructor.Declaration).ToArray(),
             Destructor = destructor,

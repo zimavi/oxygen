@@ -166,14 +166,16 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyDictionary<FunctionDeclaration, FunctionDeclaration> Methods,
         IReadOnlyDictionary<ConstructorDeclaration, ConstructorDeclaration> Constructors,
         DestructorDeclaration? Destructor,
-        IReadOnlyDictionary<ClassFieldDeclaration, Expression> FieldInitializers)
+        IReadOnlyDictionary<ClassFieldDeclaration, Expression> FieldInitializers,
+        IReadOnlyDictionary<PropertyAccessorDeclaration, BlockStatement> AccessorBodies)
     {
         public IEnumerable<Expression> Expressions() =>
             FieldInitializers.Values.SelectMany(EnumerateExpressions)
                 .Concat(Methods.Values.SelectMany(method => EnumerateExpressions(method.Body)))
                 .Concat(Constructors.Values.SelectMany(constructor => constructor.Initializer?.Arguments ?? []))
                 .Concat(Constructors.Values.SelectMany(constructor => EnumerateExpressions(constructor.Body)))
-                .Concat(EnumerateExpressions(Destructor?.Body));
+                .Concat(EnumerateExpressions(Destructor?.Body))
+                .Concat(AccessorBodies.Values.SelectMany(body => EnumerateExpressions(body)));
     }
 
     // Clones the members of generic class `cls` for the concrete `instance` and analyzes them with
@@ -188,7 +190,7 @@ public sealed partial class SemanticAnalyzer
     {
         var context = _typeContexts.GetValueOrDefault(cls.QualifiedName);
         var imports = context?.Imports ?? [];
-        var ownerModule = cls.QualifiedName;
+        var ownerModule = cls.ModuleName;
         var name = instance.ToString()!;
         var cloner = new InstantiationCloner(substitutions);
         SemanticType Substitute(SemanticType type) => SubstituteGenericType(type, substitutions);
@@ -217,7 +219,7 @@ public sealed partial class SemanticAnalyzer
                 Declaration = clone
             };
             AnalyzeInstantiatedMember(name, context?.SourceName, substitutions, reportWarnings: false,
-                () => AnalyzeFunction(symbol, functions, method.ModuleName, imports, expressionTypes, resolvedCalls));
+                () => AnalyzeFunction(symbol, functions, cls.ModuleName, imports, expressionTypes, resolvedCalls));
         }
 
         var constructors = new Dictionary<ConstructorDeclaration, ConstructorDeclaration>(
@@ -250,7 +252,24 @@ public sealed partial class SemanticAnalyzer
                     imports, expressionTypes, resolvedCalls));
         }
 
-        return new ClassInstantiation(methods, constructors, destructor, fieldInitializers);
+        // A getter or setter is analysed as a method of the instance, with its property type for these arguments.
+        var accessorBodies = new Dictionary<PropertyAccessorDeclaration, BlockStatement>(ReferenceEqualityComparer.Instance);
+        foreach (var property in cls.DeclaredProperties)
+        {
+            foreach (var accessor in property.Declaration.Accessors)
+            {
+                if (accessor.Body is null || accessor.Kind is not (PropertyAccessorKind.Get or PropertyAccessorKind.Set))
+                    continue;
+                var clone = cloner.Block(accessor.Body);
+                accessorBodies[accessor] = clone;
+                var symbol = CreateAccessorSymbol(cls, property with { Type = Substitute(property.Type) }, accessor,
+                    cls.ModuleName, clone);
+                AnalyzeInstantiatedMember(name, context?.SourceName, substitutions, reportWarnings: false,
+                    () => AnalyzeFunction(symbol, functions, cls.ModuleName, imports, expressionTypes, resolvedCalls));
+            }
+        }
+
+        return new ClassInstantiation(methods, constructors, destructor, fieldInitializers, accessorBodies);
     }
 
     // Deep-copies declarations for one generic instantiation. Type parameters are replaced by the

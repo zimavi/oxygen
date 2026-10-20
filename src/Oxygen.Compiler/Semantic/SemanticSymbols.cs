@@ -1,3 +1,4 @@
+using System.Numerics;
 using Oxygen.Compiler.Ast;
 
 namespace Oxygen.Compiler.Semantic;
@@ -90,7 +91,7 @@ public sealed record InterfaceSymbol(
     public bool IsGeneric => DeclaredTypeParameters.Count != 0;
 }
 
-public sealed record EnumMemberSymbol(string Name, int Value, EnumMemberDeclaration Declaration);
+public sealed record EnumMemberSymbol(string Name, BigInteger Value, EnumMemberDeclaration Declaration);
 
 public sealed record EnumSymbol(
     string Name,
@@ -110,7 +111,7 @@ public sealed record EnumSymbol(
     public bool IsFlags { get; init; }
 
     // The bits that the members use. The complement of a flags value is masked to these.
-    public int FlagsMask => Members.Aggregate(0, (mask, member) => mask | member.Value);
+    public BigInteger FlagsMask => Members.Aggregate(BigInteger.Zero, (mask, member) => mask | member.Value);
 }
 
 public sealed record UnionCaseSymbol(string Name, SemanticType? PayloadType, UnionCaseDeclaration Declaration);
@@ -227,7 +228,9 @@ public sealed class SemanticModel
         IReadOnlySet<CallExpression>? baseCalls = null,
         IReadOnlyDictionary<ClassConstructionExpression, CallExpression>? constructionCalls = null,
         IReadOnlyDictionary<SyntaxNode, int[]>? argumentOrders = null,
-        IReadOnlyDictionary<TypeSyntax, SemanticType>? resolvedTypeSyntax = null)
+        IReadOnlyDictionary<TypeSyntax, SemanticType>? resolvedTypeSyntax = null,
+        IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertyGetters = null,
+        IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertySetters = null)
     {
         ArgumentOrders = argumentOrders ?? new Dictionary<SyntaxNode, int[]>();
         ResolvedTypeSyntax = resolvedTypeSyntax ?? new Dictionary<TypeSyntax, SemanticType>(ReferenceEqualityComparer.Instance);
@@ -235,6 +238,8 @@ public sealed class SemanticModel
         BaseCalls = baseCalls ?? new HashSet<CallExpression>();
         Globals = globals ?? [];
         GlobalReferences = globalReferences ?? new Dictionary<Expression, GlobalVariableSymbol>();
+        StaticPropertyGetters = staticPropertyGetters ?? new Dictionary<Expression, FunctionSymbol>();
+        StaticPropertySetters = staticPropertySetters ?? new Dictionary<Expression, FunctionSymbol>();
         Functions = functions;
         ExpressionTypes = expressionTypes;
         MainFunction = mainFunction;
@@ -274,6 +279,11 @@ public sealed class SemanticModel
 
     // The identifiers that name a module-level variable. A local or parameter of the same name is not in this map.
     public IReadOnlyDictionary<Expression, GlobalVariableSymbol> GlobalReferences { get; }
+
+    // The getter that each read of a static property names, and the setter that each write names. The backend calls them.
+    public IReadOnlyDictionary<Expression, FunctionSymbol> StaticPropertyGetters { get; }
+
+    public IReadOnlyDictionary<Expression, FunctionSymbol> StaticPropertySetters { get; }
 
     public IReadOnlyDictionary<Expression, SemanticType> ExpressionTypes { get; }
 

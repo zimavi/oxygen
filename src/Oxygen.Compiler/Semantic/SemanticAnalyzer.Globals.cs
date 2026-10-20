@@ -14,6 +14,10 @@ public sealed partial class SemanticAnalyzer
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Expression, GlobalVariableSymbol> _globalReferences =
         new(ReferenceEqualityComparer.Instance);
+
+    // The getter that each read of a static property names, and the setter that each write names. See SemanticModel.
+    private readonly Dictionary<Expression, FunctionSymbol> _staticPropertyGetters = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Expression, FunctionSymbol> _staticPropertySetters = new(ReferenceEqualityComparer.Instance);
     private readonly List<GlobalVariableSymbol> _globals = [];
 
     // Declares every module's globals. This runs after types and functions are registered and before any body is analysed.

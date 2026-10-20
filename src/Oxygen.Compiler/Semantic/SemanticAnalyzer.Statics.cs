@@ -70,14 +70,18 @@ public sealed partial class SemanticAnalyzer
         var type = ResolveType(field.Type);
         if (type.IsVoid)
             throw Error($"Static field '{name}' cannot have type void", field.Location, name.Length);
-        if (type.Primitive is null)
-            throw Error($"Static field '{name}' has type {type}; only numeric and bool static fields are supported",
+        // A static field of a reference type holds an object or null. Its only constant is null, so it starts as null.
+        var isReference = type.Primitive is null && IsReferenceType(type);
+        if (type.Primitive is null && !isReference)
+            throw Error($"Static field '{name}' has type {type}; only numeric, bool, class and interface static fields are supported",
                 field.Location, name.Length);
 
         object? value = null;
         if (field.Initializer is { } initializer)
         {
-            if (!IsConstantInitializer(initializer))
+            if (isReference && initializer is not NullLiteralExpression)
+                throw Error($"Static field '{name}' of type {type} can only be initialized with null", initializer.Location);
+            if (!isReference && !IsConstantInitializer(initializer))
                 throw Error($"Static field '{name}' must be initialized with a literal or an integer constant expression",
                     initializer.Location);
             var actual = AnalyzeExpression(initializer, GlobalScopeOf(moduleName), functionsByName, moduleName, imports,
@@ -85,7 +89,7 @@ public sealed partial class SemanticAnalyzer
             if (!CanAssign(type, initializer, actual))
                 throw ErrorWithCode(DiagnosticCode.ConversionMismatch,
                     $"Cannot initialize '{name}' with {actual}; expected {type}", initializer.Location);
-            value = ConstantValueOf(initializer);
+            value = isReference ? null : ConstantValueOf(initializer);
         }
         else if (field.IsConst)
         {
@@ -193,6 +197,61 @@ public sealed partial class SemanticAnalyzer
         return symbol;
     }
 
+    // Whether `Class.name` names a static property. The parser compiles a static property to a static method `get_name` or `set_name`.
+    private static bool IsStaticProperty(ClassSymbol cls, string name) =>
+        cls.StaticMethods.Any(method => method.Name == $"get_{name}" || method.Name == $"set_{name}");
+
+    // `Class.name` reads a static property through its getter, or writes it through its setter. The backend calls the accessor, which
+    // has no receiver. A generic class's static property is not supported yet, because each instance would need its own accessors.
+    private SemanticType AnalyzeStaticProperty(MemberAccessExpression member, ClassSymbol cls, bool forWrite, string moduleName)
+    {
+        var name = member.MemberName;
+        if (cls.DeclaredTypeParameters.Count > 0)
+            throw Error($"Static property '{name}' of generic class '{cls.Name}' is not supported yet", member.Location, name.Length);
+        var accessor = forWrite
+            ? cls.StaticMethods.FirstOrDefault(method => method.Name == $"set_{name}")
+                ?? throw Error($"Property '{name}' is read-only", member.Location, name.Length)
+            : cls.StaticMethods.FirstOrDefault(method => method.Name == $"get_{name}")
+                ?? throw Error($"Property '{name}' is write-only", member.Location, name.Length);
+        RequireReachableFrom(cls, cls, member.Location, name, name.Length);
+        if (!IsMemberAccessible(accessor.Visibility, MethodOwnerName(accessor), MethodOwnerModule(accessor), moduleName, cls.QualifiedName))
+            throw Error($"Static property '{name}' of '{cls.Name}' cannot be used here", member.Location, name.Length);
+        _usedFunctions.Add(accessor);
+        if (forWrite)
+        {
+            _staticPropertySetters[member] = accessor;
+            return accessor.Parameters[0].Type;
+        }
+        _staticPropertyGetters[member] = accessor;
+        return accessor.ReturnType;
+    }
+
+    // `Class<T>.field` names the static field of one instance of a generic class. Each instance has its own field, which is the one
+    // that its own bodies name by the bare name. The call node is recorded as a reference to that field's global.
+    private SemanticType AnalyzeInstanceStaticField(
+        CallExpression call,
+        ClassSymbol cls,
+        IReadOnlyList<SemanticType> typeArguments,
+        string name,
+        string moduleName)
+    {
+        if (cls.DeclaredTypeParameters.Count == 0)
+            throw Error($"Class '{cls.Name}' is not generic, so its static field '{name}' is named as {cls.Name}.{name}",
+                call.Location, name.Length);
+        if (typeArguments.Count != cls.DeclaredTypeParameters.Count)
+            throw Error($"Class '{cls.Name}' has {cls.DeclaredTypeParameters.Count} type parameter(s), got {typeArguments.Count}",
+                call.Location, cls.Name.Length);
+        RequireReachableFrom(cls, cls, call.Location, name, name.Length);
+        var substitutions = cls.DeclaredTypeParameters
+            .Zip(typeArguments, (parameter, argument) => (parameter, argument))
+            .ToDictionary(item => item.parameter, item => item.argument, StringComparer.Ordinal);
+        var field = InstanceStaticFields(cls, substitutions).First(candidate => candidate.Name == name);
+        if (!IsMemberAccessible(StaticFieldVisibility(cls, field), cls.QualifiedName, cls.ModuleName, moduleName, cls.QualifiedName))
+            throw Error($"Static field '{name}' of '{cls.Name}' cannot be used here", call.Location, name.Length);
+        _globalReferences[call] = field;
+        return field.Type;
+    }
+
     // The visibility of a static field, which is recorded on its declaration in its class.
     private static Visibility StaticFieldVisibility(ClassSymbol cls, GlobalVariableSymbol symbol) =>
         cls.Declaration.Fields.FirstOrDefault(field => field.IsStatic && field.Name == symbol.Name)?.Visibility ?? Visibility.Public;
@@ -215,6 +274,9 @@ public sealed partial class SemanticAnalyzer
         var typeArguments = call.ExplicitTypeArguments.Count == 0
             ? null
             : call.ExplicitTypeArguments.Select(ResolveType).ToArray();
+        // `Class<T>.field` with no parentheses names a static field of that instance. A union case of the same spelling is not a class.
+        if (call.IsBareName && typeArguments is not null && cls.StaticFields.Any(field => field.Name == methodName))
+            return AnalyzeInstanceStaticField(call, cls, typeArguments, methodName, moduleName);
         // Inside its own body, a generic class names its current instance: `Box.total()` is `Box<T>.total()` for its own T.
         if (typeArguments is null && cls.DeclaredTypeParameters.Count > 0 && _currentOwnerTemplate == cls.QualifiedName
             && cls.DeclaredTypeParameters.All(_genericTypes.ContainsKey))
@@ -227,6 +289,10 @@ public sealed partial class SemanticAnalyzer
         var named = owner.StaticMethods.Where(method => method.Name == methodName).ToArray();
         if (named.Length == 0)
         {
+            if (IsStaticProperty(cls, methodName))
+                throw Error(call.IsBareName
+                    ? $"Static property '{methodName}' of generic class '{cls.Name}' is not supported yet"
+                    : $"'{methodName}' of '{cls.Name}' is a static property, not a method", call.Location, methodName.Length);
             if (cls.StaticFields.Any(field => field.Name == methodName))
                 throw Error($"'{methodName}' of '{cls.Name}' is a static field, not a method; a generic class's static field is named by its bare name inside the class", call.Location, methodName.Length);
             if (GetClassMethods(cls.QualifiedName, []).Any(method => method.Name == methodName))

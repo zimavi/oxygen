@@ -1,3 +1,4 @@
+using System.Numerics;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
@@ -94,8 +95,12 @@ public sealed partial class SemanticAnalyzer
 
     private bool _breakReached;
 
-    // Definite assignment: the locals that may still be unassigned at the current point, and whether that point is reachable.
-    private readonly HashSet<VariableDeclarationStatement> _unassignedLocals = new(ReferenceEqualityComparer.Instance);
+    // Definite assignment: the parts of locals that may still be unassigned at the current point, and whether that point is reachable.
+    private readonly HashSet<UnassignedSlot> _unassignedParts = [];
+
+    // The expressions of a struct place's walk (the local and the struct fields above a field read or written). Their own reads are
+    // not checked, because the field path that the walk leads to is checked instead.
+    private readonly HashSet<Expression> _skippedPartReads = new(ReferenceEqualityComparer.Instance);
 
     private bool _reachable = true;
 
@@ -164,6 +169,8 @@ public sealed partial class SemanticAnalyzer
         _moduleScopes.Clear();
         _globalSymbols.Clear();
         _globalReferences.Clear();
+        _staticPropertyGetters.Clear();
+        _staticPropertySetters.Clear();
         _globals.Clear();
         _baseCalls.Clear();
         _constructionCalls.Clear();
@@ -196,26 +203,25 @@ public sealed partial class SemanticAnalyzer
                 var isFlags = ValidateEnumAnnotations(declaration);
                 var members = new List<EnumMemberSymbol>();
                 var names = new HashSet<string>(StringComparer.Ordinal);
-                var values = new HashSet<int>();
-                var next = 0;
+                var values = new HashSet<BigInteger>();
+                BigInteger next = 0;
                 foreach (var member in declaration.Members)
                 {
                     if (!names.Add(member.Name))
                         throw Error($"Enum '{declaration.Name}' contains duplicate member '{member.Name}'", member.Location, member.Name.Length);
                     var value = member.ExplicitValue ?? next;
+                    // An implicit value that goes past the underlying type's range is reported here too.
                     if (!FitsUnderlying(value, declaration.UnderlyingType))
                         throw Error($"Enum member value {value} does not fit underlying type {declaration.UnderlyingType}",
                             member.Location);
                     // A flags member is 0 or one bit, so that the members never overlap when they are combined.
-                    if (isFlags && value != 0 && !System.Numerics.BitOperations.IsPow2((uint)value))
+                    if (isFlags && value != 0 && !value.IsPowerOfTwo)
                         throw ErrorWithCode(DiagnosticCode.FlagsMember,
                             $"Flags enum '{declaration.Name}' member '{member.Name}' must be 0 or a single bit, got {value}",
                             member.Location, member.Name.Length);
                     if (!values.Add(value))
                         throw Error($"Enum '{declaration.Name}' contains duplicate value {value}", member.Location);
                     members.Add(new EnumMemberSymbol(member.Name, value, member));
-                    if (value == int.MaxValue && member != declaration.Members[^1])
-                        throw Error($"Enum '{declaration.Name}' member values overflow", member.Location);
                     next = value + 1;
                 }
                 _enumsByName.Add(key,
@@ -569,7 +575,7 @@ public sealed partial class SemanticAnalyzer
                     overloads.Add(method);
                     functions[method.Declaration] = method;
                     functionSources[method] = sourceName;
-                    functionModules[method] = (method.ModuleName, unit.Imports);
+                    functionModules[method] = (moduleName, unit.Imports);
                 }
             }
         }
@@ -657,9 +663,8 @@ public sealed partial class SemanticAnalyzer
             foreach (var declaration in unit.Classes)
             {
                 var classSymbol = _classesByName[QualifiedTypeName(moduleName, declaration.Name)];
-                if (!classSymbol.IsGeneric)
-                    AnalyzeAccessorBodies(classSymbol, moduleName, unit.Imports, functionsByName, expressionTypes,
-                        resolvedCalls, diagnostics, SourceNameAt(unitIndex));
+                AnalyzeAccessorBodies(classSymbol, moduleName, unit.Imports, functionsByName, expressionTypes,
+                    resolvedCalls, diagnostics, SourceNameAt(unitIndex));
                 foreach (var constructor in classSymbol.Constructors)
                 {
                     var previousGenericTypes = _genericTypes;
@@ -674,7 +679,7 @@ public sealed partial class SemanticAnalyzer
                         AnalyzeFunction(
                             CreateConstructorFunctionSymbol(moduleName, constructor),
                             functionsByName,
-                            $"{moduleName}.{declaration.Name}",
+                            moduleName,
                             unit.Imports,
                             expressionTypes,
                             resolvedCalls,
@@ -710,7 +715,7 @@ public sealed partial class SemanticAnalyzer
                         AnalyzeFunction(
                             CreateDestructorFunctionSymbol(moduleName, classSymbol.Destructor),
                             functionsByName,
-                            $"{moduleName}.{declaration.Name}",
+                            moduleName,
                             unit.Imports,
                             expressionTypes,
                             resolvedCalls);
@@ -780,7 +785,9 @@ public sealed partial class SemanticAnalyzer
             new HashSet<CallExpression>(_baseCalls, ReferenceEqualityComparer.Instance),
             new Dictionary<ClassConstructionExpression, CallExpression>(_constructionCalls, ReferenceEqualityComparer.Instance),
             new Dictionary<SyntaxNode, int[]>(_argumentOrders, ReferenceEqualityComparer.Instance),
-            new Dictionary<TypeSyntax, SemanticType>(_resolvedTypeSyntax, ReferenceEqualityComparer.Instance));
+            new Dictionary<TypeSyntax, SemanticType>(_resolvedTypeSyntax, ReferenceEqualityComparer.Instance),
+            new Dictionary<Expression, FunctionSymbol>(_staticPropertyGetters, ReferenceEqualityComparer.Instance),
+            new Dictionary<Expression, FunctionSymbol>(_staticPropertySetters, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

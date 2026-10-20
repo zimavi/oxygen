@@ -50,6 +50,29 @@ public sealed class StackObjectIntegrationTests : IDisposable
         Assert.Equal("7\n4\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    [SkippableFact]
+    public void StackObjectPassedToAParameterThatOnlyReadsItIsUsedDuringTheCall()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            class Box {
+                i32 v = 5;
+            }
+
+            i32 read(Box b) {
+                return b.v;
+            }
+
+            i32 main() {
+                return read(Box()) + read(Box());
+            }
+            """);
+
+        Assert.Equal(10, run.ExitCode);
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }

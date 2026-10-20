@@ -348,7 +348,7 @@ public sealed partial class LlvmModuleGenerator
             if (!operandType.IsEnum)
                 return complement;
             // A flags value keeps only the bits that its members use, so the complement names no bit that no member can.
-            var mask = LLVMValueRef.CreateConstInt(complement.TypeOf, (ulong)(uint)model.Enums[operandType.EnumName!].FlagsMask, false);
+            var mask = LLVMValueRef.CreateConstInt(complement.TypeOf, EnumBits(model.Enums[operandType.EnumName!].FlagsMask), false);
             return builder.BuildAnd(complement, mask, "flags.complement");
         }
         return expression.Operator == TokenKind.Minus

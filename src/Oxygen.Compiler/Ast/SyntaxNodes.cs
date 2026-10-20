@@ -1,3 +1,4 @@
+using System.Numerics;
 using Oxygen.Compiler.Lexer;
 
 namespace Oxygen.Compiler.Ast;
@@ -59,7 +60,7 @@ public sealed record UnionDeclaration(
 
 public sealed record EnumMemberDeclaration(
     string Name,
-    int? ExplicitValue,
+    BigInteger? ExplicitValue,
     SourceLocation Location) : SyntaxNode(Location);
 
 public sealed record EnumDeclaration(
@@ -397,6 +398,9 @@ public sealed record CallExpression(
     Expression? Receiver = null) : Expression(Location)
 {
     public IReadOnlyList<TypeSyntax> ExplicitTypeArguments => TypeArguments ?? [];
+
+    // A name with type arguments and no parentheses, such as `Box<i32>.count` or `Option<T>.None`. It is a static field or a union case.
+    public bool IsBareName { get; init; }
 }
 
 public sealed record StructLiteralExpression(

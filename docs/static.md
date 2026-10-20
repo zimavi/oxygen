@@ -31,6 +31,9 @@ i32 main() {
 
 - A static field is a numeric or `bool` value, declared with `static` before its
   type. It is zero unless it has an initializer.
+- A static field of a class or interface type holds an object or `null`. It starts
+  as `null`, and its only initializer is `null`. Storing a stack object in it is an
+  error, because the field outlives the function.
 - Its initializer must be a constant, the same kind a module-level variable
   accepts: a bool literal, a floating-point literal with an optional sign, or an
   integer constant expression. A name, a call, or a string is not a constant.
@@ -93,17 +96,55 @@ Box<i32>.total(); // the total of Box<i32> only
 
 Inside a generic class, `Box.total()` names the current instance's method.
 Static methods of a generic class are called as `Box<i32>.total()`. A static
-field of a generic class is named by its bare name inside the class, so it is not
-yet reachable from outside the class.
+field of a generic class is named by its bare name inside the class. From outside,
+`Box<i32>.touches` names the field of that instance, so `Box<i32>` and
+`Box<string>` keep separate fields:
+
+```oxygen
+i32 main() {
+    Box<i32>.touches = Box<i32>.touches + 10;
+    return Box<string>.touches;
+}
+```
+
+## Static properties
+
+A static property is declared with `static` before its type, and has a `get`
+and a `set` accessor, each with a body. Its getter and setter are static methods
+of the class, which have no receiver:
+
+```oxygen
+class Counter {
+    static i32 seen = 0;
+
+    static i32 Seen {
+        get { return seen; }
+        set { seen = value; }
+    }
+}
+
+i32 main() {
+    Counter.Seen = 4;
+    Counter.Seen += 3;
+    return Counter.Seen;
+}
+```
+
+Reading `Counter.Seen` calls its getter, and writing it calls its setter. A
+compound assignment does both. A property with only a `get` is read-only, and one
+with only a `set` is write-only. Its accessors follow the visibility rules of
+static methods. Auto-accessors (`get;`) are not allowed on a static property.
 
 ## Rules that are errors
 
 - `static` on an interface member: an interface's contract is per instance.
 - `static` with `virtual` or `override`.
-- `static` on a constructor, a destructor, or a property. Static properties are
-  not supported yet.
+- `static` on a constructor or a destructor.
+- A static property with an `init` accessor, or an accessor without a body.
 - A static field whose initializer is not a constant, or whose type is not
-  numeric or `bool`.
+  numeric, `bool`, a class, or an interface.
+- A static field of a class or interface type initialized with anything but
+  `null`.
 - A static field of the object's own class named through an object, or an instance
   field named through its class.
 - `this` in a static method.
@@ -113,6 +154,5 @@ yet reachable from outside the class.
 
 ## Limits
 
-- Static fields of class type, and static properties, are not supported.
-- A static field of a generic class is reached by its bare name inside the class
-  only.
+- A static property of a generic class is not supported yet. Each instance would
+  need its own accessors.

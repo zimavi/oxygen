@@ -791,6 +791,30 @@ public sealed class ParserTests
         Assert.Contains("A static member cannot be 'virtual' or 'override'", virtualError.Message);
     }
 
+    [Fact]
+    public void ParsesAStaticPropertyAsGetterAndSetterMethods()
+    {
+        var unit = Parse("class Counter { static i32 seen = 0; static i32 Seen { get { return seen; } set { seen = value; } } } " +
+            "i32 main() { return 0; }");
+
+        var counter = Assert.Single(unit.Classes, cls => cls.Name == "Counter");
+        Assert.Empty(counter.DeclaredProperties);
+        var getter = counter.Methods.Single(method => method.Name == "get_Seen");
+        Assert.True(getter.IsStatic);
+        Assert.Empty(getter.Parameters);
+        var setter = counter.Methods.Single(method => method.Name == "set_Seen");
+        Assert.True(setter.IsStatic);
+        Assert.Equal("value", Assert.Single(setter.Parameters).Name);
+    }
+
+    [Fact]
+    public void RejectsAnAutoAccessorOnAStaticProperty()
+    {
+        var exception = Assert.Throws<ParseException>(() => Parse("class C { static i32 Seen { get; set; } }"));
+
+        Assert.Contains("A static property has a get and a set accessor, each with a body", exception.Message);
+    }
+
     private ParseResult ParseWithDiagnostics(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).ParseWithDiagnostics("main.oxy");
 

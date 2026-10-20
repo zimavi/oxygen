@@ -74,6 +74,7 @@ public sealed partial class SemanticAnalyzer
                 var whileType = AnalyzeExpression(whileStatement.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 RequireBoolean(whileType, whileStatement.Condition.Location);
                 var beforeWhile = BeginLoopDeletes();
+                ForgetNullsAssignedIn(whileStatement, scope);
                 var flowBeforeWhile = SnapshotFlow();
                 _breakStates.Push([]);
                 _loopDepth++;
@@ -95,6 +96,7 @@ public sealed partial class SemanticAnalyzer
                     RequireBoolean(forType, forStatement.Condition.Location);
                 }
                 var beforeFor = BeginLoopDeletes();
+                ForgetNullsAssignedIn(forStatement, scope);
                 var flowBeforeFor = SnapshotFlow();
                 _breakStates.Push([]);
                 _loopDepth++;
@@ -175,6 +177,7 @@ public sealed partial class SemanticAnalyzer
                     forInScope.Declare(forInStatement.VariableName, variable);
                     _declaredVariables.Add(variable);
                     var beforeForIn = BeginLoopDeletes();
+                    ForgetNullsAssignedIn(forInStatement, scope);
                     var flowBeforeForIn = SnapshotFlow();
                     _breakStates.Push([]);
                     _loopDepth++;
@@ -340,7 +343,7 @@ public sealed partial class SemanticAnalyzer
             case VariableDeclarationStatement declaration:
                 AnalyzeVariableDeclaration(declaration, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 if (declaration.Initializer is null)
-                    _unassignedLocals.Add(declaration);
+                    AddUnassignedParts(declaration, scope.Lookup(declaration.Name, declaration.Location).Type);
                 return false;
             case AssignmentStatement assignment:
                 AnalyzeAssignment(assignment, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
@@ -373,6 +376,7 @@ public sealed partial class SemanticAnalyzer
                 }
             case TryStatement tryStatement:
                 {
+                    ForgetNullsAssignedIn(tryStatement, scope);
                     var beforeTry = SnapshotFlow();
                     var tryReturns = AnalyzeBlock(tryStatement.Body, scope, function, functions, moduleName, imports,
                         expressionTypes, resolvedCalls);
@@ -434,18 +438,18 @@ public sealed partial class SemanticAnalyzer
                     {
                         // The finally block also runs on the exceptional paths, so it starts from every state the try can leave.
                         // Code after the try is reached only if the normal paths reach it.
-                        var finallyStart = new HashSet<VariableDeclarationStatement>(
-                            beforeTry.Unassigned.Concat(afterCatches.Unassigned), ReferenceEqualityComparer.Instance);
-                        RestoreFlow(new FlowState(finallyStart, beforeTry.Reachable));
+                        var finallyStart = new HashSet<UnassignedSlot>(beforeTry.Unassigned.Concat(afterCatches.Unassigned));
+                        RestoreFlow(new FlowState(finallyStart, beforeTry.Reachable, new HashSet<VariableSymbol>(beforeTry.Nulls)));
                         finallyReturns = AnalyzeBlock(tryStatement.Finally, scope, function, functions, moduleName, imports,
                             expressionTypes, resolvedCalls);
                         var afterFinally = SnapshotFlow();
                         // The normal path is the one that leaves the try: the finally block's assignments apply to it.
-                        var assignedByFinally = finallyStart.Where(declaration => !afterFinally.Unassigned.Contains(declaration));
-                        var normalAfter = afterCatches.Unassigned.Where(declaration => !assignedByFinally.Contains(declaration));
+                        var assignedByFinally = finallyStart.Where(part => !afterFinally.Unassigned.Contains(part));
+                        var normalAfter = afterCatches.Unassigned.Where(part => !assignedByFinally.Contains(part));
                         RestoreFlow(new FlowState(
-                            new HashSet<VariableDeclarationStatement>(normalAfter, ReferenceEqualityComparer.Instance),
-                            afterCatches.Reachable && afterFinally.Reachable));
+                            new HashSet<UnassignedSlot>(normalAfter),
+                            afterCatches.Reachable && afterFinally.Reachable,
+                            new HashSet<VariableSymbol>(afterCatches.Nulls.Intersect(afterFinally.Nulls))));
                     }
                     return finallyReturns || (tryReturns && allCatchesReturn);
                 }
@@ -567,6 +571,10 @@ public sealed partial class SemanticAnalyzer
         if (assignment.Operator != TokenKind.Equals && assignment.Target is IdentifierExpression compoundTarget
             && scope.Lookup(compoundTarget.Name, compoundTarget.Location).Declaration is VariableDeclarationStatement compoundDeclaration)
             CheckAssigned(compoundDeclaration, compoundTarget.Name, compoundTarget.Location);
+        // A compound assignment to a static property reads it through its getter and writes it through its setter.
+        if (assignment.Operator != TokenKind.Equals && assignment.Target is MemberAccessExpression { Target: var propertyOwner } compoundProperty
+            && _staticPropertyGetters.ContainsKey(compoundProperty) && StaticTargetClass(propertyOwner, scope) is { } propertyClass)
+            AnalyzeStaticProperty(compoundProperty, propertyClass, forWrite: true, moduleName);
         var isCompound = CompoundAssignment.IsCompound(assignment.Operator);
         var valueType = AnalyzeExpression(assignment.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
             expectedType: isCompound ? null : targetType);
@@ -575,7 +583,12 @@ public sealed partial class SemanticAnalyzer
         {
             _deletedLocals.Remove(reassignedDeclaration);
             _maybeDeletedLocals.Remove(reassignedDeclaration);
-            _unassignedLocals.Remove(reassignedDeclaration);
+            ClearAssignedParts(reassignedDeclaration, "");
+        }
+        else if (assignment.Target is MemberAccessExpression && ResolveStructPlace(assignment.Target, scope) is { } written)
+        {
+            // A field of a struct local is assigned on its own, and a struct field assigns every field under it.
+            ClearAssignedParts(written.Declaration, written.Path);
         }
         if (isCompound)
         {
@@ -704,6 +717,13 @@ public sealed partial class SemanticAnalyzer
                  && scope.Lookup(indexIdentifier.Name, indexIdentifier.Location).IsConst)
             throw ErrorWithCode(DiagnosticCode.ConstAssignment, $"Cannot assign to an element of const variable '{indexIdentifier.Name}'", target.Location,
                 indexIdentifier.Name.Length);
+        else if (target is CallExpression { IsBareName: true } bareStatic && _globalReferences.TryGetValue(bareStatic, out var staticField))
+        {
+            // `Class<T>.field` is a static field of one instance, which is assigned like any static field.
+            if (staticField.IsConst)
+                throw ErrorWithCode(DiagnosticCode.ConstAssignment, $"Cannot assign to const static field '{staticField.Name}'",
+                    target.Location, staticField.Name.Length);
+        }
         else if (target is not (UnaryExpression { Operator: TokenKind.Star } or IndexExpression or MemberAccessExpression))
         {
             throw Error("Assignment target is not addressable", target.Location);

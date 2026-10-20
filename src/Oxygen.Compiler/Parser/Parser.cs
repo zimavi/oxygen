@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Numerics;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
@@ -266,9 +268,16 @@ public sealed partial class Parser
             }
             else if (Check(TokenKind.OpenBrace))
             {
-                if (isStatic)
-                    throw Error("Static properties are not supported yet.", Current);
-                properties.Add(ParseProperty(type, memberName, memberVisibility, memberLocation, isVirtual, isOverride));
+                var propertyToken = Current;
+                var property = ParseProperty(type, memberName, memberVisibility, memberLocation, isVirtual, isOverride);
+                if (!isStatic)
+                {
+                    properties.Add(property);
+                    continue;
+                }
+                if (property.Accessors.Any(accessor => accessor.Kind == PropertyAccessorKind.Init || accessor.Body is null))
+                    throw Error("A static property has a get and a set accessor, each with a body.", propertyToken);
+                methods.AddRange(StaticPropertyMethods(property, isVirtual, isOverride));
             }
             else
             {
@@ -339,6 +348,22 @@ public sealed partial class Parser
         Consume(TokenKind.CloseBrace, "Expected '}' after interface declaration.");
         Match(TokenKind.Semicolon);
         return new InterfaceDeclaration(name, methods, properties, visibility, location, annotations, typeParameters);
+    }
+
+    // A static property is compiled as two static methods: `get_<name>()` and `set_<name>(value)`, which the analyzer and the
+    // backend handle as they handle any static method. Member access to the property calls them.
+    private static IEnumerable<FunctionDeclaration> StaticPropertyMethods(PropertyDeclaration property, bool isVirtual, bool isOverride)
+    {
+        foreach (var accessor in property.Accessors)
+        {
+            if (accessor.Kind == PropertyAccessorKind.Get)
+                yield return new FunctionDeclaration(property.Type, $"get_{property.Name}", [], accessor.Body!,
+                    accessor.Visibility, accessor.Location, IsVirtual: isVirtual, IsOverride: isOverride, IsStatic: true);
+            else
+                yield return new FunctionDeclaration(new TypeSyntax(PrimitiveType.Void, false, accessor.Location),
+                    $"set_{property.Name}", [new ParameterDeclaration(property.Type, "value", accessor.Location)], accessor.Body!,
+                    accessor.Visibility, accessor.Location, IsVirtual: isVirtual, IsOverride: isOverride, IsStatic: true);
+        }
     }
 
     private PropertyDeclaration ParseProperty(TypeSyntax type, string name, Visibility visibility,
@@ -490,13 +515,15 @@ public sealed partial class Parser
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
             var member = Consume(TokenKind.Identifier, "Expected an enum member name.");
-            int? value = null;
+            BigInteger? value = null;
             if (Match(TokenKind.Equals))
             {
                 var negative = Match(TokenKind.Minus);
                 var number = Consume(TokenKind.IntegerLiteral, "Expected an integer enum member value.");
-                if (!int.TryParse((negative ? "-" : "") + number.Lexeme, out var parsed))
-                    throw Error("Enum member values must fit in a signed 32-bit integer.", number);
+                // The value is exact here. The analyzer checks that it fits the enum's underlying type.
+                if (!BigInteger.TryParse((negative ? "-" : "") + number.Lexeme, NumberStyles.AllowLeadingSign,
+                        CultureInfo.InvariantCulture, out var parsed))
+                    throw Error("Expected an integer enum member value.", number);
                 value = parsed;
             }
             members.Add(new EnumMemberDeclaration(member.Lexeme, value, member.Location));
@@ -707,6 +734,7 @@ public sealed partial class Parser
 
         if (Check(TokenKind.Const) || Check(TokenKind.Var) || IsType(Current.Kind)
             || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier)
+            || IsQualifiedVariableDeclarationStart()
             || IsGenericVariableDeclarationStart()
             || IsNamedPointerOrArrayDeclarationStart())
         {
@@ -1143,11 +1171,13 @@ public sealed partial class Parser
                 {
                     var arguments = ParseArguments("Expected ')' after arguments.");
                     // `a.b.name(...)` with more than one dot calls a method on the value of `a.b`, unless the chain names a module
-                    // function, which the analyzer decides. Explicit type arguments keep the name form, for generic functions.
-                    if (qualifiedParts.Count > 2 && typeArguments is null)
-                        return new CallExpression(qualifiedParts[^1], arguments, token.Location, null,
+                    // function, which the analyzer decides. The receiver form carries the type arguments as well.
+                    if (qualifiedParts.Count > 2)
+                        return new CallExpression(qualifiedParts[^1], arguments, token.Location, typeArguments,
                             NameChain(qualifiedParts.Take(qualifiedParts.Count - 1), token.Location));
-                    if (name.IndexOf('.') < 0 && name.Length > 0 && char.IsUpper(name[0]))
+                    // A capitalized name may construct a class, `Box(...)` or `util.Box(...)`. The analyzer decides: a name that
+                    // is not a class is a call, as a union case or a static method of a class is.
+                    if (char.IsUpper(qualifiedParts[^1][0]) && qualifiedParts.Count <= 2)
                         return new ClassConstructionExpression(name, arguments, token.Location, typeArguments);
                     return new CallExpression(name, arguments, token.Location, typeArguments);
                 }
@@ -1177,7 +1207,7 @@ public sealed partial class Parser
                 }
 
                 if (typeArguments is not null && qualifiedParts.Count > 1)
-                    return new CallExpression(name, [], token.Location, typeArguments);
+                    return new CallExpression(name, [], token.Location, typeArguments) { IsBareName = true };
 
                 if (qualifiedParts.Count > 1)
                     return NameChain(qualifiedParts, token.Location);
@@ -1267,8 +1297,15 @@ public sealed partial class Parser
         if (Check(TokenKind.Identifier))
         {
             var token = Advance();
+            // A type can be named through its module, as `util.Box`.
+            var typeName = token.Lexeme;
+            while (Check(TokenKind.Dot) && Peek(1).Kind == TokenKind.Identifier)
+            {
+                Advance();
+                typeName += "." + Advance().Lexeme;
+            }
             var typeArguments = ParseNamedTypeArguments();
-            return ParsePointerSuffix(new TypeSyntax(null, false, token.Location, NamedType: token.Lexeme,
+            return ParsePointerSuffix(new TypeSyntax(null, false, token.Location, NamedType: typeName,
                 TypeArguments: typeArguments));
         }
 
@@ -1334,6 +1371,19 @@ public sealed partial class Parser
 
         return index + 1 < _tokens.Count && _tokens[index].Kind == TokenKind.Identifier
             && _tokens[index + 1].Kind is TokenKind.Equals or TokenKind.Semicolon;
+    }
+
+    // `util.Box name` declares a variable whose type is named through its module. `a.b = c` is an assignment, and `a.b()` a call.
+    private bool IsQualifiedVariableDeclarationStart()
+    {
+        if (!Check(TokenKind.Identifier) || Peek(1).Kind != TokenKind.Dot)
+            return false;
+
+        var index = _position;
+        while (index + 1 < _tokens.Count && _tokens[index].Kind == TokenKind.Identifier && _tokens[index + 1].Kind == TokenKind.Dot)
+            index += 2;
+        return index + 1 < _tokens.Count && _tokens[index].Kind == TokenKind.Identifier
+            && _tokens[index + 1].Kind == TokenKind.Identifier;
     }
 
     private bool IsGenericVariableDeclarationStart()

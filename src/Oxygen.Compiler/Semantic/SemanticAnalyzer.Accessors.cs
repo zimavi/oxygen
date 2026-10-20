@@ -18,33 +18,53 @@ public sealed partial class SemanticAnalyzer
         DiagnosticBag? diagnostics,
         string? sourceName)
     {
-        foreach (var property in cls.DeclaredProperties)
+        // A generic class's accessor bodies are analysed once, with its type parameters opaque, as its methods are.
+        var previousGenericTypes = _genericTypes;
+        var previousConstraints = _typeParameterConstraints;
+        if (cls.IsGeneric)
         {
-            foreach (var accessor in property.Declaration.Accessors)
+            _genericTypes = cls.DeclaredTypeParameters.ToDictionary(
+                parameter => parameter,
+                SemanticType.GenericParameter,
+                StringComparer.Ordinal);
+            _typeParameterConstraints = ConstraintsFor(cls.Declaration.DeclaredTypeParameters);
+        }
+        try
+        {
+            foreach (var property in cls.DeclaredProperties)
             {
-                if (accessor.Body is null || accessor.Kind is not (PropertyAccessorKind.Get or PropertyAccessorKind.Set))
-                    continue;
-                var symbol = CreateAccessorSymbol(cls, property, accessor, moduleName);
-                try
+                foreach (var accessor in property.Declaration.Accessors)
                 {
-                    AnalyzeFunction(symbol, functions, moduleName, imports, expressionTypes, resolvedCalls);
-                }
-                catch (SemanticException exception) when (diagnostics is not null)
-                {
-                    diagnostics.Add(DiagnosticPhase.Semantic, exception.Message, exception.Location, exception.Length,
-                        sourceName: exception.IsSourceAttributed ? exception.SourceName : sourceName, code: exception.Code);
+                    if (accessor.Body is null || accessor.Kind is not (PropertyAccessorKind.Get or PropertyAccessorKind.Set))
+                        continue;
+                    var symbol = CreateAccessorSymbol(cls, property, accessor, moduleName, accessor.Body);
+                    try
+                    {
+                        AnalyzeFunction(symbol, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                    }
+                    catch (SemanticException exception) when (diagnostics is not null)
+                    {
+                        diagnostics.Add(DiagnosticPhase.Semantic, exception.Message, exception.Location, exception.Length,
+                            sourceName: exception.IsSourceAttributed ? exception.SourceName : sourceName, code: exception.Code);
+                    }
                 }
             }
+        }
+        finally
+        {
+            _genericTypes = previousGenericTypes;
+            _typeParameterConstraints = previousConstraints;
         }
     }
 
     // The function that a getter or setter is analysed as: `get_<name>()` returns the property's type, and `set_<name>(value)`
-    // takes the value and returns void.
+    // takes the value and returns void. `body` is the accessor's body, which is the declaration's own or an instantiation's copy.
     private static FunctionSymbol CreateAccessorSymbol(
         ClassSymbol cls,
         PropertySymbol property,
         PropertyAccessorDeclaration accessor,
-        string moduleName)
+        string moduleName,
+        BlockStatement body)
     {
         var isGet = accessor.Kind == PropertyAccessorKind.Get;
         var name = isGet ? $"get_{property.Name}" : $"set_{property.Name}";
@@ -56,7 +76,7 @@ public sealed partial class SemanticAnalyzer
             isGet ? property.Declaration.Type : new TypeSyntax(PrimitiveType.Void, false, accessor.Location),
             name,
             parameters.Select(parameter => parameter.Declaration).ToArray(),
-            accessor.Body!,
+            body,
             accessor.Visibility,
             accessor.Location,
             IsVirtual: property.Declaration.IsVirtual,

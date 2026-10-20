@@ -28,7 +28,9 @@ public sealed partial class SemanticAnalyzer
         RecordGlobalReference(identifier, symbol);
         if (symbol.Declaration is VariableDeclarationStatement declaration)
         {
-            CheckAssigned(declaration, identifier.Name, identifier.Location);
+            // A struct local read as the root of a field path is checked on that path, not as a whole.
+            if (!_skippedPartReads.Contains(identifier))
+                CheckAssigned(declaration, identifier.Name, identifier.Location);
             if (_deletedLocals.Contains(declaration))
                 throw Error($"'{identifier.Name}' was deleted and cannot be used", identifier.Location, identifier.Name.Length);
             if (!_receiverUse)
@@ -162,6 +164,13 @@ public sealed partial class SemanticAnalyzer
     // implicitly, so `i64[2] a = { 1, 2 };` is valid. Without an expected array type, the first element sets the type.
     private SemanticType AnalyzeArrayLiteral(ArrayLiteralExpression literal, Scope scope, IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName, IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types, IDictionary<CallExpression, FunctionSymbol> calls, SemanticType? expectedType)
     {
+        // `{0}` as a struct value zero-fills every field. No other brace literal is a struct value.
+        if (expectedType is { IsStruct: true })
+        {
+            if (literal.Elements is not [IntegerLiteralExpression zero] || !long.TryParse(zero.Lexeme, out var zeroValue) || zeroValue != 0)
+                throw Error("A struct brace literal must be {0}, which zero-fills every field", literal.Location);
+            return expectedType;
+        }
         if (literal.Elements.Count == 0) throw Error("Array literals cannot be empty", literal.Location);
         if (expectedType is { IsArray: true, ElementType: { } expectedElement })
         {
@@ -243,6 +252,9 @@ public sealed partial class SemanticAnalyzer
         // class's own body, where the bare name is used instead.
         if (StaticTargetClass(member.Target, scope) is { } staticClass)
         {
+            // A static property is named like a static field: reading it calls its getter, and writing it calls its setter.
+            if (IsStaticProperty(staticClass, member.MemberName))
+                return AnalyzeStaticProperty(member, staticClass, forWrite, moduleName);
             if (staticClass.DeclaredTypeParameters.Count > 0)
                 throw Error($"Static field '{member.MemberName}' of generic class '{staticClass.Name}' is named by its bare name inside the class",
                     member.Location, member.MemberName.Length);
@@ -268,11 +280,23 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Cannot access member '{member.MemberName}' of the null literal, which has no members",
                 member.Location, member.MemberName.Length);
 
+        // A field of a struct local is read on its own path, so the other fields of the local are not part of this read.
+        if (!forWrite && !_skippedPartReads.Contains(member) && ResolveStructPlace(member, scope) is { } readPlace)
+            CheckPartsAssigned(readPlace.Declaration, readPlace.Name, readPlace.Path, member.Location, member.MemberName.Length);
         // A variable that is only the receiver of a member access is used, but its value does not escape.
         var previousReceiver = _receiverUse;
         _receiverUse = member.Target is IdentifierExpression;
-        var targetType = AnalyzeExpression(member.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-        _receiverUse = previousReceiver;
+        var walked = StartStructWalk(member.Target, scope);
+        SemanticType targetType;
+        try
+        {
+            targetType = AnalyzeExpression(member.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        }
+        finally
+        {
+            EndStructWalk(walked);
+            _receiverUse = previousReceiver;
+        }
         // A type parameter has the properties of its constraint interfaces, read through the interface that declares them.
         if (targetType.IsGenericParameter
             && ConstraintDeclaring(targetType, member.MemberName, member.Location,
@@ -384,12 +408,17 @@ public sealed partial class SemanticAnalyzer
         // `Name(...)` builds an object when Name is a class. When no class has that name but a function does, it is a call of
         // that function, whatever the capitalization. The call is recorded against the expression and emitted in its place.
         var className = FindTypeName(expression.TypeName, expression.Location);
-        if ((className is null || !_classesByName.ContainsKey(className))
-            && ResolveFunctions(expression.TypeName, moduleName, imports, functions).Any())
+        // A dotted name that is not a class is a union case, a static method, or a module function, which are all calls.
+        var isQualifiedCall = className is null && expression.TypeName.Contains('.', StringComparison.Ordinal);
+        if (isQualifiedCall || ((className is null || !_classesByName.ContainsKey(className))
+            && ResolveFunctions(expression.TypeName, moduleName, imports, functions).Any()))
         {
             var call = new CallExpression(expression.TypeName, expression.Arguments, expression.Location, expression.TypeArguments);
             _constructionCalls[expression] = call;
-            return AnalyzeCall(call, scope, functions, moduleName, imports, types, calls, expectedType, false);
+            // The backend emits this call in place of the construction, so the call carries the type that the construction has.
+            var callType = AnalyzeCall(call, scope, functions, moduleName, imports, types, calls, expectedType, false);
+            types[call] = callType;
+            return callType;
         }
         if (className is null || !_classesByName.TryGetValue(className, out var cls))
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Class '{expression.TypeName}' is not declared", expression.Location);

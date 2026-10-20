@@ -808,6 +808,33 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void EnumMembersHoldTheFullRangeOfTheirUnderlyingType()
+    {
+        var model = Analyze(
+            "enum Big : u64 { Top = 18446744073709551615, Zero = 0 } i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsEnumMemberOutsideItsUnderlyingType()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("enum Small : u8 { A = 255, B } i32 main() { return 0; }"));
+
+        Assert.Contains("Enum member value 256 does not fit underlying type U8", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsNegativeEnumMemberForUnsignedUnderlyingType()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("enum Count : u32 { A = -1 } i32 main() { return 0; }"));
+
+        Assert.Contains("Enum member value -1 does not fit underlying type U32", exception.Message);
+    }
+
+    [Fact]
     public void FindsVoidMainFunction()
     {
         var model = Analyze("void main() { return; }");
@@ -1216,6 +1243,54 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void MethodCallsAFunctionOfItsModule()
+    {
+        var model = Analyze("i32 helper(i32 x) { return x * 2; } class Plain { i32 method() { return helper(1); } } " +
+            "i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ConstructorsOfPlainAndGenericClassesCallAFunctionOfTheirModule()
+    {
+        var model = Analyze("i32 helper(i32 x) { return x * 2; } " +
+            "class Plain { i32 value; Plain(i32 item) { value = helper(item); } } " +
+            "class Box<T> { T value; Box(T item) { value = item; i32 unused = helper(1); } } " +
+            "i32 main() { Plain p = new Plain(1); Box<i32> b = new Box<i32>(2); return p.value; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void DestructorCallsAFunctionOfItsModule()
+    {
+        var model = Analyze("i32 helper(i32 x) { return x * 2; } class Plain { ~Plain() { i32 unused = helper(1); } } " +
+            "i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsTypeArgumentsOnAMethodCall()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Inner { i32 id(i32 x) { return x; } } i32 main() { Inner i = new Inner(); return i.id<i32>(1); }"));
+
+        Assert.Contains("Method 'id' does not accept explicit type arguments", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsTypeArgumentsOnAMethodCallThroughAFieldChain()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Inner { i32 id(i32 x) { return x; } } class Holder { Inner inner; } " +
+            "i32 main() { Holder h = new Holder(); return h.inner.id<i32>(1); }"));
+
+        Assert.Contains("Method 'id' does not accept explicit type arguments", exception.Message);
+    }
+
+    [Fact]
     public void RejectsCallsToPrivateMethodsFromOutsideTheClass()
     {
         var exception = Assert.Throws<SemanticException>(() => Analyze(
@@ -1284,6 +1359,15 @@ public sealed class SemanticTests
             "class Box { i32 value = 1; } i32 main() { Box b = new Box(); delete b; delete b; return 0; }"));
 
         Assert.Contains("'b' is already deleted", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsDeletingALocalBeforeAssigningIt()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { i32 value = 1; } i32 main() { Box b; delete b; return 0; }"));
+
+        Assert.Contains("'b' may be read before it is assigned", exception.Message);
     }
 
     [Fact]
@@ -1946,6 +2030,45 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void PassingAStackObjectToAParameterThatStoresItIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { i32 v; } class Holder { Box kept; void keep(Box x) { this.kept = x; } } " +
+                "i32 main() { Holder h = new Holder(); h.keep(Box()); return 0; }"));
+
+        Assert.Contains("A stack object cannot be passed to 'keep', whose parameter 'x' may keep it", exception.Message);
+    }
+
+    [Fact]
+    public void PassingAStackLocalToAParameterThatStoresItIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { i32 v; } class Holder { Box kept; void keep(Box x) { this.kept = x; } } " +
+                "i32 main() { Holder h = new Holder(); Box b = Box(); h.keep(b); return 0; }"));
+
+        Assert.Contains("A stack object cannot be passed to 'keep'", exception.Message);
+    }
+
+    [Fact]
+    public void PassingAStackObjectToAParameterThatOnlyReadsItsFieldsIsAccepted()
+    {
+        var model = Analyze("class Box { i32 v; } i32 read(Box b) { return b.v; } " +
+            "i32 main() { return read(Box()); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void PassingAStackObjectToAVirtualParameterIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { i32 v; } class Reader { virtual i32 read(Box b) { return b.v; } } " +
+                "i32 main() { Reader r = new Reader(); return r.read(Box()); }"));
+
+        Assert.Contains("A stack object cannot be passed to 'read'", exception.Message);
+    }
+
+    [Fact]
     public void ReturningANewObjectIsAccepted()
     {
         var model = Analyze("class Box { i32 v; } Box make() { return new Box(); } i32 main() { return 0; }");
@@ -2183,6 +2306,24 @@ public sealed class SemanticTests
             Analyze("class Box { public i32 Value { get { } } } i32 main() { return 0; }"));
 
         Assert.Contains("must return a value", exception.Message);
+    }
+
+    [Fact]
+    public void GenericClassAccessorBodyIsCheckedWithoutAnInstantiation()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box<T> { i32 P { get { return \"x\"; } } } i32 main() { return 0; }"));
+
+        Assert.Contains("Cannot return string from function 'get_P'", exception.Message);
+    }
+
+    [Fact]
+    public void GenericClassAccessorBodyIsCheckedForEachInstantiation()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box<T> { T item; i32 P { get { return \"x\"; } } } i32 main() { Box<i32> b = new Box<i32>(); return b.P; }"));
+
+        Assert.Contains("Cannot return string from function 'get_P'", exception.Message);
     }
 
     [Fact]
@@ -2780,6 +2921,40 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void AcceptsDereferenceOfPointerThatIsNullOnlyOnOneBranch()
+    {
+        var model = Analyze("i32 main() { i32 x = 3; bool c = true; i32* p = &x; if (c) { p = null; } return *p; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsDereferenceOfPointerThatIsNullOnEveryBranch()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 main() { i32 x = 3; bool c = true; i32* p = &x; if (c) { p = null; } else { p = null; } return *p; }"));
+
+        Assert.Contains("Cannot dereference a null pointer", exception.Message);
+    }
+
+    [Fact]
+    public void AcceptsDereferenceAfterALoopThatMayNotAssignNull()
+    {
+        var model = Analyze("i32 main() { i32 x = 3; bool c = false; i32* p = &x; while (c) { p = null; } return *p; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsDereferenceAfterABreakThatLeavesNull()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 main() { i32 x = 3; i32* p = &x; while (true) { p = null; break; } return *p; }"));
+
+        Assert.Contains("Cannot dereference a null pointer", exception.Message);
+    }
+
+    [Fact]
     public void RejectsAssignmentToConstString()
     {
         var exception = Assert.Throws<SemanticException>(() =>
@@ -2983,6 +3158,96 @@ public sealed class SemanticTests
             Analyze("i32 main() { i32 x; switch (1) { case 1: x = 1; } return x; }"));
 
         Assert.Contains("'x' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsReadingAFieldOfAStructBeforeItIsAssigned()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; i32 y; } i32 main() { Point p; p.x = 1; return p.y; }"));
+
+        Assert.Contains("'p.y' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void AllowsWritingAndReadingEachFieldOfAStructOnceItIsAssigned()
+    {
+        var model = Analyze("struct Point { i32 x; i32 y; } i32 main() { Point p; p.x = 1; p.y = 2; return p.x + p.y; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsReadingTheWholeStructBeforeEveryFieldIsAssigned()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; i32 y; } i32 main() { Point p; p.x = 1; Point q = p; return 0; }"));
+
+        Assert.Contains("'p.y' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void AWholeStructAssignmentAssignsEveryField()
+    {
+        var model = Analyze("struct Point { i32 x; i32 y; } i32 main() { Point p; p = Point { x: 1, y: 2 }; return p.y; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ZeroLiteralInitializesEveryFieldOfAStruct()
+    {
+        var model = Analyze(
+            "struct Point { i32 x; i32 y; } i32 main() { Point p = {0}; Point q; q = {0}; return p.y + q.x; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ZeroLiteralIsTheOnlyBraceLiteralForAStruct()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; } i32 main() { Point p = {1}; return 0; }"));
+
+        Assert.Contains("A struct brace literal must be {0}", exception.Message);
+    }
+
+    [Fact]
+    public void ReadingANestedFieldBeforeItIsAssignedIsAnError()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; i32 y; } struct Line { Point a; Point b; } " +
+            "i32 main() { Line l; l.a.x = 1; l.a.y = 2; return l.b.x; }"));
+
+        Assert.Contains("'l.b.x' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void AssigningANestedStructAsAWholeAssignsItsFields()
+    {
+        var model = Analyze(
+            "struct Point { i32 x; i32 y; } struct Line { Point a; Point b; } " +
+            "i32 main() { Line l; l.a.x = 1; l.a.y = 2; l.b = {0}; return l.b.x + l.a.y; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void AFieldAssignedInOnlyOneBranchStaysUnassignedAfterIt()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; i32 y; } i32 main() { Point p; if (true) { p.x = 1; p.y = 2; } return p.x; }"));
+
+        Assert.Contains("'p.x' may be read before it is assigned", exception.Message);
+    }
+
+    [Fact]
+    public void AClassFieldOfAStructLocalIsCheckedAsAValue()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box { i32 v; } struct Holder { Box box; i32 n; } i32 main() { Holder h; h.n = 1; return h.box.v; }"));
+
+        Assert.Contains("'h.box' may be read before it is assigned", exception.Message);
     }
 
     [Fact]
@@ -3351,6 +3616,81 @@ public sealed class SemanticTests
 
         var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
         Assert.Contains("must be initialized with a literal or an integer constant expression", diagnostic.Message);
+    }
+
+    [Fact]
+    public void AcceptsStaticFieldsOfClassTypeThatStartAsNull()
+    {
+        var model = Analyze("class Node { i32 value; } class Holder { static Node head; static Node tail = null; } " +
+            "i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsStaticFieldOfClassTypeInitializedWithAnObject()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "class Node { i32 value; } class Holder { static Node head = new Node(); } i32 main() { return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("can only be initialized with null", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsAStackObjectStoredInAStaticField()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Node { i32 value; } class Holder { static Node head; } " +
+            "i32 main() { Holder.head = Node(); return 0; }"));
+
+        Assert.Contains("A stack object cannot be stored in a field", exception.Message);
+    }
+
+    [Fact]
+    public void AcceptsAStaticFieldOfOneInstanceOfAGenericClassFromOutside()
+    {
+        var model = Analyze("class Box<T> { static i32 touches = 0; } " +
+            "i32 main() { Box<i32>.touches = Box<i32>.touches + 1; return Box<string>.touches; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsConstStaticFieldOfAGenericInstanceAssignedFromOutside()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "class Box<T> { static const i32 limit = 3; } i32 main() { Box<i32>.limit = 4; return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("Cannot assign to const static field 'limit'", diagnostic.Message);
+    }
+
+    [Fact]
+    public void AcceptsReadingAndWritingAStaticProperty()
+    {
+        var model = Analyze("class Counter { static i32 seen = 0; static i32 Seen { get { return seen; } set { seen = value; } } } " +
+            "i32 main() { Counter.Seen = 4; Counter.Seen += 3; return Counter.Seen; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsWritingAStaticPropertyWithoutASetter()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Counter { static i32 Seen { get { return 1; } } } i32 main() { Counter.Seen = 4; return 0; }"));
+
+        Assert.Contains("Property 'Seen' is read-only", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsAStaticPropertyOfAGenericClassForNow()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "class Box<T> { static i32 Seen { get { return 1; } } } i32 main() { return Box<i32>.Seen; }"));
+
+        Assert.Contains("Static property 'Seen' of generic class 'Box' is not supported yet", exception.Message);
     }
 
     [Fact]

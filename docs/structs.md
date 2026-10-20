@@ -15,13 +15,37 @@ struct Segment {
 }
 ```
 
-Struct values use named literals. Every field must be initialized exactly once:
+A struct value is built with a named literal, which must set every field exactly
+once, or with `{0}`, which zero-fills every field:
 
 ```oxygen
 i32 main() {
     Point point = Point { x: 10, y: 20 };
     point.x = 11;
     return point.y;
+}
+```
+
+`{0}` sets each field, nested structs included, to the zero value of its type.
+It is the only brace literal that a struct accepts:
+
+```oxygen
+Point origin = {0};
+```
+
+A local struct without an initializer can be assigned one field at a time. Each
+field is unassigned until it is written, and a whole struct is unassigned until
+every field has been. Reading an unassigned field is a compile error, and so is
+reading the whole struct while any of its fields is unassigned. A whole-value
+assignment assigns every field:
+
+```oxygen
+i32 main() {
+    Point p;
+    p.x = 1;
+    p.y = 2;          // every field is assigned now
+    Point q = {0};
+    return p.x + q.y;
 }
 ```
 

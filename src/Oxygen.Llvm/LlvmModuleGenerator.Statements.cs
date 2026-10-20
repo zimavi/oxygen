@@ -169,11 +169,24 @@ public sealed partial class LlvmModuleGenerator
                     if (_dropFlags.ContainsKey(address))
                         SetDropFlag(builder, address, assignment.Value is NewExpression);
                 }
+                else if (assignment.Target is MemberAccessExpression staticProperty && model.StaticPropertySetters.ContainsKey(staticProperty))
+                {
+                    // `Class.Name = value` calls the property's setter with the value, converted to the property type.
+                    EmitStaticPropertySet(builder, model.StaticPropertySetters[staticProperty],
+                        CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                            model.ExpressionTypes[assignment.Target], model), llvmFunctions);
+                }
                 else if (assignment.Target is MemberAccessExpression staticField && model.GlobalReferences.ContainsKey(staticField))
                 {
                     // `Class.field = value` stores to the static field's global.
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                         model.ExpressionTypes[assignment.Target], model), _globalVariables[model.GlobalReferences[staticField]]);
+                }
+                else if (assignment.Target is CallExpression bareStatic && model.GlobalReferences.ContainsKey(bareStatic))
+                {
+                    // `Class<T>.field = value` stores to the static field of that instance.
+                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                        model.ExpressionTypes[assignment.Target], model), _globalVariables[model.GlobalReferences[bareStatic]]);
                 }
                 else if (assignment.Target is MemberAccessExpression member
                     && member.Target is IdentifierExpression targetIdentifier)
@@ -277,6 +290,14 @@ public sealed partial class LlvmModuleGenerator
                     var receiver = EmitExpression(context, builder, nestedMember.Target, values, storage, model, llvmFunctions);
                     EmitClassMemberStore(builder, model.Classes[objectType.StructName!], receiver, nestedMember, assigned,
                         model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target], model, llvmFunctions);
+                }
+                else if (assignment.Target is MemberAccessExpression { Target: MemberAccessExpression or IndexExpression } structMember
+                         && model.ExpressionTypes[structMember.Target].IsStruct)
+                {
+                    // A field of a struct that is itself a field or an element, as in line.b.y = v. The struct is read, the field is
+                    // replaced, and the struct is written back through its place.
+                    EmitPlace(context, builder, assignment.Target, values, storage, model, llvmFunctions).Store(
+                        CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target], model));
                 }
                 else if (assignment.Target is UnaryExpression { Operator: TokenKind.Star, Operand: var operand })
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],

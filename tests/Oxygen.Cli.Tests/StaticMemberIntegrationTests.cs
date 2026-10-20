@@ -163,4 +163,84 @@ public sealed class StaticMemberIntegrationTests : IDisposable
         Assert.Equal(0, run.ExitCode);
         Assert.Equal("4\n8\n7\n", run.Output.Replace("\r\n", "\n"));
     }
+
+    [SkippableFact]
+    public void StaticFieldOfClassTypeHoldsAnObjectAssignedFromOutside()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var run = NativeProgram.BuildAndRun(_directory,
+            """
+            class Node {
+                i32 value;
+            }
+
+            class Holder {
+                static Node head;
+            }
+
+            i32 main() {
+                if (Holder.head == null) {
+                    Holder.head = new Node();
+                }
+                Holder.head.value = 9;
+                return Holder.head.value;
+            }
+            """);
+
+        Assert.Equal(9, run.ExitCode);
+    }
+
+    [SkippableFact]
+    public void StaticFieldsOfEachInstanceOfAGenericClassAreReachedFromOutside()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var run = NativeProgram.BuildAndRun(_directory,
+            """
+            class Box<T> {
+                static i32 touches = 0;
+
+                i32 touch() {
+                    touches = touches + 1;
+                    return touches;
+                }
+            }
+
+            i32 main() {
+                Box<i32> a = new Box<i32>();
+                Box<string> b = new Box<string>();
+                a.touch();
+                a.touch();
+                b.touch();
+                Box<i32>.touches = Box<i32>.touches + 10;
+                return Box<i32>.touches * 10 + Box<string>.touches;
+            }
+            """);
+
+        Assert.Equal(121, run.ExitCode);
+    }
+
+    [SkippableFact]
+    public void StaticPropertyReadsCallItsGetterAndWritesCallItsSetter()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var run = NativeProgram.BuildAndRun(_directory,
+            """
+            class Counter {
+                static i32 seen = 0;
+
+                static i32 Seen {
+                    get { return seen; }
+                    set { seen = value; }
+                }
+            }
+
+            i32 main() {
+                Counter.Seen = 4;
+                Counter.Seen += 3;
+                return Counter.Seen;
+            }
+            """);
+
+        Assert.Equal(7, run.ExitCode);
+    }
 }

@@ -50,7 +50,7 @@ public sealed partial class LlvmModuleGenerator
         LLVMValueRef valid = LLVMValueRef.CreateConstInt(_context.Int1Type, 0, false);
         foreach (var member in enumSymbol.Members)
         {
-            var candidate = LLVMValueRef.CreateConstInt(enumLlvmType, unchecked((ulong)member.Value), false);
+            var candidate = LLVMValueRef.CreateConstInt(enumLlvmType, EnumBits(member.Value), false);
             var match = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, operand, candidate, "enum.member");
             valid = builder.BuildOr(valid, match, "enum.valid");
         }
@@ -355,6 +355,9 @@ public sealed partial class LlvmModuleGenerator
             : model.ExpressionTypes[expression.Operand!];
         return ToLlvmType(type, model).SizeOf;
     }
+
+    // The low 64 bits of an enum value in two's complement, which is how the value is stored in its integer type.
+    private static ulong EnumBits(System.Numerics.BigInteger value) => (ulong)(value & ulong.MaxValue);
 
     private static int IntegerBitWidth(PrimitiveType type) =>
         type switch

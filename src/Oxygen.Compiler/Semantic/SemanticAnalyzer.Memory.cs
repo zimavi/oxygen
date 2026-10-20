@@ -73,18 +73,23 @@ public sealed partial class SemanticAnalyzer
         {
             var symbol = scope.Lookup(identifier.Name, identifier.Location);
             targetType = AssignmentTargetType(identifier, scope, expressionTypes);
-            if (symbol.Declaration is VariableDeclarationStatement declaration && IsOwnedClass(targetType))
+            if (symbol.Declaration is VariableDeclarationStatement declaration)
             {
-                if (_deletedLocals.Contains(declaration))
-                    throw Error($"'{identifier.Name}' is already deleted", identifier.Location, identifier.Name.Length);
-                // Deleting a local that may already have been deleted needs a runtime check, not a compile error.
-                if (_maybeDeletedLocals.Contains(declaration))
-                    _runtimeCheckedDeletes.Add(statement);
-                _deletedAnywhere.Add(declaration);
-                if (_loopDeletes.Count > 0)
-                    _loopDeletes.Peek().Add((statement, declaration));
-                _deletedLocals.Add(declaration);
-                _maybeDeletedLocals.Add(declaration);
+                // Delete reads the variable, so a local that may still be unassigned is rejected, as a read of it is.
+                CheckAssigned(declaration, identifier.Name, identifier.Location);
+                if (IsOwnedClass(targetType))
+                {
+                    if (_deletedLocals.Contains(declaration))
+                        throw Error($"'{identifier.Name}' is already deleted", identifier.Location, identifier.Name.Length);
+                    // Deleting a local that may already have been deleted needs a runtime check, not a compile error.
+                    if (_maybeDeletedLocals.Contains(declaration))
+                        _runtimeCheckedDeletes.Add(statement);
+                    _deletedAnywhere.Add(declaration);
+                    if (_loopDeletes.Count > 0)
+                        _loopDeletes.Peek().Add((statement, declaration));
+                    _deletedLocals.Add(declaration);
+                    _maybeDeletedLocals.Add(declaration);
+                }
             }
         }
         else
@@ -187,7 +192,8 @@ public sealed partial class SemanticAnalyzer
     {
         if (!IsStackObject(assignment.Value, scope))
             return;
-        if (assignment.Target is MemberAccessExpression)
+        // A static field, named as `Class.field` or `Class<T>.field`, is a field too.
+        if (assignment.Target is MemberAccessExpression or CallExpression)
             throw Error("A stack object cannot be stored in a field, because the field outlives its function. " +
                 "Create it with new to store it", assignment.Value.Location);
         if (assignment.Target is IdentifierExpression target)
@@ -200,5 +206,49 @@ public sealed partial class SemanticAnalyzer
                 throw Error("A stack object cannot be assigned to a variable of an outer scope, because it outlives its block. " +
                     "Create it with new to keep it", assignment.Value.Location);
         }
+    }
+
+    // A stack object passed to a parameter that may keep it would outlive its function. Each argument is checked against the
+    // callee the call resolved to. The check is run after the call's own analysis, so the callee and binding are known.
+    private void RequireStackArgumentsNotKept(CallExpression call, Scope scope, IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        if (!resolvedCalls.TryGetValue(call, out var callee))
+            return;
+        int[]? order = _argumentOrders.TryGetValue(call, out var bound)
+            ? bound
+            : HasNamedArguments(call.Arguments) ? null : Enumerable.Range(0, call.Arguments.Count).ToArray();
+        if (order is null)
+            return;
+        for (var position = 0; position < order.Length && position < callee.Parameters.Count; position++)
+        {
+            if (order[position] == DefaultArgument)
+                continue;
+            var argument = ValueOf(call.Arguments[order[position]]);
+            if (IsStackObject(argument, scope) && MayKeepParameter(callee, position))
+                throw Error($"A stack object cannot be passed to '{callee.Name}', whose parameter '{callee.Parameters[position].Name}' " +
+                    "may keep it after the call returns. Create it with new to pass it on", argument.Location);
+        }
+    }
+
+    // Whether a function may keep a reference that it receives in parameter `position`. The answer is conservative: it is false
+    // only when the body uses the parameter as the base of a field access (`p.field`, where the field is not a property) and
+    // nowhere else. A virtual or interface method, an external function, and a call on the parameter are all treated as keeping it.
+    private bool MayKeepParameter(FunctionSymbol callee, int position)
+    {
+        if (callee.IsExternal || callee.Declaration.IsVirtual || callee.Declaration.IsOverride
+            || _interfacesByName.Values.Any(contract => contract.Methods.Any(method => ReferenceEquals(method.Declaration, callee.Declaration))))
+            return true;
+        var parameter = callee.Parameters[position];
+        var fieldClass = parameter.Type.IsClass && _classesByName.TryGetValue(parameter.Type.StructName!, out var cls) ? cls : null;
+        if (fieldClass is null)
+            return true;
+        var uses = EnumerateExpressions(callee.Declaration.Body).ToList();
+        var fieldBases = uses.OfType<MemberAccessExpression>()
+            .Where(member => member.Target is IdentifierExpression target && target.Name == parameter.Name
+                && FindProperty(fieldClass, member.MemberName) is null)
+            .Select(member => (Expression)member.Target)
+            .ToHashSet(ReferenceEqualityComparer.Instance);
+        return uses.Any(use => use is IdentifierExpression identifier && identifier.Name == parameter.Name && !fieldBases.Contains(use))
+            || uses.Any(use => use is CallExpression dotted && dotted.Name.StartsWith(parameter.Name + ".", StringComparison.Ordinal));
     }
 }

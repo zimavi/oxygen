@@ -59,17 +59,9 @@ public sealed partial class SemanticAnalyzer
         throw Error($"Unsupported cast from {operand} to {target}", cast.Location);
     }
 
-    private static bool FitsUnderlying(int value, PrimitiveType underlying) =>
-        underlying switch
-        {
-            PrimitiveType.I8 => value is >= sbyte.MinValue and <= sbyte.MaxValue,
-            PrimitiveType.U8 => value is >= byte.MinValue and <= byte.MaxValue,
-            PrimitiveType.I16 => value is >= short.MinValue and <= short.MaxValue,
-            PrimitiveType.U16 => value is >= ushort.MinValue and <= ushort.MaxValue,
-            PrimitiveType.I32 or PrimitiveType.U32 or PrimitiveType.I64 or PrimitiveType.U64 => value >= 0
-                || underlying is PrimitiveType.I32 or PrimitiveType.I64,
-            _ => false
-        };
+    // Whether an enum member value is in the range of its underlying integer type.
+    private static bool FitsUnderlying(BigInteger value, PrimitiveType underlying) =>
+        TryGetIntegerRange(underlying, out var minimum, out var maximum) && value >= minimum && value <= maximum;
 
     private bool CanAssign(SemanticType target, Expression value, SemanticType actual) =>
         ConversionCostOf(target, value, actual) is not null;

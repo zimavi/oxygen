@@ -41,7 +41,15 @@ compiler rejects a stack object that is:
 
 - returned, directly or through a local that holds it;
 - stored in a field;
-- assigned to a variable of an outer scope.
+- assigned to a variable of an outer scope;
+- passed to a parameter that may keep it.
+
+A parameter may keep its argument unless the function uses it only as the base of
+field reads and writes (`p.field`, where the field is not a property). Any other
+use keeps it: returning it, assigning it, passing it on, calling a method on it.
+Calls through a virtual method, an interface, or an external function also keep
+their arguments. A stack object passed to a parameter that only reads its fields is
+valid for the duration of the call.
 
 Use `new T(...)` for an object that must outlive its scope. `T(...)` names a
 class when a class has that name. When no class has the name but a function does,

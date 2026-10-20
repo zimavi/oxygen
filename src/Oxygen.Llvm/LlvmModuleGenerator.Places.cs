@@ -34,6 +34,8 @@ public sealed partial class LlvmModuleGenerator
                     EmitExpression(context, builder, dereference.Operand, values, storage, model, llvmFunctions), "deref");
             case MemberAccessExpression member:
                 return EmitMemberPlace(context, builder, member, values, storage, model, llvmFunctions);
+            case CallExpression bareStatic when model.GlobalReferences.ContainsKey(bareStatic):
+                return MemoryPlace(builder, type, _globalVariables[model.GlobalReferences[bareStatic]], "static.field");
             default:
                 throw new InvalidOperationException("Internal compiler error: a compound assignment target is not a location.");
         }
@@ -52,6 +54,11 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var memberType = ToLlvmType(model.ExpressionTypes[member], model);
+        // A compound assignment to a static property loads it through the getter and stores it through the setter.
+        if (model.StaticPropertyGetters.TryGetValue(member, out var propertyGetter)
+            && model.StaticPropertySetters.TryGetValue(member, out var propertySetter))
+            return new Place(() => EmitStaticPropertyGet(builder, propertyGetter, llvmFunctions),
+                value => EmitStaticPropertySet(builder, propertySetter, value, llvmFunctions));
         if (model.GlobalReferences.TryGetValue(member, out var staticField))
             return MemoryPlace(builder, memberType, _globalVariables[staticField], member.MemberName);
         if (member.Target is ThisExpression)
@@ -93,6 +100,16 @@ public sealed partial class LlvmModuleGenerator
             () => builder.BuildExtractValue(part.Load(), (uint)partIndex, member.MemberName),
             value => part.Store(builder.BuildInsertValue(part.Load(), value, (uint)partIndex, "struct.update")));
     }
+
+    // A static property is read by calling its getter, a static method with no receiver.
+    private LLVMValueRef EmitStaticPropertyGet(LLVMBuilderRef builder, FunctionSymbol getter,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
+        EmitCallOrInvoke(builder, llvmFunctions[getter].FunctionType, llvmFunctions[getter], [], "static.property");
+
+    // A static property is written by calling its setter with the value, which the analyzer has converted to the property type.
+    private void EmitStaticPropertySet(LLVMBuilderRef builder, FunctionSymbol setter, LLVMValueRef value,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
+        EmitCallOrInvoke(builder, llvmFunctions[setter].FunctionType, llvmFunctions[setter], [value], string.Empty);
 
     // A property of a class object, read through its getter and written through its setter, with the receiver evaluated once.
     private Place PropertyPlace(

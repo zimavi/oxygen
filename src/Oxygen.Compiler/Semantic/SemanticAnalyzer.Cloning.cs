@@ -248,6 +248,21 @@ public sealed partial class SemanticAnalyzer
             _constructorSelections[result] = selection;
         if (_argumentOrders.TryGetValue(source, out var argumentOrder))
             _argumentOrders[result] = argumentOrder;
+        // A construction that the analyzer turned into a call (a union case, or a static method) keeps that call in its copy, with
+        // the call's facts, so that the backend emits the copy's call.
+        if (source is ClassConstructionExpression construction && result is ClassConstructionExpression clonedConstruction
+            && _constructionCalls.TryGetValue(construction, out var constructionCall))
+        {
+            var clonedCall = new CallExpression(constructionCall.Name, clonedConstruction.Arguments, constructionCall.Location,
+                clonedConstruction.TypeArguments);
+            _constructionCalls[clonedConstruction] = clonedCall;
+            if (expressionTypes.TryGetValue(result, out var callType))
+                expressionTypes[clonedCall] = callType;
+            if (resolvedCalls.TryGetValue(constructionCall, out var function))
+                resolvedCalls[clonedCall] = function;
+            if (_argumentOrders.TryGetValue(constructionCall, out var order))
+                _argumentOrders[clonedCall] = order;
+        }
         return result;
     }
 
@@ -278,14 +293,17 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyDictionary<string, string> aggregateNames,
         Dictionary<Expression, SemanticType> expressionTypes,
         object owner,
-        Dictionary<CallExpression, FunctionSymbol> resolvedCalls) =>
+        Dictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        IReadOnlyDictionary<PropertyAccessorDeclaration, BlockStatement>? analyzedBodies = null) =>
         source with
         {
             Type = RewriteTypeSyntax(source.Type, substitutions, aggregateNames),
             Accessors = source.Accessors.Select(accessor => accessor with
             {
-                Body = accessor.Body is null ? null :
-                    CloneBlock(accessor.Body, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
+                // An instantiation's own analysed copy of a body is used when there is one, so its expressions are typed.
+                Body = accessor.Body is null ? null
+                    : analyzedBodies is not null && analyzedBodies.TryGetValue(accessor, out var analyzed) ? analyzed
+                    : CloneBlock(accessor.Body, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
             }).ToArray()
         };
 
