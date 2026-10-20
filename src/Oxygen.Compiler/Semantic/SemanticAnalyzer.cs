@@ -248,9 +248,7 @@ public sealed partial class SemanticAnalyzer
                 EnsureTypeNameAvailable(declaration.Name, declaration.Location);
                 _interfacesByName.Add(declaration.Name,
                     new InterfaceSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
-                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(),
-                        declaration.DeclaredProperties.Select(property => new PropertySymbol(
-                            property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray()));
+                        declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(), []));
             }
             foreach (var declaration in unit.Classes)
             {
@@ -263,8 +261,7 @@ public sealed partial class SemanticAnalyzer
                         declaration.Interfaces, [], [], [], declaration.Destructor, declaration, declaration.Visibility,
                         declaration.IsValue,
                         declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(),
-                        declaration.DeclaredProperties.Select(property => new PropertySymbol(
-                            property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray()));
+                        []));
             }
         }
         for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
@@ -281,7 +278,14 @@ public sealed partial class SemanticAnalyzer
                     throw Error($"Interface '{declaration.Name}' contains duplicate methods", declaration.Location);
                 foreach (var property in declaration.DeclaredProperties)
                     ValidatePropertyDeclaration(property);
-                _interfacesByName[declaration.Name] = _interfacesByName[declaration.Name] with { Methods = methods };
+                var interfaceProperties = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
+                    declaration.DeclaredProperties.Select(property => new PropertySymbol(
+                        property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray());
+                _interfacesByName[declaration.Name] = _interfacesByName[declaration.Name] with
+                {
+                    Methods = methods,
+                    Properties = interfaceProperties
+                };
             }
             foreach (var declaration in unit.Classes)
             {
@@ -339,10 +343,15 @@ public sealed partial class SemanticAnalyzer
                         types.Insert(0, ResolveType(declaration.BaseTypeSyntax[0]));
                     return types;
                 });
+                // Property types are resolved here, after every type is registered, so a property may name a type declared later.
+                var properties = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
+                    declaration.DeclaredProperties.Select(property => new PropertySymbol(
+                        property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray());
                 _ownClassFields[declaration.Name] = fields;
                 _classesByName[declaration.Name] = _classesByName[declaration.Name] with
                 {
                     Fields = fields,
+                    Properties = properties,
                     Methods = methods,
                     Constructors = constructors,
                     InterfaceNames = interfaceTypes.Select(type => type.StructName!).ToArray(),
@@ -567,6 +576,9 @@ public sealed partial class SemanticAnalyzer
             foreach (var declaration in unit.Classes)
             {
                 var classSymbol = _classesByName[declaration.Name];
+                if (!classSymbol.IsGeneric)
+                    AnalyzeAccessorBodies(classSymbol, moduleName, unit.Imports, functionsByName, expressionTypes,
+                        resolvedCalls, diagnostics, SourceNameAt(unitIndex));
                 foreach (var constructor in classSymbol.Constructors)
                 {
                     var previousGenericTypes = _genericTypes;

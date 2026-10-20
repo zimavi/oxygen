@@ -547,9 +547,14 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         // Assigning to a variable is not a use of it, so a deleted variable can be given a new value.
-        var targetType = assignment.Target is IdentifierExpression assignedIdentifier
-            ? AssignmentTargetType(assignedIdentifier, scope, expressionTypes)
-            : AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+        // A plain `=` to a member is a write, so a set-only property is named without being read. A compound assignment reads it.
+        var targetType = assignment.Target switch
+        {
+            IdentifierExpression assignedIdentifier => AssignmentTargetType(assignedIdentifier, scope, expressionTypes),
+            MemberAccessExpression assignedMember when assignment.Operator == TokenKind.Equals => WrittenMemberType(
+                assignedMember, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            _ => AnalyzeExpression(assignment.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)
+        };
         // A compound assignment reads its target before it writes it.
         if (assignment.Operator != TokenKind.Equals && assignment.Target is IdentifierExpression compoundTarget
             && scope.Lookup(compoundTarget.Name, compoundTarget.Location).Declaration is VariableDeclarationStatement compoundDeclaration)
@@ -778,6 +783,22 @@ public sealed partial class SemanticAnalyzer
         }
         if (returnStatement.Value is NullLiteralExpression && function.ReturnType.IsPointer)
             expressionTypes[returnStatement.Value] = function.ReturnType;
+    }
+
+    // The type of a member that a plain assignment writes to. The member is not read, so a set-only property has a type.
+    private SemanticType WrittenMemberType(
+        MemberAccessExpression member,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        var type = AnalyzeMemberAccess(member, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+            forWrite: true);
+        expressionTypes[member] = type;
+        return type;
     }
 
     private SemanticType AssignmentTargetType(IdentifierExpression target, Scope scope,

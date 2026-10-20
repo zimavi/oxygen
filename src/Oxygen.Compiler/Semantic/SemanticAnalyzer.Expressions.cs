@@ -216,7 +216,8 @@ public sealed partial class SemanticAnalyzer
         string moduleName,
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
-        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        bool forWrite = false)
     {
         if (member.Target is IdentifierExpression enumIdentifier
             && _enumsByName.TryGetValue(enumIdentifier.Name, out var enumSymbol))
@@ -247,9 +248,11 @@ public sealed partial class SemanticAnalyzer
             {
                 var getter = property.Declaration.Accessors.FirstOrDefault(
                     accessor => accessor.Kind == PropertyAccessorKind.Get);
-                if (getter is null)
+                // A write to a set-only property names it without reading it. Its setter is checked by the write itself.
+                if (getter is null && !forWrite)
                     throw Error($"Property '{property.Name}' is write-only", member.Location, property.Name.Length);
-                EnsureAccessorVisible(property, getter, member.Location);
+                if (getter is not null)
+                    EnsureAccessorVisible(property, getter, member.Location);
                 return SubstituteGenericType(property.Type, substitutions);
             }
             var field = cls.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
@@ -274,9 +277,11 @@ public sealed partial class SemanticAnalyzer
                 throw Error($"Interface '{targetType.StructName}' has no member named '{member.MemberName}'",
                     member.Location);
             var getter = contract.Declaration.Accessors.FirstOrDefault(
-                accessor => accessor.Kind == PropertyAccessorKind.Get)
-                ?? throw Error($"Property '{contract.Name}' is write-only", member.Location, contract.Name.Length);
-            EnsureAccessorVisible(contract, getter, member.Location);
+                accessor => accessor.Kind == PropertyAccessorKind.Get);
+            if (getter is null && !forWrite)
+                throw Error($"Property '{contract.Name}' is write-only", member.Location, contract.Name.Length);
+            if (getter is not null)
+                EnsureAccessorVisible(contract, getter, member.Location);
             return SubstituteGenericType(contract.Type, substitutions);
         }
         if (!targetType.IsStruct)

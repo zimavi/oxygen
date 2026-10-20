@@ -1812,6 +1812,34 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void SetOnlyPropertyCanBeAssigned()
+    {
+        var model = Analyze(
+            "class Box { public i32 Value { set; } } i32 main() { Box b = new Box(); b.Value = 5; return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void PropertyMayNameATypeDeclaredLater()
+    {
+        var model = Analyze(
+            "class Holder { public Item Current { get; set; } } class Item { public i32 Id { get; set; } } " +
+            "i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void PropertyAccessorBodyIsChecked()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { public i32 Value { get { } } } i32 main() { return 0; }"));
+
+        Assert.Contains("must return a value", exception.Message);
+    }
+
+    [Fact]
     public void RethrowOutsideACatchClauseIsRejected()
     {
         var exception = Assert.Throws<SemanticException>(() =>
