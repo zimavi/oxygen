@@ -188,10 +188,17 @@ public sealed record AnnotationSyntax(
     IReadOnlyList<string> Arguments,
     SourceLocation Location) : SyntaxNode(Location);
 
+// One name in a symbol list, such as `free as release` in `import std.memory{alloc, free as release};`. LocalName is the name
+// the importing module uses, which is Name when there is no alias.
+public sealed record ImportSymbol(string Name, string LocalName, SourceLocation Location) : SyntaxNode(Location);
+
+// An import of one module. A symbol list has the module as Name and its listed names in Symbols, which brings only those
+// declarations into scope unqualified.
 public sealed record ImportDeclaration(
     string Name,
     SourceLocation Location,
-    string? Alias = null) : SyntaxNode(Location);
+    string? Alias = null,
+    IReadOnlyList<ImportSymbol>? Symbols = null) : SyntaxNode(Location);
 
 public sealed record FunctionDeclaration(
     TypeSyntax ReturnType,

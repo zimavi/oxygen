@@ -100,6 +100,39 @@ the CLI imports its public declarations and native symbols for semantic
 checking; the compiler never infers signatures by guessing from native
 exports.
 
+## Import lists
+
+One import statement can name several modules, or several names of one module:
+
+```oxygen
+import std.{memory, strings};              // std.memory and std.strings, each under its leaf name
+import std.{memory, strings} as {mem, str}; // the same, qualified by mem and str
+import std.memory{alloc, free as release}; // only these two declarations, unqualified
+```
+
+A group is the same as one import for each module it lists, so `memory.alloc`
+and the other names of each module work as they do after a plain import. A list of aliases is matched to the
+modules by position, and the two lists must have the same length.
+
+A symbol list brings only the listed public declarations into scope, by their
+names: `alloc<i32>(4)` and `release(pointer)`. Other declarations of the module
+are not visible through the import, and the leaf qualifier is not added, so
+`memory.alloc` needs a plain `import std.memory;`. An entry may name a function
+or a type, and `as` gives it a different local name.
+
+The following are errors:
+
+- A group inside a group, as in `import std.{memory{alloc}};`.
+- An alias list with a different number of names from the group.
+- An alias for a whole symbol list, as in `import std.memory{alloc} as m;`.
+- An empty symbol list, and a dotted name inside a symbol list.
+- A listed name that the module does not declare as `public`. It is reported at
+  the import.
+- A listed name that clashes with a declaration of the same kind in the
+  importing module. It is reported at the import, not at a use.
+- Two imports that provide one name are an ambiguity at the use, as for plain
+  imports.
+
 ## Type names
 
 Every struct, enum, union, class and interface belongs to the module that

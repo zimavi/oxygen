@@ -266,6 +266,50 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesAModuleGroupAsOneImportPerModule()
+    {
+        var unit = Parse("import std.{memory, strings}; i32 main() { return 0; }");
+
+        Assert.Equal(["std.memory", "std.strings"], unit.Imports.Select(import => import.Name));
+        Assert.All(unit.Imports, import => Assert.Null(import.Alias));
+        Assert.All(unit.Imports, import => Assert.Null(import.Symbols));
+    }
+
+    [Fact]
+    public void ParsesAModuleGroupWithAnAliasListMatchedByPosition()
+    {
+        var unit = Parse("import std.{memory, strings} as {mem, str}; i32 main() { return 0; }");
+
+        Assert.Equal(["std.memory", "std.strings"], unit.Imports.Select(import => import.Name));
+        Assert.Equal(["mem", "str"], unit.Imports.Select(import => import.Alias));
+    }
+
+    [Fact]
+    public void ParsesASymbolListWithItsAliases()
+    {
+        var unit = Parse("import std.memory{alloc, free as release}; i32 main() { return 0; }");
+
+        var import = Assert.Single(unit.Imports);
+        Assert.Equal("std.memory", import.Name);
+        Assert.Null(import.Alias);
+        Assert.Equal(["alloc", "free"], import.Symbols!.Select(symbol => symbol.Name));
+        Assert.Equal(["alloc", "release"], import.Symbols!.Select(symbol => symbol.LocalName));
+    }
+
+    [Theory]
+    [InlineData("import std.{memory{alloc}}; i32 main() { return 0; }", "Import groups do not nest")]
+    [InlineData("import std.{memory, strings} as {mem}; i32 main() { return 0; }", "its alias list has 1 names")]
+    [InlineData("import std.{memory, strings} as mem; i32 main() { return 0; }", "takes a list of aliases")]
+    [InlineData("import std.memory{}; i32 main() { return 0; }", "needs at least one name")]
+    [InlineData("import std.memory{mem.alloc}; i32 main() { return 0; }", "each entry is a plain name")]
+    public void RejectsMalformedImportLists(string source, string message)
+    {
+        var exception = Assert.Throws<ParseException>(() => Parse(source));
+
+        Assert.Contains(message, exception.Message);
+    }
+
+    [Fact]
     public void ReportsMalformedSyntax()
     {
         var exception = Assert.Throws<ParseException>(() => Parse("i32 main() { return 1 }"));

@@ -557,6 +557,15 @@ public sealed partial class SemanticAnalyzer
 
         foreach (var import in imports)
         {
+            if (import.Symbols is not null)
+            {
+                // A symbol list brings only its listed names into scope, unqualified. It adds no module qualifier, so the
+                // module's other declarations and the leaf-name form are not visible through it.
+                foreach (var symbol in import.Symbols.Where(symbol => symbol.LocalName == name))
+                    keys.Add($"{import.Name}.{symbol.Name}");
+                continue;
+            }
+
             if (!name.Contains('.', StringComparison.Ordinal))
             {
                 // Functions in the imported module itself do not need a prefix.

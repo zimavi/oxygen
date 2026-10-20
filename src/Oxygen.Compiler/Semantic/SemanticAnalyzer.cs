@@ -478,6 +478,8 @@ public sealed partial class SemanticAnalyzer
                 if (import.Alias is not null && !importAliases.Add(import.Alias))
                     throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"Import alias '{import.Alias}' is declared more than once", import.Location,
                         import.Alias.Length);
+                if (import.Symbols is not null)
+                    ValidateSymbolImport(import, moduleName, compilationUnits, externalModules);
             }
             foreach (var externalModule in externalModules ?? [])
             {

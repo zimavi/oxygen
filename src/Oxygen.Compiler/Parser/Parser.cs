@@ -583,21 +583,102 @@ public sealed partial class Parser
         return (name, visibility);
     }
 
+    // Three forms, each producing one ImportDeclaration per module or symbol, so the rest of the compiler sees only plain imports and
+    // symbol lists:
+    //   import std.memory;                          a module, optionally `as alias`
+    //   import std.{memory, strings} as {mem, str}; a group of modules, with an optional list of aliases
+    //   import std.memory{alloc, free as release};  a symbol list, which brings only the listed names into scope
     private IReadOnlyList<ImportDeclaration> ParseImports()
     {
         var imports = new List<ImportDeclaration>();
         while (Match(TokenKind.Import))
         {
             var token = Previous;
-            var name = ParseQualifiedName("Expected an imported module name.");
-            string? alias = null;
-            if (Match(TokenKind.As))
-                alias = Consume(TokenKind.Identifier, "Expected an import alias after 'as'.").Lexeme;
+            var name = Consume(TokenKind.Identifier, "Expected an imported module name.").Lexeme;
+            while (Check(TokenKind.Dot) && Peek(1).Kind == TokenKind.Identifier)
+            {
+                Advance();
+                name += "." + Advance().Lexeme;
+            }
+
+            if (Check(TokenKind.Dot) && Peek(1).Kind == TokenKind.OpenBrace)
+            {
+                Advance();
+                ParseImportGroup(name, token, imports);
+            }
+            else if (Check(TokenKind.OpenBrace))
+            {
+                imports.Add(new ImportDeclaration(name, token.Location, null, ParseImportSymbols()));
+            }
+            else
+            {
+                string? alias = null;
+                if (Match(TokenKind.As))
+                    alias = Consume(TokenKind.Identifier, "Expected an import alias after 'as'.").Lexeme;
+                imports.Add(new ImportDeclaration(name, token.Location, alias));
+            }
             Consume(TokenKind.Semicolon, "Expected ';' after import declaration.");
-            imports.Add(new ImportDeclaration(name, token.Location, alias));
         }
 
         return imports;
+    }
+
+    // Parses `{memory, strings}` after the prefix's dot, and an optional `as {mem, str}`, and adds one import per module.
+    private void ParseImportGroup(string prefix, Token importToken, List<ImportDeclaration> imports)
+    {
+        var modules = new List<Token>();
+        Consume(TokenKind.OpenBrace, "Expected '{' to start an import group.");
+        do
+        {
+            modules.Add(Consume(TokenKind.Identifier, "Expected a module name in the import group."));
+            if (Check(TokenKind.OpenBrace))
+                throw Error("Import groups do not nest; list the module with its own import instead.", Current);
+        }
+        while (Match(TokenKind.Comma));
+        Consume(TokenKind.CloseBrace, "Expected '}' after the import group.");
+
+        var aliases = new List<string>();
+        if (Match(TokenKind.As))
+        {
+            var aliasToken = Current;
+            if (!Check(TokenKind.OpenBrace))
+                throw Error("A module group takes a list of aliases after 'as', such as as {mem, str}.", aliasToken);
+            Advance();
+            do
+                aliases.Add(Consume(TokenKind.Identifier, "Expected an alias in the list after 'as'.").Lexeme);
+            while (Match(TokenKind.Comma));
+            Consume(TokenKind.CloseBrace, "Expected '}' after the list of aliases.");
+            if (aliases.Count != modules.Count)
+                throw Error(
+                    $"The import group names {modules.Count} modules, but its alias list has {aliases.Count} names.",
+                    aliasToken);
+        }
+
+        for (var index = 0; index < modules.Count; index++)
+            imports.Add(new ImportDeclaration($"{prefix}.{modules[index].Lexeme}", importToken.Location,
+                aliases.Count == 0 ? null : aliases[index]));
+    }
+
+    // Parses `{alloc, free as release}` after a module name.
+    private IReadOnlyList<ImportSymbol> ParseImportSymbols()
+    {
+        Consume(TokenKind.OpenBrace, "Expected '{' to start a symbol list.");
+        var symbols = new List<ImportSymbol>();
+        if (Check(TokenKind.CloseBrace))
+            throw Error("A symbol list needs at least one name.", Current);
+        do
+        {
+            if (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Dot)
+                throw Error("A symbol list names declarations of one module, so each entry is a plain name.", Peek(1));
+            var nameToken = Consume(TokenKind.Identifier, "Expected a name in the symbol list.");
+            var localName = nameToken.Lexeme;
+            if (Match(TokenKind.As))
+                localName = Consume(TokenKind.Identifier, "Expected an alias after 'as' in the symbol list.").Lexeme;
+            symbols.Add(new ImportSymbol(nameToken.Lexeme, localName, nameToken.Location));
+        }
+        while (Match(TokenKind.Comma));
+        Consume(TokenKind.CloseBrace, "Expected '}' after the symbol list.");
+        return symbols;
     }
 
     private FunctionDeclaration ParseFunction()

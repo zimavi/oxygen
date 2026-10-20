@@ -3842,6 +3842,84 @@ public sealed class SemanticTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
     }
 
+    [Fact]
+    public void ASymbolListBringsOnlyItsNamesIntoScope()
+    {
+        var model = AnalyzeModules(
+            "module lib; public i32 one() { return 1; } public i32 two() { return 2; }",
+            "import lib{one}; i32 main() { return one(); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
+    public void AnUnlistedNameOfASymbolImportIsNotInScope()
+    {
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeModules(
+            "module lib; public i32 one() { return 1; } public i32 two() { return 2; }",
+            "import lib{one}; i32 main() { return two(); }"));
+
+        Assert.Contains("two", exception.Message);
+    }
+
+    [Fact]
+    public void ASymbolImportDoesNotAddTheLeafQualifierOfItsModule()
+    {
+        // The leaf form `lib.one` needs a plain import of outer.lib. The fully qualified `outer.lib.one` stays valid.
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeModules(
+            "module outer.lib; public i32 one() { return 1; }",
+            "import outer.lib{one}; i32 main() { return lib.one(); }"));
+
+        Assert.Contains("lib.one", exception.Message);
+    }
+
+    [Fact]
+    public void ASymbolImportOfAPrivateOrMissingNameIsReportedAtTheImport()
+    {
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeModules(
+            "module lib; i32 hidden() { return 1; }",
+            "import lib{hidden}; i32 main() { return 0; }"));
+
+        Assert.Contains("does not declare a public 'hidden'", exception.Message);
+    }
+
+    [Fact]
+    public void ASymbolImportClashingWithALocalDeclarationOfTheSameKindIsReportedAtTheImport()
+    {
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeModules(
+            "module lib; public i32 one() { return 1; }",
+            "import lib{one}; i32 one() { return 0; } i32 main() { return 0; }"));
+
+        Assert.Contains("clashes with the function 'one'", exception.Message);
+    }
+
+    [Fact]
+    public void TwoSymbolImportsOfOneNameAreAmbiguousAtTheUse()
+    {
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeModules(
+            "module first; public i32 pick() { return 1; }",
+            "module second; public i32 pick() { return 2; }",
+            "import first{pick}; import second{pick}; i32 main() { return pick(); }"));
+
+        Assert.Contains("ambiguous", exception.Message);
+    }
+
+    [Fact]
+    public void ASymbolAliasNamesTheImportedDeclarationLocally()
+    {
+        var model = AnalyzeModules(
+            "module lib; public i32 one() { return 1; }",
+            "import lib{one as uno}; i32 main() { return uno(); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    private SemanticModel AnalyzeModules(params string[] sources)
+    {
+        var units = sources.Select(source => new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse()).ToList();
+        return new SemanticAnalyzer(Log.Logger).Analyze(units);
+    }
+
     private SemanticModel Analyze(string source)
     {
         var unit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
