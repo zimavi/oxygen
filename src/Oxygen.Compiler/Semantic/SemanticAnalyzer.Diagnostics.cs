@@ -34,6 +34,10 @@ public sealed partial class SemanticAnalyzer
     private static SemanticException Error(string message, SourceLocation location, int length = 1) =>
         new(message, location, length);
 
+    // An error that has a diagnostic code, which chooses its advice.
+    private static SemanticException ErrorWithCode(string code, string message, SourceLocation location, int length = 1) =>
+        new(message, location, length, code);
+
     // An error about a class or struct belongs to the file that declares it, even when it is found in a phase that has no
     // current source, such as the class hierarchy checks that run after all declarations are registered.
     private SemanticException DeclarationError(string declarationName, string message, SourceLocation location, int length = 1) =>

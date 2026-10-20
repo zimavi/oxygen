@@ -4,12 +4,16 @@ namespace Oxygen.Compiler.Semantic;
 
 public sealed class SemanticException : Exception
 {
-    public SemanticException(string message, SourceLocation location, int length = 1)
+    public SemanticException(string message, SourceLocation location, int length = 1, string? code = null)
         : base(message)
     {
         Location = location;
         Length = Math.Max(1, length);
+        Code = code;
     }
+
+    // The diagnostic code of the error, which chooses its advice. Null when the error has no code.
+    public string? Code { get; }
 
     public SourceLocation Location { get; }
 

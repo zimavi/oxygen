@@ -93,7 +93,7 @@ public sealed partial class SemanticAnalyzer
         }
 
         if (!IsOwnedClass(targetType))
-            throw Error($"'delete' requires a reference to a class object, got {targetType}", statement.Target.Location);
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"'delete' requires a reference to a class object, got {targetType}", statement.Target.Location);
     }
 
     // A local that holds an object from `new` leaves scope without a `delete` and without escaping, so its memory is leaked.

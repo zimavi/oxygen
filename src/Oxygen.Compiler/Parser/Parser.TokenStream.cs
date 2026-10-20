@@ -1,3 +1,4 @@
+using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
 
 namespace Oxygen.Compiler.Parsing;
@@ -9,7 +10,7 @@ public sealed partial class Parser
         if (Check(kind))
             return Advance();
 
-        throw Error($"{message} Found {Describe(Current)} instead.", Current);
+        throw Error(DiagnosticCode.ExpectedToken, $"{message} Found {Describe(Current)} instead.", Current);
     }
 
     private bool Match(TokenKind kind)
@@ -40,6 +41,9 @@ public sealed partial class Parser
     private Token Previous => _tokens[Math.Max(0, _position - 1)];
 
     private static ParseException Error(string message, Token token) => new(message, token);
+
+    // A parse error with a diagnostic code, which chooses its advice.
+    private static ParseException Error(string code, string message, Token token) => new(message, token, code);
 
     private static string Describe(Token token) =>
         token.Kind == TokenKind.EndOfFile

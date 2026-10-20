@@ -118,7 +118,7 @@ public sealed partial class Parser
                 exception.Message,
                 exception.Token.Location,
                 Math.Max(1, exception.Token.Lexeme.Length),
-                sourceName);
+                sourceName, exception.Code);
             Synchronize();
         }
 
@@ -152,7 +152,7 @@ public sealed partial class Parser
                     exception.Message,
                     exception.Token.Location,
                     Math.Max(1, exception.Token.Lexeme.Length),
-                    sourceName);
+                    sourceName, exception.Code);
                 Synchronize();
             }
         }
@@ -352,7 +352,7 @@ public sealed partial class Parser
                 TokenKind.Identifier when accessorName == "get" => PropertyAccessorKind.Get,
                 TokenKind.Identifier when accessorName == "set" => PropertyAccessorKind.Set,
                 TokenKind.Identifier when accessorName == "init" => PropertyAccessorKind.Init,
-                _ => throw Error("Expected 'get', 'set', or 'init' in property.", accessorToken)
+                _ => throw Error(DiagnosticCode.ExpectedToken, "Expected 'get', 'set', or 'init' in property.", accessorToken)
             };
             BlockStatement? body = null;
             var auto = false;
@@ -408,7 +408,7 @@ public sealed partial class Parser
         var location = Current.Location;
         var kind = Match(TokenKind.This) ? ConstructorInitializerKind.This
             : Match(TokenKind.Base) ? ConstructorInitializerKind.Base
-            : throw Error("Expected 'this' or 'base' after ':' in a constructor declaration.", Current);
+            : throw Error(DiagnosticCode.ExpectedToken, "Expected 'this' or 'base' after ':' in a constructor declaration.", Current);
         Consume(TokenKind.OpenParenthesis, "Expected '(' after 'this' or 'base' in a constructor initializer.");
         var arguments = new List<Expression>();
         if (!Check(TokenKind.CloseParenthesis))
@@ -617,7 +617,7 @@ public sealed partial class Parser
         {
             var token = Current.Kind is TokenKind.Identifier or TokenKind.Extern
                 ? Advance()
-                : throw Error("Expected an annotation name after '@'.", Current);
+                : throw Error(DiagnosticCode.ExpectedToken, "Expected an annotation name after '@'.", Current);
             var arguments = new List<string>();
             if (Match(TokenKind.OpenParenthesis))
             {
@@ -627,7 +627,7 @@ public sealed partial class Parser
                     {
                         var argument = Advance();
                         if (argument.Kind is not (TokenKind.StringLiteral or TokenKind.IntegerLiteral or TokenKind.Identifier))
-                            throw Error("Expected a string, integer, or identifier annotation argument.", argument);
+                            throw Error(DiagnosticCode.ExpectedToken, "Expected a string, integer, or identifier annotation argument.", argument);
                         arguments.Add(argument.Lexeme);
                     } while (Match(TokenKind.Comma));
                 }
@@ -943,7 +943,7 @@ public sealed partial class Parser
             finallyBlock = ParseBlock();
 
         if (catches.Count == 0 && finallyBlock is null)
-            throw Error("Expected at least one 'catch' clause or a 'finally' block after try block.", Current);
+            throw Error(DiagnosticCode.ExpectedToken, "Expected at least one 'catch' clause or a 'finally' block after try block.", Current);
         return new TryStatement(body, catches, finallyBlock, location);
     }
 
@@ -1215,7 +1215,7 @@ public sealed partial class Parser
                 Consume(TokenKind.CloseParenthesis, "Expected ')' after expression.");
                 return expression;
             default:
-                throw Error($"Expected an expression, but found {Describe(token)}.", token);
+                throw Error(DiagnosticCode.ExpectedToken, $"Expected an expression, but found {Describe(token)}.", token);
         }
     }
 

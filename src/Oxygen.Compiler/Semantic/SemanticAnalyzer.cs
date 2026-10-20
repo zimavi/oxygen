@@ -184,7 +184,7 @@ public sealed partial class SemanticAnalyzer
             foreach (var declaration in unit.Enums)
             {
                 if (_enumsByName.ContainsKey(declaration.Name) || _structsByName.ContainsKey(declaration.Name))
-                    throw Error($"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
+                    throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
                 var members = new List<EnumMemberSymbol>();
                 var names = new HashSet<string>(StringComparer.Ordinal);
                 var values = new HashSet<int>();
@@ -212,7 +212,7 @@ public sealed partial class SemanticAnalyzer
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
                 if (_enumsByName.ContainsKey(declaration.Name) || _structsByName.ContainsKey(declaration.Name)
                     || _unionsByName.ContainsKey(declaration.Name))
-                    throw Error($"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
+                    throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
                 var names = new HashSet<string>(StringComparer.Ordinal);
                 var cases = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                 {
@@ -236,7 +236,7 @@ public sealed partial class SemanticAnalyzer
             {
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
                 if (_structsByName.ContainsKey(declaration.Name))
-                    throw Error($"A struct named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
+                    throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A struct named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
                 var annotations = ParseStructLayout(declaration);
                 _declarationSourceNames[declaration.Name] = _sourceName;
                 _structsByName.Add(declaration.Name,
@@ -416,7 +416,7 @@ public sealed partial class SemanticAnalyzer
                 }
 
                 if (import.Alias is not null && !importAliases.Add(import.Alias))
-                    throw Error($"Import alias '{import.Alias}' is declared more than once", import.Location,
+                    throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"Import alias '{import.Alias}' is declared more than once", import.Location,
                         import.Alias.Length);
             }
             foreach (var externalModule in externalModules ?? [])
@@ -563,7 +563,8 @@ public sealed partial class SemanticAnalyzer
                     exception.Length,
                     sourceName: exception.IsSourceAttributed
                         ? exception.SourceName
-                        : functionSources.GetValueOrDefault(symbol));
+                        : functionSources.GetValueOrDefault(symbol),
+                        code: exception.Code);
             }
             finally
             {
@@ -646,7 +647,8 @@ public sealed partial class SemanticAnalyzer
                                 ? exception.SourceName
                                 : sourceNames is not null && unitIndex < sourceNames.Count
                                     ? sourceNames[unitIndex]
-                                    : null);
+                                    : null,
+                            code: exception.Code);
                     }
                 }
             }
@@ -721,7 +723,8 @@ public sealed partial class SemanticAnalyzer
                 exception.Length,
                 exception.IsSourceAttributed
                     ? exception.SourceName
-                    : _sourceName ?? (sourceNames is { Count: > 0 } ? sourceNames[0] : null));
+                    : _sourceName ?? (sourceNames is { Count: > 0 } ? sourceNames[0] : null),
+                code: exception.Code);
             return new SemanticResult(null, diagnostics.Diagnostics);
         }
     }

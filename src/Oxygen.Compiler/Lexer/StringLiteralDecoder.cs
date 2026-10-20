@@ -1,3 +1,4 @@
+using Oxygen.Compiler.Diagnostics;
 using System.Globalization;
 using System.Text;
 
@@ -23,7 +24,7 @@ public static class StringLiteralDecoder
 
             var escapeLocation = new SourceLocation(location.Line, location.Column + index);
             if (index + 1 >= contentEnd)
-                throw new LexicalException("Unterminated string literal", location);
+                throw LexicalException.WithCode(DiagnosticCode.UnterminatedString, "Unterminated string literal", location);
 
             switch (lexeme[index + 1])
             {

@@ -51,6 +51,35 @@ public sealed class DiagnosticsTests
     }
 
     [Fact]
+    public void ConversionErrorGetsConversionAdviceAndNoFalseClaimAboutImplicitConversions()
+    {
+        var tokens = new Tokenizer().TokenizeWithDiagnostics(
+            "i32 main() { u8 value = 300; return 0; }", "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+
+        var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer()
+            .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Equal(DiagnosticCode.ConversionMismatch, diagnostic.Code);
+        Assert.NotNull(diagnostic.Explanation);
+        Assert.DoesNotContain("does not insert", diagnostic.Explanation);
+        Assert.Contains("cast<T>(value)", diagnostic.Suggestion);
+    }
+
+    [Fact]
+    public void DiagnosticWithoutCodeHasNoAdvice()
+    {
+        var diagnostic = new DiagnosticBag();
+        diagnostic.Add(DiagnosticPhase.Semantic, "Something went wrong", new SourceLocation(1, 1));
+
+        var added = Assert.Single(diagnostic.Diagnostics);
+        Assert.Null(added.Code);
+        Assert.Null(added.Explanation);
+        Assert.Null(added.Suggestion);
+    }
+
+    [Fact]
     public void HighlightsTheEntireSemanticNameWhenColorIsEnabled()
     {
         var diagnostic = new Diagnostic(

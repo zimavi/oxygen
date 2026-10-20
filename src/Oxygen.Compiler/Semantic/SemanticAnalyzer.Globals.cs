@@ -1,3 +1,4 @@
+using Oxygen.Compiler.Diagnostics;
 using System.Globalization;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Lexer;
@@ -46,7 +47,7 @@ public sealed partial class SemanticAnalyzer
         var name = declaration.Name;
         var scope = ModuleScope(moduleName);
         if (scope.ContainsInCurrentScope(name))
-            throw Error($"A global variable named '{name}' is already declared", declaration.Location, name.Length);
+            throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A global variable named '{name}' is already declared", declaration.Location, name.Length);
 
         var type = ResolveType(declaration.Type);
         if (type.IsVoid)
@@ -64,7 +65,7 @@ public sealed partial class SemanticAnalyzer
             var actual = AnalyzeExpression(initializer, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
                 expectedType: type);
             if (!CanAssign(type, initializer, actual))
-                throw Error($"Cannot initialize '{name}' with {actual}; expected {type}", initializer.Location);
+                throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot initialize '{name}' with {actual}; expected {type}", initializer.Location);
             value = ConstantValueOf(initializer);
         }
         else if (declaration.IsConst)

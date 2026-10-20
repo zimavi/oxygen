@@ -48,7 +48,7 @@ public sealed partial class SemanticAnalyzer
             catch (SemanticException exception) when (_diagnostics is not null)
             {
                 _diagnostics?.Add(DiagnosticPhase.Semantic, exception.Message, exception.Location, exception.Length,
-                    exception.IsSourceAttributed ? exception.SourceName : _sourceName);
+                    exception.IsSourceAttributed ? exception.SourceName : _sourceName, code: exception.Code);
                 valid = false;
             }
         }

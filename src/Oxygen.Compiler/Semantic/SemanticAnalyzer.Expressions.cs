@@ -93,7 +93,7 @@ public sealed partial class SemanticAnalyzer
         var operandType = AnalyzeExpression(expression.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         AnalyzeTypePattern(expression.TargetType, operandType, expression.Location);
         if (expression.BindingName is not null && scope.ContainsInCurrentScope(expression.BindingName))
-            throw Error($"A variable named '{expression.BindingName}' is already declared in this scope", expression.Location);
+            throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A variable named '{expression.BindingName}' is already declared in this scope", expression.Location);
         return SemanticType.FromPrimitive(PrimitiveType.Bool);
     }
 
@@ -120,7 +120,7 @@ public sealed partial class SemanticAnalyzer
             ? ResolveType(expression.TargetType)
             : expression.Operand is not null
                 ? AnalyzeExpression(expression.Operand, scope, functions, moduleName, imports, types, calls)
-                : throw Error("sizeof requires a type or expression", expression.Location);
+                : throw ErrorWithCode(DiagnosticCode.OperandRequirement, "sizeof requires a type or expression", expression.Location);
         if (!IsSized(target))
             throw Error($"Type {target} cannot be used with sizeof", expression.Location);
         return SemanticType.FromPrimitive(PrimitiveType.U64);
@@ -136,7 +136,7 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> calls)
     {
         if (!_unionsByName.TryGetValue(construction.UnionName, out var union))
-            throw Error($"Union '{construction.UnionName}' is not declared", construction.Location);
+            throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Union '{construction.UnionName}' is not declared", construction.Location);
         if (!union.CasesByName.TryGetValue(construction.CaseName, out var item))
             throw Error($"Union '{construction.UnionName}' has no case '{construction.CaseName}'", construction.Location);
         if (item.PayloadType is null && construction.Arguments.Count != 0
@@ -181,7 +181,7 @@ public sealed partial class SemanticAnalyzer
         var indexType = AnalyzeExpression(index.Index, scope, functions, moduleName, imports, types, calls);
         if (!indexType.IsNumeric) throw Error("Index must be numeric", index.Index.Location);
         if (!target.IsArray && !target.IsPointer && target.Kind != SemanticTypeKind.String)
-            throw Error("Indexing requires an array, a string or a pointer", index.Target.Location);
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement, "Indexing requires an array, a string or a pointer", index.Target.Location);
         // A string element is one byte, which is read but never written.
         if (target.Kind == SemanticTypeKind.String)
             return SemanticType.FromPrimitive(PrimitiveType.U8);
@@ -204,17 +204,17 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         if (!_structsByName.TryGetValue(literal.TypeName, out var structure))
-            throw Error($"Struct '{literal.TypeName}' is not declared", literal.Location, literal.TypeName.Length);
+            throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Struct '{literal.TypeName}' is not declared", literal.Location, literal.TypeName.Length);
         var fields = new HashSet<string>(StringComparer.Ordinal);
         foreach (var field in literal.Fields)
         {
             if (!fields.Add(field.Name))
-                throw Error($"Struct field '{field.Name}' is specified more than once", field.Location, field.Name.Length);
+                throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"Struct field '{field.Name}' is specified more than once", field.Location, field.Name.Length);
             var declaration = structure.Fields.FirstOrDefault(candidate => candidate.Name == field.Name)
                 ?? throw Error($"Struct '{literal.TypeName}' has no field named '{field.Name}'", field.Location, field.Name.Length);
             var valueType = AnalyzeExpression(field.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
             if (!CanAssign(declaration.Type, field.Value, valueType))
-                throw Error($"Cannot initialize field '{field.Name}' with {valueType}; expected {declaration.Type}", field.Value.Location);
+                throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot initialize field '{field.Name}' with {valueType}; expected {declaration.Type}", field.Value.Location);
         }
         if (fields.Count != structure.Fields.Count)
             throw Error($"Struct literal '{literal.TypeName}' must initialize every field", literal.Location, literal.TypeName.Length);
@@ -304,7 +304,7 @@ public sealed partial class SemanticAnalyzer
             return SubstituteGenericType(contract.Type, substitutions);
         }
         if (!targetType.IsStruct)
-            throw Error($"Member access requires a struct or class value, got {targetType}", member.Location);
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Member access requires a struct or class value, got {targetType}", member.Location);
         var structure = _structsByName[targetType.StructName!];
         return structure.Fields.FirstOrDefault(field => field.Name == member.MemberName)?.Type
             ?? throw Error($"Struct '{targetType.StructName}' has no field named '{member.MemberName}'", member.Location, member.MemberName.Length);
@@ -348,7 +348,7 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
         _constructorSelections[expression] = IndexOfConstructor(cls, matches[0]);
         if (substitutions.Count != cls.DeclaredTypeParameters.Count)
-            throw Error($"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
+            throw ErrorWithCode(DiagnosticCode.ArgumentCount, $"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
                 expression.Location);
         var inferredArguments = cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray();
         ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, inferredArguments, expression.Location);
@@ -372,7 +372,7 @@ public sealed partial class SemanticAnalyzer
             return AnalyzeCall(call, scope, functions, moduleName, imports, types, calls, null, false);
         }
         if (!_classesByName.TryGetValue(expression.TypeName, out var cls))
-            throw Error($"Class '{expression.TypeName}' is not declared", expression.Location);
+            throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Class '{expression.TypeName}' is not declared", expression.Location);
         RequireConstructibleHere(cls, expression.Location);
         var arguments = expression.Arguments.Select(argument =>
             AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
@@ -407,7 +407,7 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
         _constructorSelections[expression] = IndexOfConstructor(cls, matches[0]);
         if (substitutions.Count != cls.DeclaredTypeParameters.Count)
-            throw Error($"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
+            throw ErrorWithCode(DiagnosticCode.ArgumentCount, $"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
                 expression.Location);
         var inferredArguments = cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray();
         ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, inferredArguments, expression.Location);
@@ -437,7 +437,7 @@ public sealed partial class SemanticAnalyzer
         if (expression.Operator == TokenKind.Ampersand)
         {
             if (!IsAddressable(expression.Operand, scope) && !IsFieldOfClassObject(expression.Operand, expressionTypes))
-                throw Error("The '&' operator requires an addressable operand", expression.Location);
+                throw ErrorWithCode(DiagnosticCode.OperandRequirement, "The '&' operator requires an addressable operand", expression.Location);
             return SemanticType.PointerTo(operandType);
         }
 
@@ -448,7 +448,7 @@ public sealed partial class SemanticAnalyzer
                     && _definitelyNullVariables.Contains(scope.Lookup(identifier.Name, identifier.Location)))
                 throw Error("Cannot dereference a null pointer", expression.Location);
             if (!operandType.IsPointer)
-                throw Error("The '*' operator requires a pointer operand", expression.Location);
+                throw ErrorWithCode(DiagnosticCode.OperandRequirement, "The '*' operator requires a pointer operand", expression.Location);
             if (operandType.IsOpaquePointer)
                 throw Error("Cannot dereference an opaque void pointer; cast it to a typed pointer first", expression.Location);
             return operandType.Pointee!;
@@ -458,7 +458,7 @@ public sealed partial class SemanticAnalyzer
         {
             if (operandType != SemanticType.FromPrimitive(PrimitiveType.Bool))
             {
-                throw Error("The '!' operator requires a bool operand", expression.Location);
+                throw ErrorWithCode(DiagnosticCode.OperandRequirement, "The '!' operator requires a bool operand", expression.Location);
             }
 
             return operandType;
@@ -467,7 +467,7 @@ public sealed partial class SemanticAnalyzer
         if (expression.Operator == TokenKind.Tilde)
         {
             if (!operandType.IsInteger)
-                throw Error($"The '~' operator requires an integer operand, got {operandType}", expression.Location);
+                throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"The '~' operator requires an integer operand, got {operandType}", expression.Location);
             return operandType;
         }
 
@@ -475,16 +475,16 @@ public sealed partial class SemanticAnalyzer
         {
             // A member is changed through its field or its setter, so it is a valid target even when it has no address.
             if (!IsAddressable(expression.Operand, scope) && expression.Operand is not MemberAccessExpression)
-                throw Error($"The '{expression.Operator}' operator requires an addressable operand", expression.Location);
+                throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"The '{expression.Operator}' operator requires an addressable operand", expression.Location);
             ValidateWritableTarget(expression.Operand, scope, expressionTypes);
             if (!operandType.IsInteger && !operandType.IsPointer)
-                throw Error($"The '{expression.Operator}' operator requires an integer or pointer operand", expression.Location);
+                throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"The '{expression.Operator}' operator requires an integer or pointer operand", expression.Location);
             return operandType;
         }
 
         if (!operandType.IsNumeric)
         {
-            throw Error($"The '{expression.Operator}' operator requires a numeric operand", expression.Location);
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"The '{expression.Operator}' operator requires a numeric operand", expression.Location);
         }
 
         return operandType;
@@ -586,9 +586,9 @@ public sealed partial class SemanticAnalyzer
         var requiresInteger = expression.Operator is TokenKind.Ampersand or TokenKind.Pipe or TokenKind.Caret
             or TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan or TokenKind.Percent;
         if (requiresInteger && (!left.IsInteger || !right.IsInteger))
-            throw Error($"Operator '{expression.Operator}' requires integer operands", expression.Location);
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Operator '{expression.Operator}' requires integer operands", expression.Location);
         if (!left.IsNumeric || !right.IsNumeric)
-            throw Error($"Binary operator '{expression.Operator}' requires numeric operands", expression.Location);
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Binary operator '{expression.Operator}' requires numeric operands", expression.Location);
 
         var commonType = GetCommonNumericType(left, right, expression);
 
@@ -608,7 +608,7 @@ public sealed partial class SemanticAnalyzer
             return left;
         if (CanAssign(right, ((BinaryExpression)expression).Left, left))
             return right;
-        throw Error($"Binary operator '{((BinaryExpression)expression).Operator}' requires compatible numeric types",
+        throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Binary operator '{((BinaryExpression)expression).Operator}' requires compatible numeric types",
             expression.Location);
     }
 

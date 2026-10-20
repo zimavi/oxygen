@@ -70,7 +70,7 @@ public sealed partial class SemanticAnalyzer
                 return syntax.IsPointer ? SemanticType.PointerTo(namedInterface) : namedInterface;
             }
             if (!_structsByName.ContainsKey(syntax.NamedType))
-                throw Error($"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
+                throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
             ValidateTypeArgumentCount(syntax, _structsByName[syntax.NamedType].DeclaredTypeParameters.Count);
             var named = SemanticType.Struct(syntax.NamedType, ResolveTypeArguments(syntax));
             return syntax.IsPointer ? SemanticType.PointerTo(named) : named;
@@ -93,7 +93,7 @@ public sealed partial class SemanticAnalyzer
     private void ValidateTypeArgumentCount(TypeSyntax syntax, int expected)
     {
         if (syntax.DeclaredTypeArguments.Count != expected)
-            throw Error($"Type '{syntax.NamedType}' expects {expected} type argument(s), but received " +
+            throw ErrorWithCode(DiagnosticCode.ArgumentCount, $"Type '{syntax.NamedType}' expects {expected} type argument(s), but received " +
                         $"{syntax.DeclaredTypeArguments.Count}", syntax.Location);
     }
 

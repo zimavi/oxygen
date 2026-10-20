@@ -1,3 +1,4 @@
+using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Lexer;
 
@@ -44,7 +45,7 @@ public sealed partial class SemanticAnalyzer
             foreach (var constraint in parameters[index].Constraints)
             {
                 if (!_interfacesByName.ContainsKey(constraint))
-                    throw Error($"Interface '{constraint}' is not declared", parameters[index].Location, constraint.Length);
+                    throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Interface '{constraint}' is not declared", parameters[index].Location, constraint.Length);
                 if (!Satisfies(arguments[index], constraint))
                     throw Error(
                         $"Type '{arguments[index]}' does not satisfy the constraint '{constraint}' of type parameter " +

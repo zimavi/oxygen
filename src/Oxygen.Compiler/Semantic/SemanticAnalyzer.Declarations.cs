@@ -48,7 +48,7 @@ public sealed partial class SemanticAnalyzer
     {
         if (_enumsByName.ContainsKey(name) || _structsByName.ContainsKey(name) || _unionsByName.ContainsKey(name)
             || _classesByName.ContainsKey(name) || _interfacesByName.ContainsKey(name))
-            throw Error($"A type named '{name}' is already declared", location, name.Length);
+            throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A type named '{name}' is already declared", location, name.Length);
     }
 
     private static string MethodSignature(FunctionSymbol method) =>
@@ -64,7 +64,7 @@ public sealed partial class SemanticAnalyzer
         {
             if (!names.Add(parameter.Name))
             {
-                throw Error($"Parameter '{parameter.Name}' is declared more than once", parameter.Location, parameter.Name.Length);
+                throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"Parameter '{parameter.Name}' is declared more than once", parameter.Location, parameter.Name.Length);
             }
 
             parameters.Add(new ParameterSymbol(parameter.Name,

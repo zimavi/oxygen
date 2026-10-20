@@ -208,7 +208,7 @@ public sealed partial class SemanticAnalyzer
         var overloads = ResolveFunctions(call.Name, moduleName, imports, functions);
         if (overloads.Count == 0)
         {
-            throw Error($"Function '{call.Name}' is not declared", call.Location, call.Name.Length);
+            throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Function '{call.Name}' is not declared", call.Location, call.Name.Length);
         }
 
         var argumentTypes = call.Arguments
@@ -230,7 +230,7 @@ public sealed partial class SemanticAnalyzer
                 throw Error($"Function '{call.Name}' has ambiguous generic overloads", call.Location);
             var genericFunction = generic[0];
             if (call.ExplicitTypeArguments.Count != genericFunction.DeclaredGenericParameters.Count)
-                throw Error(
+                throw ErrorWithCode(DiagnosticCode.ArgumentCount, 
                     $"Function '{call.Name}' expects {genericFunction.DeclaredGenericParameters.Count} type argument(s), got {call.ExplicitTypeArguments.Count}",
                     call.Location);
             var substitutions = genericFunction.DeclaredGenericParameters
@@ -268,12 +268,12 @@ public sealed partial class SemanticAnalyzer
         {
             if (overloads.Count == 1)
             {
-                throw Error(
+                throw ErrorWithCode(DiagnosticCode.ArgumentCount, 
                     $"Function '{call.Name}' expects {overloads[0].Parameters.Count} argument(s), got {call.Arguments.Count}",
                     call.Location);
             }
 
-            throw Error(
+            throw ErrorWithCode(DiagnosticCode.ArgumentCount, 
                 $"Function '{call.Name}' has no overload accepting {call.Arguments.Count} argument(s)",
                 call.Location);
         }

@@ -1,3 +1,4 @@
+using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Lexer;
 
@@ -35,13 +36,13 @@ public sealed partial class SemanticAnalyzer
         public int LookupDepth(string name, SourceLocation location) =>
             _variables.ContainsKey(name) ? 0
             : _parent is not null ? _parent.LookupDepth(name, location) + 1
-            : throw Error($"Variable '{name}' is not declared", location, name.Length);
+            : throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Variable '{name}' is not declared", location, name.Length);
 
         public VariableSymbol Lookup(string name, SourceLocation location) =>
             _variables.TryGetValue(name, out var symbol)
                 ? MarkUsed(symbol)
                 : _parent?.Lookup(name, location)
-                  ?? throw Error($"Variable '{name}' is not declared", location, name.Length);
+                  ?? throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Variable '{name}' is not declared", location, name.Length);
 
         public SemanticType LookupThis(SourceLocation location) =>
             _thisType ?? throw Error(_thisError ?? "'this' is only valid inside a class instance body", location, 4);

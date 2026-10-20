@@ -107,7 +107,7 @@ public sealed partial class SemanticAnalyzer
         // breaks and loops that never end, so it decides this rather than whether the last statement returns.
         if (!function.ReturnType.IsVoid && _reachable && !_statementErrorReported)
         {
-            throw Error($"Function '{function.Name}' must return a value", function.Declaration.Location);
+            throw ErrorWithCode(DiagnosticCode.MustReturn, $"Function '{function.Name}' must return a value", function.Declaration.Location);
         }
 
         CollectAutomaticFrees(function);
@@ -157,7 +157,7 @@ public sealed partial class SemanticAnalyzer
             var valueType = AnalyzeExpression(initializer, scope, functions, moduleName, imports,
                 expressionTypes, resolvedCalls, expectedType: fieldType);
             if (!CanAssign(fieldType, initializer, valueType))
-                throw Error($"Cannot initialize field '{field.Name}' with {valueType}; expected {fieldType}",
+                throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot initialize field '{field.Name}' with {valueType}; expected {fieldType}",
                     initializer.Location);
         }
     }
@@ -306,7 +306,7 @@ public sealed partial class SemanticAnalyzer
         if (_failedDeclarations.Any(name => exception.Message == $"Variable '{name}' is not declared"))
             return;
         _diagnostics!.Add(DiagnosticPhase.Semantic, exception.Message, exception.Location, exception.Length,
-            exception.IsSourceAttributed ? exception.SourceName : _sourceName);
+            exception.IsSourceAttributed ? exception.SourceName : _sourceName, code: exception.Code);
         if (statement is VariableDeclarationStatement declaration)
             _failedDeclarations.Add(declaration.Name);
     }

@@ -139,7 +139,7 @@ public sealed class Tokenizer
                         DiagnosticPhase.Lexing,
                         exception.Message,
                         exception.Location,
-                        sourceName: sourceName);
+                        sourceName: sourceName, code: exception.Code);
                     if (position < source.Length)
                         Advance(source[position], ref position, ref line, ref column);
                 }
@@ -173,7 +173,7 @@ public sealed class Tokenizer
             }
             catch (LexicalException exception) when (diagnostics is not null)
             {
-                diagnostics.Add(DiagnosticPhase.Lexing, exception.Message, exception.Location, sourceName: sourceName);
+                diagnostics.Add(DiagnosticPhase.Lexing, exception.Message, exception.Location, sourceName: sourceName, code: exception.Code);
                 if (position < source.Length)
                 {
                     Advance(source[position], ref position, ref line, ref column);
@@ -218,7 +218,7 @@ public sealed class Tokenizer
             Advance(source[position], ref position, ref line, ref column);
             if (!char.IsDigit(Peek(source, position)))
             {
-                throw new LexicalException("A floating-point literal requires digits after the decimal point", location);
+                throw LexicalException.WithCode(DiagnosticCode.FloatingPointDigits, "A floating-point literal requires digits after the decimal point", location);
             }
 
             while (position < source.Length && char.IsDigit(source[position]))
@@ -257,7 +257,7 @@ public sealed class Tokenizer
                 : suffix is "i8" or "i16" or "i32" or "i64" or "u8" or "u16" or "u32" or "u64"
                     or "usize" or "isize";
             if (!valid)
-                throw new LexicalException("Invalid numeric literal suffix", new SourceLocation(line, column));
+                throw LexicalException.WithCode(DiagnosticCode.NumericSuffix, "Invalid numeric literal suffix", new SourceLocation(line, column));
         }
 
         return new Token(kind, source[start..position], location);
@@ -275,7 +275,7 @@ public sealed class Tokenizer
         while (position < source.Length && (hexadecimal ? Uri.IsHexDigit(source[position]) : source[position] is '0' or '1'))
             Advance(source[position], ref position, ref line, ref column);
         if (position == digitsStart)
-            throw new LexicalException("A hexadecimal or binary literal needs digits after its prefix", location);
+            throw LexicalException.WithCode(DiagnosticCode.RadixDigits, "A hexadecimal or binary literal needs digits after its prefix", location);
 
         var value = System.Numerics.BigInteger.Zero;
         foreach (var digit in source[digitsStart..position])
@@ -287,7 +287,7 @@ public sealed class Tokenizer
         var suffix = source[suffixStart..position];
         if (suffix.Length != 0 && suffix is not ("i8" or "i16" or "i32" or "i64" or "u8" or "u16" or "u32" or "u64"
                 or "usize" or "isize"))
-            throw new LexicalException("Invalid numeric literal suffix", location);
+            throw LexicalException.WithCode(DiagnosticCode.NumericSuffix, "Invalid numeric literal suffix", location);
         return new Token(TokenKind.IntegerLiteral,
             value.ToString(System.Globalization.CultureInfo.InvariantCulture) + suffix, location);
     }
@@ -301,7 +301,7 @@ public sealed class Tokenizer
         {
             if (source[position] is '\r' or '\n')
             {
-                throw new LexicalException("Unterminated string literal", location);
+                throw LexicalException.WithCode(DiagnosticCode.UnterminatedString, "Unterminated string literal", location);
             }
 
             if (source[position] == '\\')
@@ -309,7 +309,7 @@ public sealed class Tokenizer
                 Advance(source[position], ref position, ref line, ref column);
                 if (position >= source.Length)
                 {
-                    throw new LexicalException("Unterminated string literal", location);
+                    throw LexicalException.WithCode(DiagnosticCode.UnterminatedString, "Unterminated string literal", location);
                 }
             }
 
@@ -318,7 +318,7 @@ public sealed class Tokenizer
 
         if (position >= source.Length)
         {
-            throw new LexicalException("Unterminated string literal", location);
+            throw LexicalException.WithCode(DiagnosticCode.UnterminatedString, "Unterminated string literal", location);
         }
 
         Advance(source[position], ref position, ref line, ref column);
@@ -397,7 +397,7 @@ public sealed class Tokenizer
                 '!' => TokenKind.Bang,
                 '<' => TokenKind.LessThan,
                 '>' => TokenKind.GreaterThan,
-                _ => throw new LexicalException($"Unexpected character '{first}'", location)
+                _ => throw LexicalException.WithCode(DiagnosticCode.UnexpectedCharacter, $"Unexpected character '{first}'", location)
             }
         };
 
@@ -435,7 +435,7 @@ public sealed class Tokenizer
 
         if (position >= source.Length)
         {
-            throw new LexicalException("Unterminated block comment", location);
+            throw LexicalException.WithCode(DiagnosticCode.UnterminatedComment, "Unterminated block comment", location);
         }
 
         Advance(source[position], ref position, ref line, ref column);

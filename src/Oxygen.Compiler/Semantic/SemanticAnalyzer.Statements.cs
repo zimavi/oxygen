@@ -123,7 +123,7 @@ public sealed partial class SemanticAnalyzer
                     }
                     else if (!collectionType.IsClass
                              || !_classesByName.TryGetValue(collectionType.StructName!, out var collectionClass))
-                        throw Error($"For-in requires a fixed array or iterator-protocol collection, got {collectionType}",
+                        throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"For-in requires a fixed array or iterator-protocol collection, got {collectionType}",
                             forInStatement.Collection.Location);
                     else
                     {
@@ -140,7 +140,7 @@ public sealed partial class SemanticAnalyzer
                         var iteratorType = SubstituteGenericType(iter.ReturnType,
                             TypeArgumentSubstitutions(collectionClass, collectionType));
                         if (!iteratorType.IsClass || !_classesByName.TryGetValue(iteratorType.StructName!, out var iteratorClass))
-                            throw Error("Iterator 'iter()' must return an iterator class", iterCall.Location);
+                            throw ErrorWithCode(DiagnosticCode.MustReturn, "Iterator 'iter()' must return an iterator class", iterCall.Location);
                         // The receiver for next() is represented by the iterator value
                         // in the lowering; resolve the declared method directly here.
                         var nextCandidates = GetClassMethods(iteratorClass.Name, [])
@@ -153,7 +153,7 @@ public sealed partial class SemanticAnalyzer
                             TypeArgumentSubstitutions(iteratorClass, iteratorType));
                         if (!option.IsUnion || !string.Equals(option.EnumName, "Option", StringComparison.Ordinal)
                             || option.TypeArguments is not { Count: 1 })
-                            throw Error("Iterator next() must return Option<T> with the iteration element type",
+                            throw ErrorWithCode(DiagnosticCode.MustReturn, "Iterator next() must return Option<T> with the iteration element type",
                                 forInStatement.Collection.Location);
                         iterationElement = option.TypeArguments[0];
                         // Monomorphization specializes the recorded iter() call for the collection's type arguments, and the
@@ -167,7 +167,7 @@ public sealed partial class SemanticAnalyzer
                     }
                     var forInScope = new Scope(scope, MarkVariableUsed);
                     if (forInScope.ContainsInCurrentScope(forInStatement.VariableName))
-                        throw Error($"Variable '{forInStatement.VariableName}' is already declared in this scope",
+                        throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"Variable '{forInStatement.VariableName}' is already declared in this scope",
                             forInStatement.Location, forInStatement.VariableName.Length);
                     var variable = new VariableSymbol(iterationElement, false,
                         new VariableDeclarationStatement(forInStatement.VariableType, forInStatement.VariableName, false,
@@ -269,7 +269,7 @@ public sealed partial class SemanticAnalyzer
                         }
 
                         if (!IsSwitchComparable(valueType))
-                            throw Error($"Switch requires a comparable value, got {valueType}", switchStatement.Value.Location);
+                            throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Switch requires a comparable value, got {valueType}", switchStatement.Value.Location);
                         var seenLabels = new HashSet<string>(StringComparer.Ordinal);
                         var hasDefault = false;
                         var caseReturnsForValue = new bool[switchStatement.Cases.Count];
@@ -490,12 +490,12 @@ public sealed partial class SemanticAnalyzer
     {
         if (declaration.Type.IsInferred && declaration.Initializer is null)
         {
-            throw Error($"Variable '{declaration.Name}' using 'var' requires an initializer", declaration.Location, declaration.Name.Length);
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Variable '{declaration.Name}' using 'var' requires an initializer", declaration.Location, declaration.Name.Length);
         }
 
         if (scope.ContainsInCurrentScope(declaration.Name))
         {
-            throw Error($"Variable '{declaration.Name}' is already declared in this scope", declaration.Location, declaration.Name.Length);
+            throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"Variable '{declaration.Name}' is already declared in this scope", declaration.Location, declaration.Name.Length);
         }
 
         if (declaration.IsConst && declaration.Initializer is null)
@@ -523,7 +523,7 @@ public sealed partial class SemanticAnalyzer
 
         if (initializerType is not null && !CanAssign(type, declaration.Initializer!, initializerType))
         {
-            throw Error(
+            throw ErrorWithCode(DiagnosticCode.ConversionMismatch, 
                 $"Cannot initialize '{declaration.Name}' with {initializerType}; expected {type}",
                 declaration.Initializer!.Location);
         }
@@ -583,7 +583,7 @@ public sealed partial class SemanticAnalyzer
         }
         if (!CanAssign(targetType, assignment.Value, valueType))
         {
-            throw Error($"Cannot assign {valueType} to target of type {targetType}", assignment.Value.Location);
+            throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot assign {valueType} to target of type {targetType}", assignment.Value.Location);
         }
 
         ValidateWritableTarget(assignment.Target, scope, expressionTypes);
@@ -636,13 +636,13 @@ public sealed partial class SemanticAnalyzer
                 && ConstRootName(inner, scope, expressionTypes) is { } root)
             {
                 if (_currentOwnerClass?.Name != innerType.StructName)
-                    throw Error(
+                    throw ErrorWithCode(DiagnosticCode.ConstAssignment, 
                         $"Cannot assign to a field of const variable '{root}' outside class '{innerType.StructName}'",
                         target.Location, root.Length);
                 return;
             }
             if (inner is IdentifierExpression identifier && scope.Lookup(identifier.Name, identifier.Location).IsConst)
-                throw Error($"Cannot assign to a part of const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
+                throw ErrorWithCode(DiagnosticCode.ConstAssignment, $"Cannot assign to a part of const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
             current = inner;
         }
     }
@@ -675,7 +675,7 @@ public sealed partial class SemanticAnalyzer
         {
             var variable = scope.Lookup(identifier.Name, identifier.Location);
             if (variable.IsConst)
-                throw Error($"Cannot assign to const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
+                throw ErrorWithCode(DiagnosticCode.ConstAssignment, $"Cannot assign to const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
         }
         else if (target is MemberAccessExpression member)
         {
@@ -687,13 +687,13 @@ public sealed partial class SemanticAnalyzer
                     : null;
             var field = targetClass?.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (field is not null && field.IsConst && !_currentIsConstructor)
-                throw Error($"Cannot assign to const field '{field.Name}'", target.Location, field.Name.Length);
+                throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot assign to const field '{field.Name}'", target.Location, field.Name.Length);
             ValidatePropertyWrite(member, scope);
         }
         else if (target is IndexExpression index
                  && index.Target is IdentifierExpression indexIdentifier
                  && scope.Lookup(indexIdentifier.Name, indexIdentifier.Location).IsConst)
-            throw Error($"Cannot assign to an element of const variable '{indexIdentifier.Name}'", target.Location,
+            throw ErrorWithCode(DiagnosticCode.ConstAssignment, $"Cannot assign to an element of const variable '{indexIdentifier.Name}'", target.Location,
                 indexIdentifier.Name.Length);
         else if (target is not (UnaryExpression { Operator: TokenKind.Star } or IndexExpression or MemberAccessExpression))
         {
@@ -769,7 +769,7 @@ public sealed partial class SemanticAnalyzer
         {
             if (!function.ReturnType.IsVoid)
             {
-                throw Error($"Function '{function.Name}' must return a value of type {function.ReturnType}", returnStatement.Location);
+                throw ErrorWithCode(DiagnosticCode.MustReturn, $"Function '{function.Name}' must return a value of type {function.ReturnType}", returnStatement.Location);
             }
 
             return;
@@ -788,7 +788,7 @@ public sealed partial class SemanticAnalyzer
             _escapingClassLocals.Add(declaration);
         if (!CanAssign(function.ReturnType, returnStatement.Value, valueType))
         {
-            throw Error(
+            throw ErrorWithCode(DiagnosticCode.ConversionMismatch, 
                 $"Cannot return {valueType} from function '{function.Name}'; expected {function.ReturnType}",
                 returnStatement.Value.Location);
         }
