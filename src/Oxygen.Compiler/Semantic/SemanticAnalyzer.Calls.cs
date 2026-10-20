@@ -138,7 +138,7 @@ public sealed partial class SemanticAnalyzer
             if (head is null || LookupVariableType(scope, head, call.Location) is not null)
             {
                 var receiverType = AnalyzeExpression(call.Receiver, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-                return AnalyzeMethodCall(call, receiverType, call.Name, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)
+                return AnalyzeMethodCall(call, receiverType, call.Name, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, allowVoid)
                     ?? throw ErrorWithCode(DiagnosticCode.NotDeclared,
                         $"Method '{call.Name}' is not declared for a receiver of type {receiverType}", call.Location, call.Name.Length);
             }
@@ -165,7 +165,7 @@ public sealed partial class SemanticAnalyzer
             if (receiverType is not null)
             {
                 var methodResult = AnalyzeMethodCall(call, receiverType, methodName, scope, functions, moduleName, imports,
-                    expressionTypes, resolvedCalls);
+                    expressionTypes, resolvedCalls, allowVoid);
                 if (methodResult is not null)
                     return methodResult;
             }
@@ -344,7 +344,8 @@ public sealed partial class SemanticAnalyzer
         string moduleName,
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
-        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        bool allowVoid = true)
     {
         _callReceiverTypes[call] = receiverType;
         if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
@@ -384,6 +385,12 @@ public sealed partial class SemanticAnalyzer
             }
             if (methodMatches.Count > 1)
                 throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
+            // A static method of a base class is called through an object of the subclass, as through the subclass name.
+            if (methodCandidates.Length == 0 && receiverClass.StaticMethods.All(method => method.Name != methodName)
+                && BaseClassOf(receiverClass) is { } baseOfReceiver
+                && DeclaringStaticClass(baseOfReceiver, candidate => candidate.StaticMethods.Any(method => method.Name == methodName)) is not null)
+                return AnalyzeStaticCall(call, receiverClass, methodName, scope, functions, moduleName, imports,
+                    expressionTypes, resolvedCalls, allowVoid);
             if (receiverClass.StaticMethods.Any(method => method.Name == methodName))
                 throw Error($"Static method '{methodName}' is called through its class, as {receiverClass.Name}.{methodName}(...), not through an object", call.Location, methodName.Length);
             if (methodCandidates.Length > 0)

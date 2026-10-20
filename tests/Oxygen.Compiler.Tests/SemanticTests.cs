@@ -3132,13 +3132,22 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void RejectsAStaticFieldThroughASubclassThatDoesNotDeclareIt()
+    public void AcceptsBaseClassStaticMembersThroughASubclassNameOrAnObjectOfIt()
     {
         var result = AnalyzeWithDiagnostics(
-            "class Base { static i32 n = 1; } class Child : Base { } i32 main() { return Child.n; }");
+            "class Base { static i32 n = 1; static i32 twice() { return n * 2; } } class Child : Base { } " +
+            "i32 main() { Child c = new Child(); return Child.n + Child.twice() + c.n + c.twice(); }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RejectsAStaticFieldOfTheObjectsOwnClassThroughAnObject()
+    {
+        var result = AnalyzeWithDiagnostics("class Child { static i32 own = 1; } i32 main() { Child c = new Child(); return c.own; }");
 
         var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
-        Assert.Contains("is declared by 'Base', not 'Child'", diagnostic.Message);
+        Assert.Contains("is accessed through its class, as Child.own", diagnostic.Message);
     }
 
     [Theory]

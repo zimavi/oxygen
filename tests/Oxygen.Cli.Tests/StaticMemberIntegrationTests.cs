@@ -130,4 +130,37 @@ public sealed class StaticMemberIntegrationTests : IDisposable
         Assert.Equal(0, run.ExitCode);
         Assert.Equal("10\n2\n1\n2\n1\n2\n1\n4\n", run.Output.Replace("\r\n", "\n"));
     }
+
+    [SkippableFact]
+    public void BaseClassStaticMembersAreReachedThroughASubclassNameAndAnObjectOfIt()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var run = NativeProgram.BuildAndRun(_directory,
+            """
+            import std.io;
+
+            class Base {
+                static i32 n = 4;
+
+                static i32 twice() {
+                    return n * 2;
+                }
+            }
+
+            class Child : Base {
+            }
+
+            i32 main() {
+                Child c = new Child();
+                io.println(Child.n);
+                io.println(c.twice());
+                c.n = 7;
+                io.println(Base.n);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("4\n8\n7\n", run.Output.Replace("\r\n", "\n"));
+    }
 }

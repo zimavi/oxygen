@@ -145,39 +145,48 @@ public sealed partial class SemanticAnalyzer
             ? cls
             : null;
 
-    // The static field that `Class.member` names. Only the class's own static fields are reached this way. A private one is
-    // visible only in its class, an instance field is an error, and a field declared by a base class is named through that base.
+    // The class that declares a static member, found among `cls` and its base classes, nearest first, or null when none declares
+    // it. A static member of a base class is reached through a subclass name, as `Child.member`.
+    private ClassSymbol? DeclaringStaticClass(ClassSymbol cls, Func<ClassSymbol, bool> declares)
+    {
+        for (ClassSymbol? owner = cls; owner is not null; owner = BaseClassOf(owner))
+        {
+            if (declares(owner))
+                return owner;
+        }
+
+        return null;
+    }
+
+    private ClassSymbol? BaseClassOf(ClassSymbol cls) =>
+        cls.BaseTypeName is not null && _classesByName.TryGetValue(cls.BaseTypeName, out var baseClass) ? baseClass : null;
+
+    // A static member of a generic base class is named through the base's own instances, which a subclass name does not give.
+    private void RequireReachableFrom(ClassSymbol cls, ClassSymbol owner, SourceLocation location, string name, int length)
+    {
+        if (!ReferenceEquals(owner, cls) && owner.DeclaredTypeParameters.Count > 0)
+            throw Error($"Static member '{name}' of generic class '{owner.Name}' is not reached through the subclass '{cls.Name}'; write '{owner.Name}<T>.{name}' with the type arguments",
+                location, length);
+    }
+
+    // The static field that `Class.member` names: the class's own, or one declared by a base class. A private one is visible
+    // only in the class that declares it, and an instance field is an error.
     private GlobalVariableSymbol StaticFieldOf(ClassSymbol cls, MemberAccessExpression member, string moduleName)
     {
-        var symbol = cls.StaticFields.FirstOrDefault(field => field.Name == member.MemberName);
-        if (symbol is null)
+        var owner = DeclaringStaticClass(cls, candidate => candidate.StaticFields.Any(field => field.Name == member.MemberName));
+        if (owner is null)
         {
             if (cls.Fields.Any(field => field.Name == member.MemberName))
                 throw Error($"Field '{member.MemberName}' of '{cls.Name}' is an instance field; access it through an object",
                     member.Location, member.MemberName.Length);
-            var declaringBase = BaseClassWithStaticField(cls, member.MemberName);
-            if (declaringBase is not null)
-                throw Error(
-                    $"Static field '{member.MemberName}' is declared by '{declaringBase.Name}', not '{cls.Name}'; write '{declaringBase.Name}.{member.MemberName}'",
-                    member.Location, member.MemberName.Length);
             throw Error($"Class '{cls.Name}' has no static field named '{member.MemberName}'", member.Location, member.MemberName.Length);
         }
 
-        if (!IsMemberAccessible(StaticFieldVisibility(cls, symbol), cls.Name, cls.ModuleName, moduleName, cls.Name))
-            throw Error($"Static field '{member.MemberName}' of '{cls.Name}' cannot be used here", member.Location, member.MemberName.Length);
+        RequireReachableFrom(cls, owner, member.Location, member.MemberName, member.MemberName.Length);
+        var symbol = owner.StaticFields.First(field => field.Name == member.MemberName);
+        if (!IsMemberAccessible(StaticFieldVisibility(owner, symbol), owner.Name, owner.ModuleName, moduleName, owner.Name))
+            throw Error($"Static field '{member.MemberName}' of '{owner.Name}' cannot be used here", member.Location, member.MemberName.Length);
         return symbol;
-    }
-
-    private ClassSymbol? BaseClassWithStaticField(ClassSymbol cls, string name)
-    {
-        for (var baseName = cls.BaseTypeName; baseName is not null && _classesByName.TryGetValue(baseName, out var baseClass);
-             baseName = baseClass.BaseTypeName)
-        {
-            if (baseClass.StaticFields.Any(field => field.Name == name))
-                return baseClass;
-        }
-
-        return null;
     }
 
     // The visibility of a static field, which is recorded on its declaration in its class.
@@ -209,12 +218,9 @@ public sealed partial class SemanticAnalyzer
         if (typeArguments is null && cls.DeclaredTypeParameters.Count > 0)
             throw Error($"Class '{cls.Name}' is generic; write its type arguments, such as {cls.Name}<T>.{methodName}(...)",
                 call.Location, cls.Name.Length);
-        _callReceiverTypes[call] = SemanticType.Class(cls.Name, typeArguments);
-        var substitutions = cls.DeclaredTypeParameters
-            .Zip(typeArguments ?? [], (name, type) => (name, type))
-            .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
-
-        var named = cls.StaticMethods.Where(method => method.Name == methodName).ToArray();
+        // A static method of a base class is called through the subclass name, as `Child.method(...)`, and its receiver is the base.
+        var owner = DeclaringStaticClass(cls, candidate => candidate.StaticMethods.Any(method => method.Name == methodName)) ?? cls;
+        var named = owner.StaticMethods.Where(method => method.Name == methodName).ToArray();
         if (named.Length == 0)
         {
             if (cls.StaticFields.Any(field => field.Name == methodName))
@@ -225,11 +231,17 @@ public sealed partial class SemanticAnalyzer
             throw ErrorWithCode(DiagnosticCode.NotDeclared,
                 $"Class '{cls.Name}' has no static method named '{methodName}'", call.Location, methodName.Length);
         }
+        RequireReachableFrom(cls, owner, call.Location, methodName, methodName.Length);
+        var ownerTypeArguments = ReferenceEquals(owner, cls) ? typeArguments : null;
+        _callReceiverTypes[call] = SemanticType.Class(owner.Name, ownerTypeArguments);
+        var substitutions = owner.DeclaredTypeParameters
+            .Zip(ownerTypeArguments ?? [], (name, type) => (name, type))
+            .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
 
         var candidates = named.Where(method => IsMemberAccessible(method.Visibility,
-            MethodOwnerName(method), MethodOwnerModule(method), moduleName, cls.Name)).ToArray();
+            MethodOwnerName(method), MethodOwnerModule(method), moduleName, owner.Name)).ToArray();
         if (candidates.Length == 0)
-            throw Error($"Static method '{methodName}' of '{cls.Name}' cannot be used here", call.Location, methodName.Length);
+            throw Error($"Static method '{methodName}' of '{owner.Name}' cannot be used here", call.Location, methodName.Length);
 
         var argumentTypes = call.Arguments
             .Select(argument => AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls))

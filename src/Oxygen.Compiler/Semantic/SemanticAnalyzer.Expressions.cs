@@ -301,6 +301,21 @@ public sealed partial class SemanticAnalyzer
                     checkedClass.Name);
                 return SubstituteGenericType(field.Type, substitutions);
             }
+            // A static field of a base class is reached through an object of the subclass, as through the subclass name. A static
+            // field of the object's own class is not: it is named through the class.
+            if (cls.StaticFields.Any(field => field.Name == member.MemberName))
+                throw Error($"Static field '{member.MemberName}' of '{cls.Name}' is accessed through its class, as {cls.Name}.{member.MemberName}",
+                    member.Location, member.MemberName.Length);
+            if (BaseClassOf(cls) is { } baseOfObject
+                && DeclaringStaticClass(baseOfObject, candidate => candidate.StaticFields.Any(field => field.Name == member.MemberName)) is not null)
+            {
+                var inheritedStatic = StaticFieldOf(cls, member, moduleName);
+                if (forWrite && inheritedStatic.IsConst)
+                    throw ErrorWithCode(DiagnosticCode.ConstAssignment,
+                        $"Cannot assign to const static field '{inheritedStatic.Name}'", member.Location, member.MemberName.Length);
+                _globalReferences[member] = inheritedStatic;
+                return inheritedStatic.Type;
+            }
             if (cls.Methods.Any(method => method.Name == member.MemberName))
                 return SemanticType.PointerTo(SemanticType.FromPrimitive(PrimitiveType.Void));
             throw Error($"Class '{cls.Name}' has no member named '{member.MemberName}'", member.Location);

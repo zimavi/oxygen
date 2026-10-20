@@ -54,6 +54,16 @@ i32 main() {
 - Overloads follow the usual rules, including default parameters and named
   arguments.
 
+## Base classes
+
+A static member of a base class is reached through a subclass name, as
+`Child.n` and `Child.twice()`, and through an object of the subclass, as
+`child.n`. The two mean the same member. A static member of the object's own
+class is not reached through an object: write its class name.
+
+A static member of a generic base class is not reached through a subclass yet.
+Write the base's own name with its type arguments.
+
 ## Visibility
 
 `public` and `private` apply to static members as they do to instance members.
@@ -94,12 +104,11 @@ yet reachable from outside the class.
   not supported yet.
 - A static field whose initializer is not a constant, or whose type is not
   numeric or `bool`.
-- A static field named through an object, or an instance field named through its
-  class.
+- A static field of the object's own class named through an object, or an instance
+  field named through its class.
 - `this` in a static method.
-- A static method called through an object. Call it through its class.
-- A static field or method named through a subclass that does not declare it.
-  `Child.n` is an error when only `Base` declares `n`; write `Base.n`.
+- A static method of the object's own class called through an object. Call it through
+  its class.
 - Assignment to a `static const` field.
 
 ## Limits
@@ -107,5 +116,3 @@ yet reachable from outside the class.
 - Static fields of class type, and static properties, are not supported.
 - A static field of a generic class is reached by its bare name inside the class
   only.
-- A static method is not inherited for lookup through a subclass name, as
-  described above.
