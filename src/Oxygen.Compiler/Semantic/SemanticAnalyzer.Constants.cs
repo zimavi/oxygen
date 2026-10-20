@@ -103,9 +103,14 @@ public sealed partial class SemanticAnalyzer
         }
     }
 
+    // The type suffix of a numeric literal, or the empty string. It is found from the end, so that an exponent does not hide it.
+    private static string NumericSuffix(string lexeme) =>
+        new[] { "usize", "isize", "f32", "f64", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64" }
+            .FirstOrDefault(known => lexeme.EndsWith(known, StringComparison.Ordinal)) ?? "";
+
     private static PrimitiveType ParseNumericLiteralType(string lexeme, bool floating)
     {
-        var suffix = lexeme.TrimStart('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.');
+        var suffix = NumericSuffix(lexeme);
         if (suffix.Length != 0)
             return suffix switch
             {

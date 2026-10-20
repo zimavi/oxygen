@@ -51,12 +51,13 @@ public sealed partial class SemanticAnalyzer
         int length = 1,
         string? sourceName = null)
     {
+        // A warning is about the file being analysed unless the caller names another one.
         _diagnostics?.AddWarning(
             DiagnosticPhase.Semantic,
             message,
             location,
             length,
-            sourceName);
+            sourceName ?? _sourceName);
     }
 
 }

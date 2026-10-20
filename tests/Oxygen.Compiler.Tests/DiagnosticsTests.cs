@@ -150,4 +150,18 @@ public sealed class DiagnosticsTests
         Assert.Equal(DiagnosticPhase.Lexing, diagnostic.Phase);
         Assert.Equal("Unterminated block comment", diagnostic.Message);
     }
+
+    [Fact]
+    public void UnusedVariableWarningNamesItsSourceFile()
+    {
+        var tokenizer = new Tokenizer();
+        var tokens = tokenizer.TokenizeWithDiagnostics("i32 main() { i32 unused = 1; return 0; }", "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+
+        var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer()
+            .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        var warning = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Message.Contains("is never used"));
+        Assert.Equal("main.oxy", warning.SourceName);
+    }
 }

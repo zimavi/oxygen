@@ -72,7 +72,7 @@ public sealed class Tokenizer
     public Tokenizer(ILogger? logger = null)
     {
         _logger = logger ?? new LoggerConfiguration()
-            .MinimumLevel.Debug()
+            .MinimumLevel.Warning()
             .WriteTo.Console()
             .CreateLogger();
     }
@@ -204,6 +204,8 @@ public sealed class Tokenizer
         string source, ref int position, ref int line, ref int column, SourceLocation location)
     {
         var start = position;
+        if (source[position] == '0' && Peek(source, position + 1) is 'x' or 'X' or 'b' or 'B')
+            return ReadRadixInteger(source, ref position, ref line, ref column, location);
         while (position < source.Length && char.IsDigit(source[position]))
         {
             Advance(source[position], ref position, ref line, ref column);
@@ -225,6 +227,23 @@ public sealed class Tokenizer
             }
         }
 
+        // An exponent makes a floating-point literal, as in 1e5 or 2.5E-3. An `e` that is not followed by digits is not one.
+        if (Peek(source, position) is 'e' or 'E')
+        {
+            var signed = Peek(source, position + 1) is '+' or '-';
+            if (char.IsDigit(Peek(source, signed ? position + 2 : position + 1)))
+            {
+                kind = TokenKind.FloatingPointLiteral;
+                Advance(source[position], ref position, ref line, ref column);
+                if (signed)
+                    Advance(source[position], ref position, ref line, ref column);
+                while (position < source.Length && char.IsDigit(source[position]))
+                {
+                    Advance(source[position], ref position, ref line, ref column);
+                }
+            }
+        }
+
         if (IsIdentifierStart(Peek(source, position)))
         {
             var suffixStart = position;
@@ -242,6 +261,35 @@ public sealed class Tokenizer
         }
 
         return new Token(kind, source[start..position], location);
+    }
+
+    // A hexadecimal (0x) or binary (0b) integer. Its digits are converted to decimal text, which the rest of the compiler reads,
+    // so the token's lexeme is decimal digits followed by the suffix.
+    private static Token ReadRadixInteger(
+        string source, ref int position, ref int line, ref int column, SourceLocation location)
+    {
+        var hexadecimal = char.ToLowerInvariant(Peek(source, position + 1)) == 'x';
+        Advance(source[position], ref position, ref line, ref column);
+        Advance(source[position], ref position, ref line, ref column);
+        var digitsStart = position;
+        while (position < source.Length && (hexadecimal ? Uri.IsHexDigit(source[position]) : source[position] is '0' or '1'))
+            Advance(source[position], ref position, ref line, ref column);
+        if (position == digitsStart)
+            throw new LexicalException("A hexadecimal or binary literal needs digits after its prefix", location);
+
+        var value = System.Numerics.BigInteger.Zero;
+        foreach (var digit in source[digitsStart..position])
+            value = value * (hexadecimal ? 16 : 2) + Convert.ToInt32(digit.ToString(), 16);
+
+        var suffixStart = position;
+        while (position < source.Length && IsIdentifierPart(source[position]))
+            Advance(source[position], ref position, ref line, ref column);
+        var suffix = source[suffixStart..position];
+        if (suffix.Length != 0 && suffix is not ("i8" or "i16" or "i32" or "i64" or "u8" or "u16" or "u32" or "u64"
+                or "usize" or "isize"))
+            throw new LexicalException("Invalid numeric literal suffix", location);
+        return new Token(TokenKind.IntegerLiteral,
+            value.ToString(System.Globalization.CultureInfo.InvariantCulture) + suffix, location);
     }
 
     private static Token ReadString(

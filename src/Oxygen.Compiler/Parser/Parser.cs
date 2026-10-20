@@ -40,7 +40,7 @@ public sealed partial class Parser
 
         _tokens = tokens;
         _logger = logger ?? new LoggerConfiguration()
-            .MinimumLevel.Debug()
+            .MinimumLevel.Warning()
             .WriteTo.Console()
             .CreateLogger();
     }

@@ -113,7 +113,7 @@ public sealed partial class SemanticAnalyzer
     public SemanticAnalyzer(ILogger? logger = null)
     {
         _logger = logger ?? new LoggerConfiguration()
-            .MinimumLevel.Debug()
+            .MinimumLevel.Warning()
             .WriteTo.Console()
             .CreateLogger();
     }

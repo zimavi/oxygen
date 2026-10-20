@@ -217,4 +217,27 @@ public sealed class LexerTests
 
         Assert.Equal("a\0b\uD83D\uDE00", value);
     }
+
+    [Fact]
+    public void TokenizesHexadecimalAndBinaryIntegersAsDecimalText()
+    {
+        var tokens = _lexer.Tokenize("0x1F 0xffu8 0b101").ToList();
+
+        Assert.Equal(new[] { "31", "255u8", "5" }, tokens.Where(token => token.Kind == TokenKind.IntegerLiteral).Select(token => token.Lexeme));
+    }
+
+    [Fact]
+    public void TokenizesExponentsAsFloatingPointLiterals()
+    {
+        var tokens = _lexer.Tokenize("1e5 2.5E-3 4e+2f32").ToList();
+
+        Assert.All(tokens.Take(3), token => Assert.Equal(TokenKind.FloatingPointLiteral, token.Kind));
+        Assert.Equal(new[] { "1e5", "2.5E-3", "4e+2f32" }, tokens.Take(3).Select(token => token.Lexeme));
+    }
+
+    [Fact]
+    public void RadixLiteralWithoutDigitsIsRejected()
+    {
+        Assert.Throws<LexicalException>(() => _lexer.Tokenize("0x").ToList());
+    }
 }
