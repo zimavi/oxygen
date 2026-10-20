@@ -24,3 +24,26 @@ public void free<T>(T* pointer) {
 public T* realloc<T>(T* pointer, u64 count) {
     return cast<T*>(reallocate(cast<void*>(pointer), arrayBytes(count, sizeof<T>())));
 }
+
+// An owning box for one value on the heap. The box frees its storage when it is deleted, and it owns the pointer that it was given
+// by the first constructor.
+public class Box<T> {
+    private T* pointer;
+
+    public Box(T* pointer) {
+        this.pointer = pointer;
+    }
+
+    public Box(T value) {
+        pointer = alloc<T>(1);
+        *pointer = value;
+    }
+
+    public ~Box() {
+        free(pointer);
+    }
+
+    public T* get() {
+        return pointer;
+    }
+}
