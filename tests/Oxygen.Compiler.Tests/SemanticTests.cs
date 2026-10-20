@@ -3027,6 +3027,91 @@ public sealed class SemanticTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
     }
 
+    private const string OptionUnion = "union Option<T> { Some(T); None; } ";
+
+    [Fact]
+    public void InfersAUnionCaseTypeArgumentFromItsPayload()
+    {
+        var result = AnalyzeWithDiagnostics(OptionUnion + "i32 main() { var res = Option.Some(\"hello\"); return 0; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void InfersAUnionCaseTypeArgumentFromTheExpectedReturnType()
+    {
+        var result = AnalyzeWithDiagnostics(OptionUnion + "Option<i32> none() { return Option.None(); } i32 main() { return 0; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RejectsAUnionCaseWhoseTypeArgumentNothingDetermines()
+    {
+        var result = AnalyzeWithDiagnostics(OptionUnion + "i32 main() { var n = Option.None(); return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("Cannot infer type parameter 'T' of union case 'None'", diagnostic.Message);
+        Assert.Equal(DiagnosticCode.CannotInfer, diagnostic.Code);
+    }
+
+    [Fact]
+    public void InfersAPointerParameterFromAPointerArgumentWhileAnIntegerLiteralConvertsToU64()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i64 first<T>(T* values, u64 count) { return 0; } " +
+            "i64 use(i64* values) { return first(values, 4); } i32 main() { return 0; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RejectsArgumentsThatBindOneTypeParameterToUnrelatedTypes()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "T first<T>(T a, T b) { return a; } i32 main() { return first(1, \"x\"); }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("do not agree on its type arguments", diagnostic.Message);
+        Assert.Equal(DiagnosticCode.CannotInfer, diagnostic.Code);
+    }
+
+    [Fact]
+    public void BindsTwoClassesToTheirNearestCommonBaseClass()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "class Animal { i32 legs; Animal(i32 legs) { this.legs = legs; } } " +
+            "class Dog : Animal { Dog() : base(4) { } } class Cat : Animal { Cat() : base(4) { } } " +
+            "Animal pick<T>(T first, T second) { return first; } " +
+            "i32 main() { Animal a = pick(new Dog(), new Cat()); return a.legs; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void BindsTwoUnrelatedClassesToTheirSharedInterface()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "interface Shape { i32 sides(); } " +
+            "class Circle : Shape { i32 sides() { return 0; } } class Square : Shape { i32 sides() { return 4; } } " +
+            "Shape pick<T>(T first, T second) { return first; } " +
+            "i32 main() { Shape s = pick(new Circle(), new Square()); return s.sides(); }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void WidensAClassBindingToTheExpectedInterfaceOfAUnionCase()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "interface Iterator<T> { Option<T> next(); } interface Iterable<T> { Iterator<T> iter(); } " + OptionUnion +
+            "class Empty : Iterator<i32> { Option<i32> next() { return Option.None(); } } " +
+            "class Items : Iterable<i32> { Iterator<i32> iter() { return new Empty(); } } " +
+            "i32 main() { Items items = new Items(); Option<Iterable<i32>> it = Option.Some(items); return 0; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
     private SemanticModel Analyze(string source)
     {
         var unit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();

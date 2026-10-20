@@ -29,6 +29,38 @@ i32 main() {
 Generics are resolved entirely at compile time. There is no runtime type
 argument, no boxing, and no shared code between instantiations.
 
+### Inference
+
+A generic function call, a constructor call, or a union case takes each type
+parameter from the types of its arguments, through pointers, arrays, and type
+arguments as well as plain parameters. It then takes an open parameter from
+the expected type, such as the declared type of a variable or the return type
+of the enclosing function. Arguments are not converted for inference: a
+parameter of a concrete type, such as `u64`, accepts an integer literal by the
+usual conversion rules.
+
+- A parameter bound to two types that are not classes or interfaces is an
+  error. Two classes or interfaces bind to the wider type when one converts
+  implicitly to the other, and otherwise to their nearest common supertype.
+  So `both(new Dog(), new Animal())` binds `T` to `Animal` in either order, and
+  two unrelated classes that share an interface bind to that interface.
+- An expected type binds a parameter that no argument reached. It also widens a
+  class or interface binding to the expected type when the bound type converts
+  to it, so `Option<Iterable<i32>> it = Option.Some(items);` binds `T` to
+  `Iterable<i32>`. An expected type of another shape binds nothing, and a value
+  of a different primitive type is reported where it is used.
+- A parameter that nothing binds is an error. Write its type arguments
+  explicitly, such as `Option<string>.None()`. A union case without a payload is
+  written with parentheses, `Option.None()`.
+
+```oxygen
+Option<i32> none() {
+    return Option.None(); // T is i32 from the return type
+}
+
+var named = Option.Some("hello"); // Option<string>
+```
+
 ## Constraints
 
 A type parameter can require several interfaces with `&`, for example `void foo<T : A & B, R : C>()`.

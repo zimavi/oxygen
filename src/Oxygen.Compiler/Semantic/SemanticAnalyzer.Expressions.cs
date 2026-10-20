@@ -71,9 +71,9 @@ public sealed partial class SemanticAnalyzer
                 conditional, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             CallExpression call => AnalyzeCallExpression(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid),
             ClassConstructionExpression creation => AnalyzeClassConstructionExpression(
-                creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             NewExpression creation => AnalyzeNewExpression(
-                creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                creation, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             _ => throw new InvalidOperationException($"Unsupported expression type {expression.GetType().Name}.")
         };
 
@@ -314,7 +314,8 @@ public sealed partial class SemanticAnalyzer
         NewExpression expression, Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName,
         IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types,
-        IDictionary<CallExpression, FunctionSymbol> calls)
+        IDictionary<CallExpression, FunctionSymbol> calls,
+        SemanticType? expectedType = null)
     {
         if (expression.Type.NamedType is null || !_classesByName.TryGetValue(expression.Type.NamedType, out var cls)
             || expression.Type.IsPointer || expression.Type.IsArray || expression.Type.IsString)
@@ -322,45 +323,18 @@ public sealed partial class SemanticAnalyzer
         RequireConstructibleHere(cls, expression.Location);
         var arguments = expression.Arguments.Select(argument =>
             AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
-        var constructedType = expression.Type.DeclaredTypeArguments.Count == 0
-            ? SemanticType.Class(cls.Name)
-            : ResolveType(expression.Type);
-        var substitutions = cls.DeclaredTypeParameters
-            .Zip(constructedType.TypeArguments ?? [], (name, type) => (name, type))
-            .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
-        var matches = cls.Constructors.Where(constructor => IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName))
-            .Where(constructor => constructor.AcceptsArgumentCount(arguments.Length))
-            .Where(constructor => constructor.Parameters.Take(arguments.Length).Select((parameter, index) =>
-            {
-                if (expression.Type.DeclaredTypeArguments.Count == 0)
-                    InferClassTypeArguments(parameter.Type, arguments[index], cls.DeclaredTypeParameters, substitutions);
-                return CanAssign(
-                    SubstituteGenericType(parameter.Type, substitutions),
-                    expression.Arguments[index],
-                    arguments[index]);
-            }).All(match => match)).ToArray();
-        if (matches.Length == 0)
-        {
-            EnsureConstructorAccessible(cls, arguments.Length, moduleName, expression.Location);
-            throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
-        }
-        if (matches.Length > 1)
-            throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
-        _constructorSelections[expression] = IndexOfConstructor(cls, matches[0]);
-        if (substitutions.Count != cls.DeclaredTypeParameters.Count)
-            throw ErrorWithCode(DiagnosticCode.ArgumentCount, $"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
-                expression.Location);
-        var inferredArguments = cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray();
-        ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, inferredArguments, expression.Location);
-        return SemanticType.Class(cls.Name,
-            cls.DeclaredTypeParameters.Count == 0 ? null : inferredArguments);
+        var explicitTypeArguments = expression.Type.DeclaredTypeArguments.Count == 0
+            ? null
+            : ResolveType(expression.Type).TypeArguments;
+        return SelectConstructor(expression, cls, expression.Arguments, arguments, explicitTypeArguments, expectedType, moduleName);
     }
 
     private SemanticType AnalyzeClassConstructionExpression(
         ClassConstructionExpression expression, Scope scope,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions, string moduleName,
         IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types,
-        IDictionary<CallExpression, FunctionSymbol> calls)
+        IDictionary<CallExpression, FunctionSymbol> calls,
+        SemanticType? expectedType = null)
     {
         // `Name(...)` builds an object when Name is a class. When no class has that name but a function does, it is a call of
         // that function, whatever the capitalization. The call is recorded against the expression and emitted in its place.
@@ -369,51 +343,75 @@ public sealed partial class SemanticAnalyzer
         {
             var call = new CallExpression(expression.TypeName, expression.Arguments, expression.Location, expression.TypeArguments);
             _constructionCalls[expression] = call;
-            return AnalyzeCall(call, scope, functions, moduleName, imports, types, calls, null, false);
+            return AnalyzeCall(call, scope, functions, moduleName, imports, types, calls, expectedType, false);
         }
         if (!_classesByName.TryGetValue(expression.TypeName, out var cls))
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Class '{expression.TypeName}' is not declared", expression.Location);
         RequireConstructibleHere(cls, expression.Location);
         var arguments = expression.Arguments.Select(argument =>
             AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
-        var substitutions = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
+        IReadOnlyList<SemanticType>? explicitTypeArguments = null;
         if (expression.ExplicitTypeArguments.Count > 0)
         {
             ValidateTypeArgumentCount(
                 new TypeSyntax(null, false, expression.Location, NamedType: expression.TypeName,
                     TypeArguments: expression.ExplicitTypeArguments.ToArray()),
                 cls.DeclaredTypeParameters.Count);
-            foreach (var (name, type) in cls.DeclaredTypeParameters.Zip(
-                         expression.ExplicitTypeArguments.Select(ResolveType)))
-                substitutions[name] = type;
+            explicitTypeArguments = expression.ExplicitTypeArguments.Select(ResolveType).ToArray();
         }
-        var matches = cls.Constructors.Where(constructor => IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName))
-            .Where(constructor => constructor.AcceptsArgumentCount(arguments.Length))
-            .Where(constructor => constructor.Parameters.Take(arguments.Length).Select((parameter, index) =>
-            {
-                if (expression.ExplicitTypeArguments.Count == 0)
-                    InferClassTypeArguments(parameter.Type, arguments[index], cls.DeclaredTypeParameters, substitutions);
-                return CanAssign(
-                    SubstituteGenericType(parameter.Type, substitutions),
-                    expression.Arguments[index],
-                    arguments[index]);
-            }).All(match => match)).ToArray();
+        return SelectConstructor(expression, cls, expression.Arguments, arguments, explicitTypeArguments, expectedType, moduleName);
+    }
+
+    // Chooses the constructor that a construction calls, and the type arguments of its class. A construction that states them
+    // uses them. Otherwise each constructor infers them from the argument types and the expected type, and it is a candidate
+    // when the arguments convert to its parameters after that. The closest candidate is not chosen here: a construction has
+    // exactly one matching constructor, and two are ambiguous.
+    private SemanticType SelectConstructor(
+        Expression construction,
+        ClassSymbol cls,
+        IReadOnlyList<Expression> arguments,
+        IReadOnlyList<SemanticType> argumentTypes,
+        IReadOnlyList<SemanticType>? explicitTypeArguments,
+        SemanticType? expectedType,
+        string moduleName)
+    {
+        var location = construction.Location;
+        IReadOnlyDictionary<string, SemanticType>? explicitBindings = explicitTypeArguments is null
+            ? null
+            : cls.DeclaredTypeParameters.Zip(explicitTypeArguments, (name, type) => (name, type))
+                .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
+        var accepting = cls.Constructors
+            .Where(constructor => IsMemberAccessible(constructor.Visibility, cls.Name, cls.ModuleName, moduleName))
+            .Where(constructor => constructor.AcceptsArgumentCount(arguments.Count))
+            .Select(constructor => (constructor, bindings: explicitBindings
+                ?? InferConstructorTypeArguments(cls, constructor, argumentTypes, expectedType)))
+            .ToList();
+        var matches = accepting
+            .Where(item => item.bindings is not null && item.constructor.Parameters.Take(arguments.Count)
+                .Select((parameter, index) => CanAssign(
+                    SubstituteGenericType(parameter.Type, item.bindings),
+                    arguments[index],
+                    argumentTypes[index]))
+                .All(match => match))
+            .ToArray();
         if (matches.Length == 0)
         {
-            EnsureConstructorAccessible(cls, arguments.Length, moduleName, expression.Location);
-            throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", expression.Location);
+            EnsureConstructorAccessible(cls, arguments.Count, moduleName, location);
+            if (explicitBindings is null && cls.DeclaredTypeParameters.Count > 0 && accepting.Count > 0
+                && accepting.All(item => item.bindings is null))
+                throw ErrorWithCode(DiagnosticCode.CannotInfer,
+                    $"Cannot infer the type arguments of '{cls.Name}' from its arguments; write them explicitly, such as {cls.Name}<T>(...)",
+                    location, cls.Name.Length);
+            throw Error($"No constructor of '{cls.Name}' matches the supplied arguments", location);
         }
         if (matches.Length > 1)
-            throw Error($"Constructor call for '{cls.Name}' is ambiguous", expression.Location);
-        _constructorSelections[expression] = IndexOfConstructor(cls, matches[0]);
-        if (substitutions.Count != cls.DeclaredTypeParameters.Count)
-            throw ErrorWithCode(DiagnosticCode.ArgumentCount, $"Type '{cls.Name}' expects {cls.DeclaredTypeParameters.Count} type argument(s), but they could not be inferred",
-                expression.Location);
-        var inferredArguments = cls.DeclaredTypeParameters.Select(name => substitutions[name]).ToArray();
-        ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, inferredArguments, expression.Location);
-        return SemanticType.Class(
-            expression.TypeName,
-            cls.DeclaredTypeParameters.Count == 0 ? null : inferredArguments);
+            throw Error($"Constructor call for '{cls.Name}' is ambiguous", location);
+
+        var chosen = matches[0];
+        _constructorSelections[construction] = IndexOfConstructor(cls, chosen.constructor);
+        var typeArguments = cls.DeclaredTypeParameters.Select(name => chosen.bindings![name]).ToArray();
+        ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, typeArguments, location);
+        return SemanticType.Class(cls.Name, cls.DeclaredTypeParameters.Count == 0 ? null : typeArguments);
     }
 
     private SemanticType AnalyzeUnary(

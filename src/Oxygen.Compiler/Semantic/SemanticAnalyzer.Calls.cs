@@ -78,22 +78,38 @@ public sealed partial class SemanticAnalyzer
             if ((item.PayloadType is null && call.Arguments.Count != 0)
                 || (item.PayloadType is not null && call.Arguments.Count != 1))
                 throw Error($"Union case '{item.Name}' has invalid argument count", call.Location);
-            if (item.PayloadType is not null)
+            // Explicit type arguments bind the parameters in order. Otherwise the payload binds them, and then the expected type
+            // binds the parameters that the payload left open, such as `Option.None` where a return type is expected.
+            var typeParameters = union.DeclaredTypeParameters;
+            var bindings = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
+            for (var index = 0; index < call.ExplicitTypeArguments.Count && index < typeParameters.Count; index++)
+                bindings[typeParameters[index]] = ResolveType(call.ExplicitTypeArguments[index]);
+            var actual = item.PayloadType is null
+                ? null
+                : AnalyzeExpression(call.Arguments[0], scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+            if (call.ExplicitTypeArguments.Count == 0)
             {
-                var actual = AnalyzeExpression(call.Arguments[0], scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-                var substitutions = union.DeclaredTypeParameters
-                    .Select((name, index) => (name, type: call.ExplicitTypeArguments.Count > index
-                        ? ResolveType(call.ExplicitTypeArguments[index])
-                        : expectedType?.TypeArguments is { Count: > 0 } && expectedType.EnumName == union.Name
-                            ? expectedType.TypeArguments[index]
-                            : SemanticType.GenericParameter(name)))
-                    .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
-                if (!CanAssign(SubstituteGenericType(item.PayloadType, substitutions), call.Arguments[0], actual))
-                    throw Error($"Union case '{item.Name}' expects {SubstituteGenericType(item.PayloadType, substitutions)}, got {actual}", call.Location);
+                if (actual is not null && !InferFromArgument(item.PayloadType!, actual, typeParameters, bindings))
+                    throw Error($"Union case '{item.Name}' expects {item.PayloadType}, got {actual}", call.Location);
+                if (expectedType is not null)
+                    BindFromExpectedType(
+                        SemanticType.Union(union.Name, typeParameters.Select(SemanticType.GenericParameter).ToArray()),
+                        expectedType, typeParameters, bindings);
             }
-            var unionArguments = call.ExplicitTypeArguments.Count > 0
-                ? call.ExplicitTypeArguments.Select(ResolveType).ToArray()
-                : expectedType?.EnumName == union.Name ? expectedType.TypeArguments : null;
+
+            var missing = typeParameters.FirstOrDefault(name => !bindings.ContainsKey(name));
+            if (missing is not null)
+                throw ErrorWithCode(DiagnosticCode.CannotInfer,
+                    $"Cannot infer type parameter '{missing}' of union case '{item.Name}'; write its type arguments explicitly, such as {union.Name}<T>.{item.Name}(...)",
+                    call.Location, item.Name.Length);
+            if (actual is not null)
+            {
+                var payload = SubstituteGenericType(item.PayloadType!, bindings);
+                if (!CanAssign(payload, call.Arguments[0], actual))
+                    throw Error($"Union case '{item.Name}' expects {payload}, got {actual}", call.Location);
+            }
+
+            var unionArguments = typeParameters.Count == 0 ? null : typeParameters.Select(name => bindings[name]).ToArray();
             return SemanticType.Union(union.Name, unionArguments);
         }
         // `functionName` is the name the overloads are looked up by. It is the call name, except for a receiver chain that
@@ -151,6 +167,7 @@ public sealed partial class SemanticAnalyzer
                 && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
                 _escapingClassLocals.Add(declaration);
         }
+        string? inferenceProblem = null;
         if (call.ExplicitTypeArguments.Count != 0)
         {
             var generic = overloads.Where(candidate => candidate.IsGeneric).ToList();
@@ -172,11 +189,14 @@ public sealed partial class SemanticAnalyzer
         }
         else
         {
-            var inferred = overloads
+            var attempts = overloads
                 .Where(candidate => candidate.IsGeneric && candidate.AcceptsArgumentCount(argumentTypes.Count))
-                .Select(candidate => (candidate, substitutions: InferGenericSubstitutions(candidate, argumentTypes, expectedType)))
-                .Where(item => item.substitutions is not null)
+                .Select(candidate => (candidate, substitutions: InferGenericSubstitutions(candidate, argumentTypes, expectedType,
+                    out var problem), problem))
                 .ToList();
+            var inferred = attempts.Where(item => item.substitutions is not null).ToList();
+            // When no generic overload is inferred, the reason from the first attempt is the one to report, if there is one.
+            inferenceProblem = inferred.Count == 0 ? attempts.Select(item => item.problem).FirstOrDefault(text => text is not null) : null;
             // Specializations made by other calls are not candidates: the type arguments inferred here select the
             // specializations this call considers. Each generic overload the arguments fit is a candidate, and the ranking
             // below chooses among them. The expected return type does not choose, so overloads tied on their arguments
@@ -196,6 +216,8 @@ public sealed partial class SemanticAnalyzer
 
         if (candidates.Count == 0)
         {
+            if (inferenceProblem is not null)
+                throw ErrorWithCode(DiagnosticCode.CannotInfer, inferenceProblem, call.Location, functionName.Length);
             if (overloads.Count == 1)
             {
                 throw ErrorWithCode(DiagnosticCode.ArgumentCount, 

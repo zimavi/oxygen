@@ -145,6 +145,8 @@ internal static class DiagnosticAdvice
             "A parameter with a default value may be omitted by a call, so the parameters with defaults come after the required ones, and each default is a constant of the parameter's type.",
         DiagnosticCode.OverloadConflict =>
             "Two overloads conflict when one call could match both: an argument count fits both, and their first parameters of that count have the same types.",
+        DiagnosticCode.CannotInfer =>
+            "A generic use takes its type arguments from its arguments and its expected type. A type parameter that neither of them determines, or that two arguments bind to unrelated types, cannot be inferred.",
         _ => null
     };
 
@@ -186,6 +188,8 @@ internal static class DiagnosticAdvice
             "Move the parameters with defaults to the end, and write a bool literal, a number, or an integer constant of the parameter's type as the default.",
         DiagnosticCode.OverloadConflict =>
             "Give the overloads different parameter types at a position that both can be called with, or remove the default that makes them overlap.",
+        DiagnosticCode.CannotInfer =>
+            "Write the type arguments explicitly, such as Option<string>.None or Box<i32>(4), or pass arguments of one type for each type parameter.",
         _ => null
     };
 }
