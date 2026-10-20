@@ -62,6 +62,27 @@ public sealed class ArrayLiteralIntegrationTests : IDisposable
         Assert.Equal("12", run.Output.Replace("\r\n", "\n"));
     }
 
+    [SkippableFact]
+    public void ArrayIndexOutOfRangeKeepsTheArrayMessage()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32[3] values = { 1, 2, 3 };
+                i32 index = 9;
+                io.println(values[index]);
+                return 0;
+            }
+            """);
+
+        Assert.NotEqual(0, run.ExitCode);
+        Assert.Contains("Oxygen array index 9 is out of bounds for length 3", run.Error + run.Output);
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }

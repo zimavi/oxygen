@@ -10,6 +10,14 @@ void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length)
     abort();
 }
 
+void __oxygen_runtime_string_bounds_failure(uint64_t index, uint64_t length)
+{
+    fprintf(stderr, "Oxygen string index %llu is out of bounds for length %llu\n",
+        (unsigned long long)index, (unsigned long long)length);
+    fflush(stderr);
+    abort();
+}
+
 void __oxygen_runtime_enum_cast_failure(uint64_t value)
 {
     fprintf(stderr, "Oxygen value %llu is not a valid enum member\n",

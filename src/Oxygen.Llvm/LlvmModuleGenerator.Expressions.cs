@@ -318,7 +318,7 @@ public sealed partial class LlvmModuleGenerator
         var continueBlock = _currentFunction.AppendBasicBlock("string.bounds.continue");
         builder.BuildCondBr(outside, failureBlock, continueBlock);
         builder.PositionAtEnd(failureBlock);
-        BuildNoThrowCall(builder, _arrayBoundsFailure, [llvmIndex, length]);
+        BuildNoThrowCall(builder, _stringBoundsFailure, [llvmIndex, length]);
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
         var data = builder.BuildExtractValue(text, 0, "string.data");

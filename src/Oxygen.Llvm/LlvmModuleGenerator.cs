@@ -11,6 +11,7 @@ namespace Oxygen.Llvm;
 public sealed partial class LlvmModuleGenerator
 {
     private LLVMValueRef _arrayBoundsFailure;
+    private LLVMValueRef _stringBoundsFailure;
     private LLVMValueRef _enumCastFailure;
     private LLVMValueRef _arithmeticFailure;
     private LLVMValueRef _isInstance;
@@ -204,6 +205,7 @@ public sealed partial class LlvmModuleGenerator
             var boundsFailureType = LLVMTypeRef.CreateFunction(
                 _context.VoidType, [_context.Int64Type, _context.Int64Type], false);
             _arrayBoundsFailure = DeclareNativeFunction(module, "__oxygen_runtime_array_bounds_failure", boundsFailureType);
+            _stringBoundsFailure = DeclareNativeFunction(module, "__oxygen_runtime_string_bounds_failure", boundsFailureType);
             _enumCastFailure = DeclareNativeFunction(module, 
                 "__oxygen_runtime_enum_cast_failure",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [_context.Int64Type], false));

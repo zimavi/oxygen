@@ -60,7 +60,7 @@ public sealed class StringIntegrationTests : IDisposable
             """);
 
         Assert.NotEqual(0, run.ExitCode);
-        Assert.Contains("out of bounds for length 3", run.Error + run.Output);
+        Assert.Contains("Oxygen string index 9 is out of bounds for length 3", run.Error + run.Output);
     }
 
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
