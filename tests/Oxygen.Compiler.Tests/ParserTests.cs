@@ -135,6 +135,15 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesFlagsEnumAnnotation()
+    {
+        var unit = Parse("@flags enum Access { Read = 1, Write = 2 } i32 main() { return 0; }");
+
+        var annotations = Assert.Single(unit.Enums).DeclaredAnnotations;
+        Assert.Equal(["flags"], annotations.Select(annotation => annotation.Name));
+    }
+
+    [Fact]
     public void ParsesGenericAggregateDeclarationsAndTypeUses()
     {
         var unit = Parse(

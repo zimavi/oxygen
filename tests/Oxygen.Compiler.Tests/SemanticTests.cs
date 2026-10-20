@@ -1986,6 +1986,93 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void FlagsEnumCombinesWithBitwiseOperatorsAndComparesWithZero()
+    {
+        var model = Analyze(
+            """
+            @flags enum Access : i32 { Empty = 0, Read = 1, Write = 2, Exec = 4 }
+            i32 main() {
+                Access a = Access.Read | Access.Write;
+                Access b = a & Access.Read;
+                Access c = a ^ Access.Exec;
+                Access d = ~a;
+                bool any = (a & Access.Read) != 0;
+                bool none = 0 == (a & Access.Exec);
+                return 0;
+            }
+            """);
+
+        Assert.True(model.Enums["Access"].IsFlags);
+        Assert.Equal(0b111, model.Enums["Access"].FlagsMask);
+    }
+
+    [Fact]
+    public void RejectsFlagsMemberThatIsNotASingleBit()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("@flags enum Access { Read = 1, Both = 3 } i32 main() { return 0; }"));
+
+        Assert.Contains("must be 0 or a single bit, got 3", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsNegativeFlagsMember()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("@flags enum Access : i32 { Read = -1 } i32 main() { return 0; }"));
+
+        Assert.Contains("must be 0 or a single bit", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsBitwiseOperatorOnEnumThatIsNotFlags()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("enum Color { Red = 1, Blue = 2 } i32 main() { Color c = Color.Red | Color.Blue; return 0; }"));
+
+        Assert.Contains("is not declared @flags", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsCombiningValuesOfDifferentFlagsEnums()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze(
+                """
+                @flags enum Access { Read = 1 }
+                @flags enum Mode { Fast = 1 }
+                i32 main() { Access a = Access.Read | Mode.Fast; return 0; }
+                """));
+
+        Assert.Contains("combines values of one @flags enum", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsComplementOfEnumThatIsNotFlags()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("enum Color { Red = 1 } i32 main() { Color c = ~Color.Red; return 0; }"));
+
+        Assert.Contains("requires an integer operand", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsFlagsComparisonWithNonZeroInteger()
+    {
+        Assert.Throws<SemanticException>(() =>
+            Analyze("@flags enum Access { Read = 1 } i32 main() { bool b = Access.Read == 1; return 0; }"));
+    }
+
+    [Fact]
+    public void RejectsUnknownEnumAnnotation()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("@value enum Color { Red } i32 main() { return 0; }"));
+
+        Assert.Contains("Unknown enum annotation '@value'", exception.Message);
+    }
+
+    [Fact]
     public void SetOnlyPropertyCanBeAssigned()
     {
         var model = Analyze(

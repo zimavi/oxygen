@@ -185,6 +185,7 @@ public sealed partial class SemanticAnalyzer
             {
                 if (_enumsByName.ContainsKey(declaration.Name) || _structsByName.ContainsKey(declaration.Name))
                     throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
+                var isFlags = ValidateEnumAnnotations(declaration);
                 var members = new List<EnumMemberSymbol>();
                 var names = new HashSet<string>(StringComparer.Ordinal);
                 var values = new HashSet<int>();
@@ -197,6 +198,11 @@ public sealed partial class SemanticAnalyzer
                     if (!FitsUnderlying(value, declaration.UnderlyingType))
                         throw Error($"Enum member value {value} does not fit underlying type {declaration.UnderlyingType}",
                             member.Location);
+                    // A flags member is 0 or one bit, so that the members never overlap when they are combined.
+                    if (isFlags && value != 0 && !System.Numerics.BitOperations.IsPow2((uint)value))
+                        throw ErrorWithCode(DiagnosticCode.FlagsMember,
+                            $"Flags enum '{declaration.Name}' member '{member.Name}' must be 0 or a single bit, got {value}",
+                            member.Location, member.Name.Length);
                     if (!values.Add(value))
                         throw Error($"Enum '{declaration.Name}' contains duplicate value {value}", member.Location);
                     members.Add(new EnumMemberSymbol(member.Name, value, member));
@@ -205,7 +211,10 @@ public sealed partial class SemanticAnalyzer
                     next = value + 1;
                 }
                 _enumsByName.Add(declaration.Name,
-                    new EnumSymbol(declaration.Name, declaration.UnderlyingType, members, declaration, declaration.Visibility));
+                    new EnumSymbol(declaration.Name, declaration.UnderlyingType, members, declaration, declaration.Visibility)
+                    {
+                        IsFlags = isFlags
+                    });
             }
             foreach (var declaration in unit.Unions)
             {

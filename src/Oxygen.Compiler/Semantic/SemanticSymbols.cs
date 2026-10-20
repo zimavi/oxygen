@@ -100,6 +100,12 @@ public sealed record EnumSymbol(
 {
     public IReadOnlyDictionary<string, EnumMemberSymbol> MembersByName =>
         Members.ToDictionary(member => member.Name, StringComparer.Ordinal);
+
+    // A flags enum (`@flags`) has members that are single bits, or zero. Its values combine with |, &, ^ and ~.
+    public bool IsFlags { get; init; }
+
+    // The bits that the members use. The complement of a flags value is masked to these.
+    public int FlagsMask => Members.Aggregate(0, (mask, member) => mask | member.Value);
 }
 
 public sealed record UnionCaseSymbol(string Name, SemanticType? PayloadType, UnionCaseDeclaration Declaration);

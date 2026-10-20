@@ -25,4 +25,5 @@ public static class DiagnosticCode
     public const string DefaultParameter = "OX0207";
     public const string OverloadConflict = "OX0208";
     public const string CannotInfer = "OX0209";
+    public const string FlagsMember = "OX0210";
 }

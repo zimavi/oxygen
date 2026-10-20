@@ -147,6 +147,8 @@ internal static class DiagnosticAdvice
             "Two overloads conflict when one call could match both: an argument count fits both, and their first parameters of that count have the same types.",
         DiagnosticCode.CannotInfer =>
             "A generic use takes its type arguments from its arguments and its expected type. A type parameter that neither of them determines, or that two arguments bind to unrelated types, cannot be inferred.",
+        DiagnosticCode.FlagsMember =>
+            "A @flags enum combines its values with bitwise operators, so each member must be 0 or a single bit: a value with exactly one bit set.",
         _ => null
     };
 
@@ -190,6 +192,8 @@ internal static class DiagnosticAdvice
             "Give the overloads different parameter types at a position that both can be called with, or remove the default that makes them overlap.",
         DiagnosticCode.CannotInfer =>
             "Write the type arguments explicitly, such as Option<string>.None or Box<i32>(4), or pass arguments of one type for each type parameter.",
+        DiagnosticCode.FlagsMember =>
+            "Give the member a value that is 0 or a power of two, such as 1, 2, 4 or 8, or remove @flags if the values are not bits.",
         _ => null
     };
 }

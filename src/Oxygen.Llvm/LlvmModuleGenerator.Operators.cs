@@ -342,7 +342,15 @@ public sealed partial class LlvmModuleGenerator
             return builder.BuildNot(operand, "not");
         // Bitwise complement: exclusive or with all ones, for any integer width.
         if (expression.Operator == TokenKind.Tilde)
-            return builder.BuildNot(operand, "bitwise.not");
+        {
+            var complement = builder.BuildNot(operand, "bitwise.not");
+            var operandType = model.ExpressionTypes[expression];
+            if (!operandType.IsEnum)
+                return complement;
+            // A flags value keeps only the bits that its members use, so the complement names no bit that no member can.
+            var mask = LLVMValueRef.CreateConstInt(complement.TypeOf, (ulong)(uint)model.Enums[operandType.EnumName!].FlagsMask, false);
+            return builder.BuildAnd(complement, mask, "flags.complement");
+        }
         return expression.Operator == TokenKind.Minus
             ? isFloatingPoint
                 ? builder.BuildFNeg(operand, "fneg")

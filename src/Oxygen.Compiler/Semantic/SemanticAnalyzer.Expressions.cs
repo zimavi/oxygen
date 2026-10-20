@@ -514,6 +514,9 @@ public sealed partial class SemanticAnalyzer
 
         if (expression.Operator == TokenKind.Tilde)
         {
+            // The complement of a flags value is a value of the same flags enum.
+            if (IsFlagsEnum(operandType))
+                return operandType;
             if (!operandType.IsInteger)
                 throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"The '~' operator requires an integer operand, got {operandType}", expression.Location);
             return operandType;
@@ -642,6 +645,15 @@ public sealed partial class SemanticAnalyzer
         if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals && left.IsEnum && left == right)
             return SemanticType.FromPrimitive(PrimitiveType.Bool);
 
+        // A flags value is tested against the literal 0, as in `(flags & Red) != 0`.
+        if (expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals
+            && TryFlagsZeroComparison(expression, left, right, expressionTypes))
+            return SemanticType.FromPrimitive(PrimitiveType.Bool);
+
+        // The bitwise operators combine the values of one flags enum, and the result is a value of that enum.
+        if (expression.Operator is TokenKind.Ampersand or TokenKind.Pipe or TokenKind.Caret && (left.IsEnum || right.IsEnum))
+            return FlagsOperationType(expression, left, right);
+
         var requiresInteger = expression.Operator is TokenKind.Ampersand or TokenKind.Pipe or TokenKind.Caret
             or TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan or TokenKind.Percent;
         if (requiresInteger && (!left.IsInteger || !right.IsInteger))
@@ -670,6 +682,46 @@ public sealed partial class SemanticAnalyzer
         throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Binary operator '{((BinaryExpression)expression).Operator}' requires compatible numeric types",
             expression.Location);
     }
+
+    private bool IsFlagsEnum(SemanticType type) =>
+        type.IsEnum && _enumsByName.TryGetValue(type.EnumName!, out var symbol) && symbol.IsFlags;
+
+    // `|`, `&` and `^` need both operands of one @flags enum. The result is that enum.
+    private SemanticType FlagsOperationType(BinaryExpression expression, SemanticType left, SemanticType right)
+    {
+        var flags = left.IsEnum ? left : right;
+        if (!IsFlagsEnum(flags))
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement,
+                $"Operator '{expression.Operator}' combines values of a @flags enum, and {flags} is not declared @flags", expression.Location);
+        if (left != right)
+            throw ErrorWithCode(DiagnosticCode.OperandRequirement,
+                $"Operator '{expression.Operator}' combines values of one @flags enum, got {left} and {right}", expression.Location);
+        return left;
+    }
+
+    // `flags == 0` and `flags != 0` compare a flags value with the integer literal 0. The literal takes the enum's type, so
+    // that it is compared bit for bit with the value.
+    private bool TryFlagsZeroComparison(
+        BinaryExpression expression,
+        SemanticType left,
+        SemanticType right,
+        IDictionary<Expression, SemanticType> expressionTypes)
+    {
+        if (IsFlagsEnum(left) && IsZeroLiteral(expression.Right))
+        {
+            expressionTypes[expression.Right] = left;
+            return true;
+        }
+        if (IsFlagsEnum(right) && IsZeroLiteral(expression.Left))
+        {
+            expressionTypes[expression.Left] = right;
+            return true;
+        }
+        return false;
+    }
+
+    private static bool IsZeroLiteral(Expression expression) =>
+        expression is IntegerLiteralExpression && TryGetConstantInteger(expression, out var value) && value.IsZero;
 
     private SemanticType AnalyzeConditional(
         ConditionalExpression expression,

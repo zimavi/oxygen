@@ -39,3 +39,45 @@ invalid. Enum-to-integer conversions produce the declared underlying type.
 
 Member names and values must be unique within an enum. Payload-bearing
 variants and pattern matching are not part of the current enum model.
+
+## Flags enums
+
+An enum annotated with `@flags` holds bit flags. Its values combine with bitwise
+operators:
+
+```oxygen
+@flags enum Access : i32 {
+    Empty = 0,
+    Read = 1,
+    Write = 2,
+    Exec = 4
+}
+
+i32 main() {
+    Access a = Access.Read | Access.Write;
+    if ((a & Access.Read) != 0) {
+        return 1;
+    }
+    return 0;
+}
+```
+
+- Each member is `0` or a single bit: a value with exactly one bit set. Any other
+  value is a compile-time error (`OX0210`). Member `0` is allowed, for a name such
+  as `Empty` or `None`.
+- `|` combines two values of the same flags enum, `&` tests or intersects them, and
+  `^` toggles bits. Each result has the enum type.
+- `~` is the complement. It keeps only the bits that the members use, so
+  `~Access.Read` is `Write | Exec` and names no bit outside the members.
+- A flags value is compared with the integer literal `0` for equality, as in
+  `(a & Access.Read) != 0`. The literal takes the enum's type. Any other integer
+  comparison is an error; use the members instead.
+- Bitwise operators on an enum that is not `@flags`, combining values of two
+  different enums, or applying `~` to a non-flags enum are compile-time errors.
+- Other enum operations are unchanged. An enum without `@flags` keeps only its
+  declared members and compares for equality.
+- `@flags` is the only annotation an enum accepts. An unknown enum annotation is an
+  error.
+
+The underlying type is still a fixed-width integer, `i32` by default. Flags enums
+do not change the representation, so `cast<i32>(a)` gives the bit pattern.

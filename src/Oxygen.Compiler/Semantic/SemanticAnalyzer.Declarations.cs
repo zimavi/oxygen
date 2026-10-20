@@ -155,6 +155,23 @@ public sealed partial class SemanticAnalyzer
             : new CInteropFunctionMetadata(externalName, callingConvention);
     }
 
+    // `@flags` is the only annotation an enum takes. It returns whether the enum is a flags enum.
+    private static bool ValidateEnumAnnotations(EnumDeclaration declaration)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var annotation in declaration.DeclaredAnnotations)
+        {
+            if (!seen.Add(annotation.Name))
+                throw Error($"Annotation '@{annotation.Name}' may only appear once", annotation.Location, annotation.Name.Length + 1);
+            if (annotation.Name == "flags" && annotation.Arguments.Count == 0)
+                continue;
+            throw Error(annotation.Name == "flags"
+                ? "Annotation '@flags' does not accept arguments"
+                : $"Unknown enum annotation '@{annotation.Name}'", annotation.Location, annotation.Name.Length + 1);
+        }
+        return seen.Contains("flags");
+    }
+
     private static void ValidateClassAnnotations(ClassDeclaration declaration)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
