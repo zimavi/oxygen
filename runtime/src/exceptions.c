@@ -36,7 +36,7 @@ void __oxygen_runtime_trace_push(const char *function_name, const char *file_nam
             realloc(oxygen_trace_frames, sizeof(*frames) * capacity);
         if (frames == NULL)
         {
-            fprintf(stderr, "Oxygen ran out of memory for the stack trace\n");
+            fprintf(oxygen_runtime_error_stream(), "Oxygen ran out of memory for the stack trace\n");
             fflush(stderr);
             oxygen_runtime_abort();
         }
@@ -129,7 +129,7 @@ void *__oxygen_runtime_exception_trace_frame(void *object, uint64_t index)
     uint64_t count = trace == NULL ? 0 : trace->count;
     if (index >= count)
     {
-        fprintf(stderr, "Oxygen stack trace frame %llu is out of bounds for %llu frames\n",
+        fprintf(oxygen_runtime_error_stream(), "Oxygen stack trace frame %llu is out of bounds for %llu frames\n",
             (unsigned long long)index, (unsigned long long)count);
         fflush(stderr);
         oxygen_runtime_abort();
@@ -264,7 +264,7 @@ void __oxygen_runtime_rethrow(void)
 #else
     if (oxygen_current_seh_object == NULL)
     {
-        fprintf(stderr, "Unhandled Exception\n");
+        fprintf(oxygen_runtime_error_stream(), "Unhandled Exception\n");
         fflush(stderr);
         oxygen_runtime_abort();
     }
@@ -300,7 +300,7 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
     void *object = payload == NULL ? NULL : *payload;
     const oxygen_runtime_type_info *type =
         object == NULL ? NULL : *(const oxygen_runtime_type_info *const *)object;
-    fprintf(stderr, "Unhandled %s", type == NULL || type->name == NULL
+    fprintf(oxygen_runtime_error_stream(), "Unhandled %s", type == NULL || type->name == NULL
         ? "Exception" : display_type_name(type->name));
     if (type != NULL && type->message_offset != 0 && object != NULL)
     {
@@ -308,18 +308,18 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
             (const oxygen_string *)((const unsigned char *)object + type->message_offset);
         if (message->data != NULL)
         {
-            fputs(": ", stderr);
-            fwrite(message->data, 1, (size_t)message->length, stderr);
+            fputs(": ", oxygen_runtime_error_stream());
+            fwrite(message->data, 1, (size_t)message->length, oxygen_runtime_error_stream());
         }
     }
     const oxygen_runtime_trace *trace = oxygen_find_trace(object);
     if (trace != NULL)
         for (uint64_t i = trace->count; i-- > 0;)
-            fprintf(stderr, "\n  at %s (%s:%u:%u)",
+            fprintf(oxygen_runtime_error_stream(), "\n  at %s (%s:%u:%u)",
                 trace->frames[i].function_name == NULL ? "<unknown>" : trace->frames[i].function_name,
                 trace->frames[i].file_name == NULL ? "<unknown>" : trace->frames[i].file_name,
                 trace->frames[i].line, trace->frames[i].column);
-    fputc('\n', stderr);
+    fputc('\n', oxygen_runtime_error_stream());
     fflush(stderr);
     __cxa_end_catch();
     oxygen_release_trace(object);
@@ -328,7 +328,7 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
     void *object = __oxygen_runtime_exception_object(exception_handle);
     const oxygen_runtime_type_info *type =
         object == NULL ? NULL : *(const oxygen_runtime_type_info *const *)object;
-    fprintf(stderr, "Unhandled %s",
+    fprintf(oxygen_runtime_error_stream(), "Unhandled %s",
         type == NULL || type->name == NULL ? "Exception" : display_type_name(type->name));
     if (type != NULL && type->message_offset != 0 && object != NULL)
     {
@@ -336,18 +336,18 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
             (const oxygen_string *)((const unsigned char *)object + type->message_offset);
         if (message->data != NULL)
         {
-            fputs(": ", stderr);
-            fwrite(message->data, 1, (size_t)message->length, stderr);
+            fputs(": ", oxygen_runtime_error_stream());
+            fwrite(message->data, 1, (size_t)message->length, oxygen_runtime_error_stream());
         }
     }
     const oxygen_runtime_trace *trace = oxygen_find_trace(object);
     if (trace != NULL)
         for (uint64_t i = trace->count; i-- > 0;)
-            fprintf(stderr, "\n  at %s (%s:%u:%u)",
+            fprintf(oxygen_runtime_error_stream(), "\n  at %s (%s:%u:%u)",
                 trace->frames[i].function_name == NULL ? "<unknown>" : trace->frames[i].function_name,
                 trace->frames[i].file_name == NULL ? "<unknown>" : trace->frames[i].file_name,
                 trace->frames[i].line, trace->frames[i].column);
-    fputc('\n', stderr);
+    fputc('\n', oxygen_runtime_error_stream());
     fflush(stderr);
     oxygen_release_trace(object);
     abort();

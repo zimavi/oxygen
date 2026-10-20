@@ -38,6 +38,27 @@ public sealed class StandardOutputIntegrationTests : IDisposable
     }
 
     [SkippableFact]
+    public void OutputWrittenBeforeARuntimeFailureIsStillDelivered()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = NativeProgram.BuildAndRun(_directory,
+            """
+            import std.io;
+
+            i32 main() {
+                io.println(1);
+                i32 zero = 0;
+                return 10 / zero;
+            }
+            """);
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Equal("1\n", run.Output.Replace("\r\n", "\n"));
+        Assert.Contains("integer division by zero", run.Error);
+    }
+
+    [SkippableFact]
     public void AFailedWriteToStandardOutputStopsTheProgramWithExitCode101()
     {
         NativeProgram.RequireNativeToolchain();

@@ -77,6 +77,13 @@ first two functions call the runtime's `oxygen_write_stdout` and
 including embedded zero bytes. `print_char` and `println_char` write one byte
 through the runtime's `oxygen_write_stdout_byte` primitive. `println` appends a newline after the supplied value.
 
+Standard output is buffered. The runtime writes the buffer when the program
+returns from `main`, before any message to standard error, and before a runtime
+failure stops the program, so the two streams show the output in the order it
+was written. A program that is stopped by a signal can lose buffered output. A
+failed write to either stream stops the program with exit code 101; see
+[Exceptions](exceptions.md).
+
 `print` and `println` accept any type that implements `Printable`. Strings and
 the primitive types implement it by a built-in rule; each one is written by a
 `write` function in `std.io`, so formatting is ordinary Oxygen code:

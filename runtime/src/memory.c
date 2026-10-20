@@ -5,7 +5,7 @@
 // Running out of memory is fatal. The runtime reports it and stops, so no Oxygen code receives NULL.
 static void oxygen_out_of_memory(void)
 {
-    fprintf(stderr, "Oxygen out of memory\n");
+    fprintf(oxygen_runtime_error_stream(), "Oxygen out of memory\n");
     oxygen_runtime_abort();
 }
 
@@ -13,7 +13,7 @@ uint64_t oxygen_array_size(uint64_t count, uint64_t element_size)
 {
     if (element_size != 0 && count > UINT64_MAX / element_size)
     {
-        fprintf(stderr, "Oxygen array of %llu elements of %llu bytes is too large\n",
+        fprintf(oxygen_runtime_error_stream(), "Oxygen array of %llu elements of %llu bytes is too large\n",
             (unsigned long long)count, (unsigned long long)element_size);
         oxygen_runtime_abort();
     }

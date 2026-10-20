@@ -9,6 +9,7 @@
 
 void __oxygen_runtime_initialize(void)
 {
+    oxygen_io_initialize();
 #if defined(_WIN32)
     /* Oxygen strings are bytes. They are written unchanged: no newline becomes a carriage return and a line feed. */
     _setmode(_fileno(stdout), _O_BINARY);

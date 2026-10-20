@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -128,6 +129,8 @@ void *oxygen_realloc(void *pointer, uint64_t size);
 void *oxygen_calloc(uint64_t count, uint64_t element_size);
 void oxygen_free(void *pointer);
 
+void oxygen_io_initialize(void);
+FILE *oxygen_runtime_error_stream(void);
 void oxygen_write_stdout(const oxygen_string *value);
 void oxygen_write_stderr(const oxygen_string *value);
 void oxygen_write_stdout_byte(uint8_t value);
