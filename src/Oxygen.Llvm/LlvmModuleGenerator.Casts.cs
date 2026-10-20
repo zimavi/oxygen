@@ -100,6 +100,49 @@ public sealed partial class LlvmModuleGenerator
     private IEnumerable<string> RuntimeInterfaceNames(ClassSymbol cls, SemanticModel model) =>
         cls.DeclaredInterfaceTypes.Select(type => NormalizeAggregateType(type, model).StructName!);
 
+    // Every base class and interface of `cls`, nearest first, without `cls` itself. An interface that a base class and a
+    // derived class both name is listed once. The runtime type check reads this list, so an instance is found by a derived class's
+    // interface or by any base class's interface.
+    private List<string> RuntimeSupertypeNames(ClassSymbol cls, SemanticModel model)
+    {
+        var names = new List<string>();
+        void Add(string name)
+        {
+            if (name != cls.QualifiedName && !names.Contains(name))
+                names.Add(name);
+        }
+
+        for (var current = cls; ;)
+        {
+            foreach (var interfaceName in RuntimeInterfaceNames(current, model))
+                Add(interfaceName);
+            var parent = RuntimeParentName(current, model);
+            if (parent is null)
+                return names;
+            Add(parent);
+            current = model.Classes[parent];
+        }
+    }
+
+    // The constant table of supertype addresses that `typeName` points to. A type with no supertypes gets a null table.
+    private (LLVMValueRef Table, uint Count) AddRuntimeSupertypeTable(
+        LLVMModuleRef module,
+        string typeName,
+        IReadOnlyList<string> supertypeNames)
+    {
+        var pointerType = LLVMTypeRef.CreatePointer(_context.Int8Type, 0);
+        var count = (uint)supertypeNames.Count;
+        if (count == 0)
+            return (LLVMValueRef.CreateConstNull(pointerType), 0);
+
+        var table = module.AddGlobal(LLVMTypeRef.CreateArray(pointerType, count), $"oxygen.type.supertypes.{typeName}");
+        table.Linkage = LLVMLinkage.LLVMInternalLinkage;
+        table.IsGlobalConstant = true;
+        table.Initializer = LLVMValueRef.CreateConstArray(pointerType,
+            supertypeNames.Select(name => _runtimeTypeInfos[name]).ToArray());
+        return (table, count);
+    }
+
     private void InitializeRuntimeTypeInfo(
         LLVMBuilderRef builder,
         string typeName,
@@ -141,6 +184,10 @@ public sealed partial class LlvmModuleGenerator
         // Releasing an object of this type calls the nearest destructor in its class chain, or nothing when there is none.
         builder.BuildStore(FindDestructor(typeName, model) ?? LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
             builder.BuildStructGEP2(_runtimeTypeInfoType, info, 5, "type.destructor"));
+        var supertypes = _runtimeSupertypes[typeName];
+        builder.BuildStore(supertypes.Table, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 6, "type.supertypes"));
+        builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int32Type, supertypes.Count, false),
+            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 7, "type.supertype.count"));
     }
 
     // The destructor that releases an object of `typeName`: the nearest one in its class chain, or null when there is none.

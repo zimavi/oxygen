@@ -64,6 +64,9 @@ typedef struct oxygen_runtime_type_info
     uint32_t message_offset;
     /* The most derived destructor for this type, or NULL. Releasing an object calls it through its runtime type. */
     void (*destructor)(void *object);
+    /* Every base class and interface of this type, nearest first, without the type itself. The compiler emits the list. */
+    const struct oxygen_runtime_type_info *const *supertypes;
+    uint32_t supertype_count;
 } oxygen_runtime_type_info;
 
 void __oxygen_runtime_initialize(void);
@@ -78,9 +81,6 @@ void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand);
 uint8_t __oxygen_runtime_is_instance(
     const void *object,
     const oxygen_runtime_type_info *expected_type);
-void __oxygen_runtime_register_type(
-    oxygen_runtime_type_info *actual_type,
-    const oxygen_runtime_type_info *parent_type);
 void __oxygen_runtime_invalid_cast(
     const oxygen_runtime_type_info *source_type,
     const oxygen_runtime_type_info *target_type);

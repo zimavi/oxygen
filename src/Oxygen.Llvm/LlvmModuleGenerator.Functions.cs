@@ -202,11 +202,6 @@ public sealed partial class LlvmModuleGenerator
         var entry = nativeMain.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
         builder.BuildCall2(runtimeInitializeType, runtimeInitialize, []);
-        var registerType = DeclareNativeFunction(module, 
-            "__oxygen_runtime_register_type",
-            LLVMTypeRef.CreateFunction(_context.VoidType,
-                [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
-                    LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
         foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
         {
             InitializeRuntimeTypeInfo(builder, cls.QualifiedName, RuntimeParentName(cls, model), 1, model);
@@ -214,14 +209,6 @@ public sealed partial class LlvmModuleGenerator
         foreach (var interfaceSymbol in model.Interfaces.Values.Where(iface => !iface.IsGeneric))
         {
             InitializeRuntimeTypeInfo(builder, interfaceSymbol.QualifiedName, null, 2, model);
-        }
-        foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
-        {
-            var parent = RuntimeParentName(cls, model);
-            if (parent is not null)
-                RegisterRuntimeType(builder, registerType, cls.QualifiedName, parent);
-            foreach (var interfaceName in RuntimeInterfaceNames(cls, model))
-                RegisterRuntimeType(builder, registerType, cls.QualifiedName, interfaceName);
         }
 
         var oxygenMain = model.MainFunction
@@ -291,16 +278,6 @@ public sealed partial class LlvmModuleGenerator
             builder.BuildRet(LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false));
         else
             builder.BuildRet(result);
-    }
-
-    private void RegisterRuntimeType(
-        LLVMBuilderRef builder,
-        LLVMValueRef registerType,
-        string actualType,
-        string parentType)
-    {
-        builder.BuildCall2(registerType.FunctionType, registerType,
-            [GetTypeName(builder, actualType), GetTypeName(builder, parentType)]);
     }
 
     private void EmitFunction(

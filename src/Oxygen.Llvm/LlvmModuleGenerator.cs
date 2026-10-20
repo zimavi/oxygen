@@ -19,6 +19,7 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef _currentFunction;
     private readonly Dictionary<string, LLVMTypeRef> _classTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LLVMValueRef> _runtimeTypeInfos = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (LLVMValueRef Table, uint Count)> _runtimeSupertypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LLVMValueRef> _constructors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LLVMValueRef> _destructors = new(StringComparer.Ordinal);
     private readonly Dictionary<(string ClassName, string PropertyName, PropertyAccessorKind Kind), FunctionSymbol> _propertyAccessors = new();
@@ -111,10 +112,12 @@ public sealed partial class LlvmModuleGenerator
             _classTypes.Clear();
             _dropFlags.Clear();
             _runtimeTypeInfos.Clear();
+            _runtimeSupertypes.Clear();
             _runtimeTypeInfoType = _context.GetStructType(
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type,
                     _context.Int32Type, LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
-                    _context.Int32Type, LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false);
+                    _context.Int32Type, LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+                    LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type], false);
             _constructors.Clear();
             _destructors.Clear();
             _virtualSlotCount = concreteClasses.Select(cls => GetVirtualMethods(cls, model).Count)
@@ -135,6 +138,12 @@ public sealed partial class LlvmModuleGenerator
                 _runtimeTypeInfos[cls.QualifiedName] = AddRuntimeTypeInfoGlobal(module, cls.QualifiedName);
             foreach (var interfaceSymbol in concreteInterfaces)
                 _runtimeTypeInfos[interfaceSymbol.QualifiedName] = AddRuntimeTypeInfoGlobal(module, interfaceSymbol.QualifiedName);
+            // The supertype tables refer to the type information above, so they are created after it.
+            foreach (var cls in concreteClasses)
+                _runtimeSupertypes[cls.QualifiedName] = AddRuntimeSupertypeTable(module, cls.QualifiedName,
+                    RuntimeSupertypeNames(cls, model));
+            foreach (var interfaceSymbol in concreteInterfaces)
+                _runtimeSupertypes[interfaceSymbol.QualifiedName] = AddRuntimeSupertypeTable(module, interfaceSymbol.QualifiedName, []);
             foreach (var symbol in symbols)
             {
                 var functionType = ToLlvmFunctionType(symbol, model);

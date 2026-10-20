@@ -9,12 +9,12 @@ exports `__oxygen_runtime_array_bounds_failure`, which terminates execution
 after reporting an invalid dynamic fixed-array index.
 The generated entry point initializes an `oxygen_runtime_type_info` record for
 each class and interface. Each record contains the stable type name, a
-`oxygen_runtime_type_kind`, extensible flags, and nullable primary-parent
-metadata. Class inheritance and interface relationships are registered with
-`__oxygen_runtime_register_type`; the runtime type check helper then follows
-those relationships for `is` patterns and checked casts. Object headers and
-interface values store pointers to these records rather than raw type-name
-pointers.
+`oxygen_runtime_type_kind`, extensible flags, nullable primary-parent
+metadata, and the list of supertypes: every base class and interface, emitted
+as a constant table. The runtime type check helper compares addresses against
+the object's type and that list for `is` patterns and checked casts, so no
+relationships are registered at startup. Object headers and interface values
+store pointers to these records rather than raw type-name pointers.
 
 Runtime implementation files are organized by responsibility:
 
