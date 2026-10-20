@@ -68,4 +68,6 @@ Numeric literal suffixes such as `1u64`, `1f32`, and `1usize` select the
 literal type. Implicit numeric conversions are accepted when the compiler can
 prove they are safe: lossless widening conversions and representable
 compile-time constants are allowed. Other runtime numeric conversions require
-an explicit cast.
+an explicit cast. A binary operator needs operands with one common type. When
+neither operand converts implicitly to the other's type, the operator is an
+error (`OX0212`), so `u64 + i32` is written with `cast<u64>(count) + total`.

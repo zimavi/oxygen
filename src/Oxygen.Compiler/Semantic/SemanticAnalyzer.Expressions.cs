@@ -718,8 +718,9 @@ public sealed partial class SemanticAnalyzer
             return left;
         if (CanAssign(right, ((BinaryExpression)expression).Left, left))
             return right;
-        throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Binary operator '{((BinaryExpression)expression).Operator}' requires compatible numeric types",
-            expression.Location);
+        var binary = (BinaryExpression)expression;
+        throw ErrorWithCode(DiagnosticCode.MixedOperandTypes,
+            $"Binary operator '{binary.Operator}' has operands of different types: {left} and {right}", expression.Location);
     }
 
     private bool IsFlagsEnum(SemanticType type) =>

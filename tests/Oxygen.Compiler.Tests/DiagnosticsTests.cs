@@ -225,4 +225,35 @@ public sealed class DiagnosticsTests
         Assert.Equal(new[] { "Variable 'nope1' is not declared", "Variable 'nope2' is not declared" },
             errors.Select(diagnostic => diagnostic.Message));
     }
+
+    [Theory]
+    [InlineData("u64 a = 1; i32 b = 2; u64 c = a + b;", "u64 and i32")]
+    [InlineData("u64 a = 1; i32 b = 2; u64 c = b + a;", "i32 and u64")]
+    [InlineData("u64 a = 1; i32 b = 2; bool c = a < b;", "u64 and i32")]
+    public void MixedNumericOperandsReportBothTypesWithConversionAdvice(string declarations, string types)
+    {
+        var diagnostic = AnalyzeForError("i32 main() { " + declarations + " return 0; }");
+
+        Assert.Equal(DiagnosticCode.MixedOperandTypes, diagnostic.Code);
+        Assert.Contains(types, diagnostic.Message);
+        Assert.Contains("cast<u64>(count)", diagnostic.Suggestion);
+    }
+
+    [Fact]
+    public void ALosslessWideningIsAnImplicitConversionNotAMixedOperandError()
+    {
+        var result = AnalyzeWithDiagnostics("i32 main() { i32 a = 1; i64 b = 2; i64 c = a + b; return 0; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    private static Diagnostic AnalyzeForError(string source) =>
+        Assert.Single(AnalyzeWithDiagnostics(source).Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+
+    private static Oxygen.Compiler.Diagnostics.SemanticResult AnalyzeWithDiagnostics(string source)
+    {
+        var tokens = new Tokenizer().TokenizeWithDiagnostics(source, "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+        return new Oxygen.Compiler.Semantic.SemanticAnalyzer().AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+    }
 }

@@ -151,6 +151,8 @@ internal static class DiagnosticAdvice
             "A @flags enum combines its values with bitwise operators, so each member must be 0 or a single bit: a value with exactly one bit set.",
         DiagnosticCode.AmbiguousType =>
             "Types are declared in modules, and a name that a module declares and an import also brings in denotes two types. The name alone does not say which one is meant.",
+        DiagnosticCode.MixedOperandTypes =>
+            "A binary operator needs operands with one common type. An operand converts implicitly only to a type that holds every one of its values, such as i32 to i64. No other numeric conversion is implicit, so for example u64 and i32 have no common type.",
         _ => null
     };
 
@@ -198,6 +200,8 @@ internal static class DiagnosticAdvice
             "Give the member a value that is 0 or a power of two, such as 1, 2, 4 or 8, or remove @flags if the values are not bits.",
         DiagnosticCode.AmbiguousType =>
             "Write the qualified name of the type you mean, such as std.exception.Exception, or the module's import alias with the name.",
+        DiagnosticCode.MixedOperandTypes =>
+            "Convert one operand to the other operand's type with cast<T>(value), such as cast<u64>(count) + total, so that both operands have the same type.",
         _ => null
     };
 }
