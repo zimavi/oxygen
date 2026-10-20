@@ -1,0 +1,115 @@
+using Xunit;
+
+namespace Oxygen.Cli.Tests;
+
+// Builds runtime/tests/runtime_tests.c against the built runtime archive and runs each of its cases. The cases cover runtime
+// functions that Oxygen programs cannot call directly. A case that ends the process is checked by its exit code.
+public sealed class RuntimeLibraryTests : IDisposable
+{
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "oxygenc-tests", Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_directory))
+            Directory.Delete(_directory, recursive: true);
+    }
+
+    [SkippableFact]
+    public void ConvertingANullCStringGivesAnEmptyStringWithNoData()
+    {
+        AssertCasePasses("c-string-from-null");
+    }
+
+    [SkippableFact]
+    public void ConvertingACStringKeepsItsBytesWithoutCopying()
+    {
+        AssertCasePasses("c-string-from-text");
+    }
+
+    [SkippableFact]
+    public void ConvertingAStringToACStringGivesANewTerminatedCopy()
+    {
+        AssertCasePasses("string-to-c-string-copies-and-terminates");
+    }
+
+    [SkippableFact]
+    public void ArraySizesWithinRangeAreTheirProduct()
+    {
+        AssertCasePasses("array-size-within-range");
+    }
+
+    [SkippableFact]
+    public void AnArraySizeThatOverflowsStopsTheProgramWithExitCode101()
+    {
+        var run = RunCase("array-size-overflow-stops-the-program");
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Contains("is too large", run.Error);
+    }
+
+    [SkippableFact]
+    public void CallocZeroesEveryByte()
+    {
+        AssertCasePasses("calloc-zeroes-every-byte");
+    }
+
+    [SkippableFact]
+    public void CallocOfAnOverflowingSizeStopsTheProgramWithExitCode101()
+    {
+        var run = RunCase("calloc-overflow-stops-the-program");
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Contains("is too large", run.Error);
+    }
+
+    [SkippableFact]
+    public void AZeroSizeAllocationIsNonNullAndCanBeFreed()
+    {
+        AssertCasePasses("zero-size-alloc-is-non-null-and-freeable");
+    }
+
+    [SkippableFact]
+    public void TheTraceStackGrowsPastItsInitialCapacityAndRestoresDepths()
+    {
+        AssertCasePasses("trace-stack-grows-past-its-initial-capacity");
+    }
+
+    [SkippableFact]
+    public void StandardOutputWritesEmbeddedZeroBytes()
+    {
+        var run = RunCase("write-stdout-writes-embedded-zero-bytes");
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("a\0b", run.Output);
+    }
+
+    [SkippableFact]
+    public void AbortDeliversStandardOutputWrittenBeforeIt()
+    {
+        var run = RunCase("abort-delivers-buffered-stdout");
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Equal("x", run.Output);
+    }
+
+    private void AssertCasePasses(string name)
+    {
+        var run = RunCase(name);
+
+        Assert.True(run.ExitCode == 0, $"Runtime case '{name}' exited with {run.ExitCode}:\n{run.Error}");
+    }
+
+    private (int ExitCode, string Output, string Error) RunCase(string name)
+    {
+        NativeProgram.RequireNativeToolchain();
+        Directory.CreateDirectory(_directory);
+        var executable = Path.Combine(_directory, "runtime_tests.exe");
+        var build = NativeProgram.RunProcess("clang",
+            ["-I", Path.Combine(NativeProgram.RepositoryRoot, "runtime", "include"),
+                Path.Combine(NativeProgram.RepositoryRoot, "runtime", "tests", "runtime_tests.c"),
+                NativeProgram.RuntimeLibrary, "-o", executable]);
+        Assert.True(build.ExitCode == 0, $"Building the runtime tests failed:\n{build.Error}");
+
+        return NativeProgram.RunProcess(executable, [name]);
+    }
+}

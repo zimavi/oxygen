@@ -22,11 +22,18 @@ Runtime implementation files are organized by responsibility:
 - `src/diagnostics.c` reports fatal runtime failures.
 - `src/exceptions.c` provides exception handler registration, dispatch,
   throw-site trace capture, and unhandled-exception termination.
-- `src/types.c` handles runtime type registration and relationship checks.
+- `src/types.c` provides the runtime type check, which compares type records
+  with the supertype tables the compiler emits.
 - `src/memory.c` provides allocation primitives.
 - `src/io.c` provides byte output. Formatting of primitive values is done by the
   standard library, not the runtime.
 - `src/strings.c` provides string/ C-string marshaling.
+
+`tests/runtime_tests.c` runs native cases for functions that Oxygen programs
+cannot call directly. It takes one case name on the command line, so a case that
+stops the process is checked by its exit code. The integration test
+`RuntimeLibraryTests` in `tests/Oxygen.Cli.Tests` builds it with clang against
+the runtime archive and runs each case.
 
 The output and marshaling helpers use the compiler's `{ ptr, i64 length }`
 string layout. The output functions receive a pointer to this structure to
