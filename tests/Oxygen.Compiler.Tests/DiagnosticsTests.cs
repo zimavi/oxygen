@@ -1,3 +1,4 @@
+using System.Linq;
 using System;
 using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
@@ -163,5 +164,20 @@ public sealed class DiagnosticsTests
 
         var warning = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Message.Contains("is never used"));
         Assert.Equal("main.oxy", warning.SourceName);
+    }
+
+    [Fact]
+    public void ReportsEveryClassWithAHierarchyErrorNotJustTheFirst()
+    {
+        var tokenizer = new Tokenizer();
+        var tokens = tokenizer.TokenizeWithDiagnostics(
+            "class A : Missing1 { } class B : Missing2 { } i32 main() { return 0; }", "main.oxy").Tokens;
+        var unit = new Parsing.Parser(tokens).ParseWithDiagnostics("main.oxy").Unit;
+
+        var result = new Oxygen.Compiler.Semantic.SemanticAnalyzer()
+            .AnalyzeWithDiagnostics([unit], ["main.oxy"]);
+
+        Assert.Null(result.Model);
+        Assert.Equal(2, result.Diagnostics.Where(diagnostic => diagnostic.Message.Contains("is not declared")).Count());
     }
 }

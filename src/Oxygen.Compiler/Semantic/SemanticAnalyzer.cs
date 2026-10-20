@@ -119,14 +119,14 @@ public sealed partial class SemanticAnalyzer
     }
 
     public SemanticModel Analyze(IReadOnlyList<CompilationUnit> compilationUnits)
-        => AnalyzeCore(compilationUnits, null, null);
+        => AnalyzeCore(compilationUnits, null, null)!;
 
     public SemanticModel Analyze(
         IReadOnlyList<CompilationUnit> compilationUnits,
         IReadOnlyList<ExternalModuleDeclaration> externalModules)
-        => AnalyzeCore(compilationUnits, null, null, externalModules);
+        => AnalyzeCore(compilationUnits, null, null, externalModules)!;
 
-    private SemanticModel AnalyzeCore(
+    private SemanticModel? AnalyzeCore(
         IReadOnlyList<CompilationUnit> compilationUnits,
         DiagnosticBag? diagnostics,
         IReadOnlyList<string?>? sourceNames = null,
@@ -362,7 +362,9 @@ public sealed partial class SemanticAnalyzer
             }
         }
         _sourceName = null;
-        ValidateClassHierarchy();
+        // A class with a declaration error is not analysed further, so no model is built when one is reported.
+        if (!ValidateClassHierarchy())
+            return null;
         foreach (var className in _classesByName.Keys.ToArray())
             _classesByName[className] = _classesByName[className] with
             {

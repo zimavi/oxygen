@@ -34,9 +34,30 @@ public sealed partial class SemanticAnalyzer
             _ => 0
         };
 
-    private void ValidateClassHierarchy()
+    // Checks every class. With a diagnostics bag, each class's errors are reported and the others are still checked; the result
+    // says whether all classes passed. Without one, the first error throws, as before.
+    private bool ValidateClassHierarchy()
     {
-        foreach (var classSymbol in _classesByName.Values)
+        var valid = true;
+        foreach (var classSymbol in _classesByName.Values.ToArray())
+        {
+            try
+            {
+                ValidateClassHierarchyOf(classSymbol);
+            }
+            catch (SemanticException exception) when (_diagnostics is not null)
+            {
+                _diagnostics?.Add(DiagnosticPhase.Semantic, exception.Message, exception.Location, exception.Length,
+                    exception.IsSourceAttributed ? exception.SourceName : _sourceName);
+                valid = false;
+            }
+        }
+
+        return valid;
+    }
+
+    private void ValidateClassHierarchyOf(ClassSymbol classSymbol)
+    {
         {
             if (classSymbol.IsValue)
             {
