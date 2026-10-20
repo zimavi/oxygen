@@ -68,6 +68,19 @@ an invalid shift or enum value, a failed allocation, a failed write to standard
 output or error, and a stack trace frame out of range each print a message and end the program with exit code 101. A runtime
 failure does not raise an exception that a catch can handle.
 
+On Windows, a hardware fault is a runtime failure too: an access violation, a
+divide error or a stack overflow. The runtime prints the exception code and the
+address, and ends the program with exit code 101. No catch clause and no
+`finally` block runs for it, even when the fault happens inside a call. POSIX
+targets do not report hardware faults; the operating system ends the program
+with the signal, as it does for any native program.
+
+Dereferencing a null raw pointer is not defined yet. Without optimization, the
+store or load faults and is reported as above. With optimization, the compiler
+may treat the null access as undefined behaviour and emit a trap instead, which
+Windows ends without the report. Tests that fault on purpose build with
+`--optimization O0`.
+
 This is distinct from compiler diagnostics, which are reported before native
 code is generated. Compiler diagnostics are structured reports for invalid
 source, malformed native metadata, unsupported backend inputs, and native
