@@ -378,12 +378,16 @@ public sealed partial class LlvmModuleGenerator
                 return LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)ownerType.ArrayLength, false);
             }
         }
+        // `Enum.Member` names a constant. The analyzer typed the access with the enum's qualified name; a variable of the same
+        // name takes precedence, as it does in the analyzer.
         if (member.Target is IdentifierExpression enumIdentifier
-            && model.Enums.TryGetValue(enumIdentifier.Name, out var enumSymbol))
+            && !values.ContainsKey(enumIdentifier.Name) && !storage.ContainsKey(enumIdentifier.Name)
+            && model.ExpressionTypes.TryGetValue(member, out var enumType) && enumType.IsEnum
+            && model.Enums.TryGetValue(enumType.EnumName!, out var enumSymbol))
         {
             var value = enumSymbol.Members.First(candidate => candidate.Name == member.MemberName).Value;
             return LLVMValueRef.CreateConstInt(
-                ToLlvmType(SemanticType.Enum(enumSymbol.Name), model),
+                ToLlvmType(enumType, model),
                 unchecked((ulong)value),
                 false);
         }
@@ -393,7 +397,7 @@ public sealed partial class LlvmModuleGenerator
             if (owner is not null)
             {
                 var property = owner.DeclaredProperties.First(property => property.Name == member.MemberName);
-                if (_propertyAccessors.TryGetValue((owner.Name, property.Name, PropertyAccessorKind.Get), out var getter))
+                if (_propertyAccessors.TryGetValue((owner.QualifiedName, property.Name, PropertyAccessorKind.Get), out var getter))
                     return EmitCallOrInvoke(builder, ToLlvmFunctionType(getter, model), llvmFunctions[getter],
                         [values["this"]], "property.get");
             }
@@ -406,8 +410,8 @@ public sealed partial class LlvmModuleGenerator
         if (targetType.IsInterface)
         {
             var iface = model.Interfaces[targetType.StructName!];
-            var getter = _propertyAccessors[(iface.Name, member.MemberName, PropertyAccessorKind.Get)];
-            var slot = _interfaceSlots[iface.Name].ToList().IndexOf(getter);
+            var getter = _propertyAccessors[(iface.QualifiedName, member.MemberName, PropertyAccessorKind.Get)];
+            var slot = _interfaceSlots[iface.QualifiedName].ToList().IndexOf(getter);
             var table = builder.BuildExtractValue(target, 1, "interface.table");
             var objectValue = builder.BuildExtractValue(target, 0, "interface.data");
             var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), table,
@@ -424,7 +428,7 @@ public sealed partial class LlvmModuleGenerator
             var property = cls.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (property is not null)
             {
-                var getter = _propertyAccessors[(cls.Name, property.Name, PropertyAccessorKind.Get)];
+                var getter = _propertyAccessors[(cls.QualifiedName, property.Name, PropertyAccessorKind.Get)];
                 var targetFunction = llvmFunctions[getter];
                 var receiver = target;
                 if (!cls.IsValue)
@@ -433,7 +437,7 @@ public sealed partial class LlvmModuleGenerator
                 {
                     var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
                         .First(pair => pair.candidate == getter).index;
-                    var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
+                    var slotAddress = builder.BuildStructGEP2(_classTypes[cls.QualifiedName], receiver,
                         (uint)slot + 1, "property.vtable.slot");
                     targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), slotAddress,
                         "property.vtable.target");
@@ -446,7 +450,7 @@ public sealed partial class LlvmModuleGenerator
                 return builder.BuildExtractValue(target, (uint)(fieldIndex - 1), $"field.{member.MemberName}");
             EmitNullReferenceCheck(builder, target, member.MemberName, "read", model, llvmFunctions);
             fieldIndex = FieldOffset(cls, model, fieldIndex - 1);
-            var address = builder.BuildStructGEP2(_classTypes[cls.Name], target, (uint)fieldIndex,
+            var address = builder.BuildStructGEP2(_classTypes[cls.QualifiedName], target, (uint)fieldIndex,
                 $"field.{member.MemberName}");
             return builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[member], model), address,
                 $"field.{member.MemberName}");

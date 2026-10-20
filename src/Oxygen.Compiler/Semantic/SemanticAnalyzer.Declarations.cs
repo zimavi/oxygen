@@ -44,10 +44,11 @@ public sealed partial class SemanticAnalyzer
             destructor.Visibility);
     }
 
-    private void EnsureTypeNameAvailable(string name, SourceLocation location)
+    // A module declares each type name once. The key is the type's qualified name, so the same name in another module is fine.
+    private void EnsureTypeNameAvailable(string name, SourceLocation location, string key)
     {
-        if (_enumsByName.ContainsKey(name) || _structsByName.ContainsKey(name) || _unionsByName.ContainsKey(name)
-            || _classesByName.ContainsKey(name) || _interfacesByName.ContainsKey(name))
+        if (_enumsByName.ContainsKey(key) || _structsByName.ContainsKey(key) || _unionsByName.ContainsKey(key)
+            || _classesByName.ContainsKey(key) || _interfacesByName.ContainsKey(key))
             throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A type named '{name}' is already declared", location, name.Length);
     }
 

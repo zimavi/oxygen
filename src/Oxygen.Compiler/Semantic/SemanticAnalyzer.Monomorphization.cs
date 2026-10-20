@@ -101,6 +101,8 @@ public sealed partial class SemanticAnalyzer
 
         foreach (var unit in units)
         {
+            _typeScopeModule = unit.ModuleName ?? "program";
+            _typeScopeImports = unit.Imports;
             foreach (var structure in unit.Structs)
             {
                 var parameters = structure.DeclaredTypeParameters.Select(item => item.Name)
@@ -153,13 +155,14 @@ public sealed partial class SemanticAnalyzer
                 // A generic base class is specialized for the same arguments, so that its constructor can be called.
                 if (cls.Declaration.BaseTypeSyntax is { Count: > 0 } baseSyntax)
                     AddType(SubstituteAggregate(
-                        ConcreteType(baseSyntax[0], cls.DeclaredTypeParameters.ToHashSet(StringComparer.Ordinal)),
+                        InTypeScopeOf(cls.QualifiedName, () => ConcreteType(baseSyntax[0],
+                            cls.DeclaredTypeParameters.ToHashSet(StringComparer.Ordinal))),
                         substitutions, aggregateNames));
                 // The member bodies are analyzed for these concrete arguments. That types every
                 // expression concretely, specializes the generic functions they call, and
                 // reveals aggregates that only appear inside bodies (e.g. `Iterator(this)`).
-                var instantiation = InstantiateClass(cls, aggregate, substitutions, functionsByName,
-                    expressionTypes, resolvedCalls);
+                var instantiation = InTypeScopeOf(cls.QualifiedName, () => InstantiateClass(cls, aggregate, substitutions,
+                    functionsByName, expressionTypes, resolvedCalls));
                 instantiations[AggregateKey(aggregate)] = instantiation;
                 foreach (var expression in instantiation.Expressions())
                     if (expressionTypes.TryGetValue(expression, out var expressionType))
@@ -217,12 +220,14 @@ public sealed partial class SemanticAnalyzer
             var substitutions = DeclaredTypeParameters(baseName, aggregate.Kind)
                 .Zip(aggregate.TypeArguments!, (parameter, argument) => (parameter, argument))
                 .ToDictionary(pair => pair.parameter, pair => pair.argument, StringComparer.Ordinal);
+            // The specialized type is keyed by its qualified name, `module.Name`, and its symbol carries the simple name.
+            var simpleName = specializedName[(baseName.LastIndexOf('.') + 1)..];
 
             if (aggregate.Kind == SemanticTypeKind.Class && _classesByName.TryGetValue(baseName, out var cls))
             {
-                var specialized = SpecializeClass(
-                    cls, instantiations[key], specializedName, substitutions, aggregateNames, specializedMethods,
-                    specializedDeclarations, newExpressionTypes, newResolvedCalls);
+                var specialized = InTypeScopeOf(baseName, () => SpecializeClass(
+                    cls, instantiations[key], simpleName, substitutions, aggregateNames, specializedMethods,
+                    specializedDeclarations, newExpressionTypes, newResolvedCalls));
                 _classesByName[specializedName] = specialized;
                 AddSpecializedMethods(functions, functionsByName, specialized.Methods.Concat(specialized.StaticMethods).ToArray());
                 foreach (var field in specialized.Fields)
@@ -240,19 +245,19 @@ public sealed partial class SemanticAnalyzer
             else if (aggregate.Kind == SemanticTypeKind.Interface
                      && _interfacesByName.TryGetValue(baseName, out var iface))
             {
-                var specialized = SpecializeInterface(
-                    iface, specializedName, substitutions, aggregateNames, specializedMethods,
-                    specializedDeclarations, newExpressionTypes, newResolvedCalls);
+                var specialized = InTypeScopeOf(baseName, () => SpecializeInterface(
+                    iface, simpleName, substitutions, aggregateNames, specializedMethods,
+                    specializedDeclarations, newExpressionTypes, newResolvedCalls));
                 _interfacesByName[specializedName] = specialized;
                 AddSpecializedMethods(functions, functionsByName, specialized.Methods);
             }
             else if (aggregate.Kind == SemanticTypeKind.Union && _unionsByName.TryGetValue(baseName, out var union))
             {
-                _unionsByName[specializedName] = SpecializeUnion(union, specializedName, substitutions, aggregateNames);
+                _unionsByName[specializedName] = SpecializeUnion(union, simpleName, substitutions, aggregateNames);
             }
             else if (aggregate.Kind == SemanticTypeKind.Struct && _structsByName.TryGetValue(baseName, out var structure))
             {
-                _structsByName[specializedName] = SpecializeStruct(structure, specializedName, substitutions, aggregateNames);
+                _structsByName[specializedName] = SpecializeStruct(structure, simpleName, substitutions, aggregateNames);
             }
         }
 
@@ -330,7 +335,7 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyDictionary<string, string> aggregateNames,
         IReadOnlyDictionary<(FunctionDeclaration Declaration, string Owner), FunctionSymbol> specializedMethods)
     {
-        var owner = symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..];
+        var owner = symbol.ModuleName;
         if ((!_classesByName.TryGetValue(owner, out var cls) || !cls.IsGeneric)
             && (!_interfacesByName.TryGetValue(owner, out var iface) || !iface.IsGeneric))
             return symbol;

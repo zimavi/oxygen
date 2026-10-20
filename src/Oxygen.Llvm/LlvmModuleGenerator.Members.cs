@@ -17,7 +17,7 @@ public sealed partial class LlvmModuleGenerator
         var property = cls.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == member.MemberName);
         if (property is not null)
         {
-            var setter = _propertyAccessors[(cls.Name, property.Name, PropertyAccessorKind.Set)];
+            var setter = _propertyAccessors[(cls.QualifiedName, property.Name, PropertyAccessorKind.Set)];
             var setterType = ToLlvmFunctionType(setter, model);
             if (!cls.IsValue)
                 EmitNullReferenceCheck(builder, receiver, member.MemberName, "written", model, llvmFunctions);
@@ -26,7 +26,7 @@ public sealed partial class LlvmModuleGenerator
             {
                 var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
                     .First(pair => pair.candidate == setter).index;
-                var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
+                var slotAddress = builder.BuildStructGEP2(_classTypes[cls.QualifiedName], receiver,
                     (uint)slot + 1, "property.vtable.slot");
                 targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                     slotAddress, "property.vtable.target");
@@ -38,13 +38,13 @@ public sealed partial class LlvmModuleGenerator
 
         if (cls.IsValue)
             throw new InvalidOperationException(
-                $"Internal compiler error: field '{member.MemberName}' of value class '{cls.Name}' must be stored through its variable.");
+                $"Internal compiler error: field '{member.MemberName}' of value class '{cls.QualifiedName}' must be stored through its variable.");
         var fieldIndex = cls.Fields
             .Select((field, index) => (field, index))
             .First(pair => pair.field.Name == member.MemberName).index;
         var coerced = CoerceValue(builder, assigned, assignedType, targetType, model);
         EmitNullReferenceCheck(builder, receiver, member.MemberName, "written", model, llvmFunctions);
-        var address = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
+        var address = builder.BuildStructGEP2(_classTypes[cls.QualifiedName], receiver,
             (uint)FieldOffset(cls, model, fieldIndex), $"field.{member.MemberName}");
         builder.BuildStore(coerced, address);
     }

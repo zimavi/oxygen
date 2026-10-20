@@ -209,19 +209,19 @@ public sealed partial class LlvmModuleGenerator
                     LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
         foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
         {
-            InitializeRuntimeTypeInfo(builder, cls.Name, RuntimeParentName(cls, model), 1, model);
+            InitializeRuntimeTypeInfo(builder, cls.QualifiedName, RuntimeParentName(cls, model), 1, model);
         }
         foreach (var interfaceSymbol in model.Interfaces.Values.Where(iface => !iface.IsGeneric))
         {
-            InitializeRuntimeTypeInfo(builder, interfaceSymbol.Name, null, 2, model);
+            InitializeRuntimeTypeInfo(builder, interfaceSymbol.QualifiedName, null, 2, model);
         }
         foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
         {
             var parent = RuntimeParentName(cls, model);
             if (parent is not null)
-                RegisterRuntimeType(builder, registerType, cls.Name, parent);
+                RegisterRuntimeType(builder, registerType, cls.QualifiedName, parent);
             foreach (var interfaceName in RuntimeInterfaceNames(cls, model))
-                RegisterRuntimeType(builder, registerType, cls.Name, interfaceName);
+                RegisterRuntimeType(builder, registerType, cls.QualifiedName, interfaceName);
         }
 
         var oxygenMain = model.MainFunction
@@ -327,7 +327,7 @@ public sealed partial class LlvmModuleGenerator
         var parameterOffset = IsClassMethod(symbol, model) ? 1 : 0;
         if (parameterOffset != 0)
         {
-            var className = symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..];
+            var className = symbol.ModuleName;
             var classSymbol = model.Classes[className];
             values["this"] = classSymbol.IsValue
                 ? builder.BuildAlloca(_classTypes[className], "this.addr")
@@ -350,7 +350,7 @@ public sealed partial class LlvmModuleGenerator
 
         if (_accessorSymbols.Contains(symbol))
         {
-            var owner = model.Classes.Values.First(cls => cls.Name == symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..]);
+            var owner = model.Classes.Values.First(cls => cls.QualifiedName == symbol.ModuleName);
             var property = owner.DeclaredProperties.First(property =>
                 symbol.Name == $"get_{property.Name}" || symbol.Name == $"set_{property.Name}");
             var accessor = property.Declaration.Accessors.First(accessor =>
@@ -442,7 +442,7 @@ public sealed partial class LlvmModuleGenerator
         for (var index = 0; index < cls.Fields.Count; index++)
         {
             var fieldAddress = builder.BuildStructGEP2(
-                _classTypes[cls.Name],
+                _classTypes[cls.QualifiedName],
                 thisValue,
                 (uint)FieldOffset(cls, model, index),
                 $"field.{cls.Fields[index].Name}");

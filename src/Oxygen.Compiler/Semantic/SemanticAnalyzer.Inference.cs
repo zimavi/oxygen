@@ -66,7 +66,7 @@ public sealed partial class SemanticAnalyzer
 
         if (expectedType is not null)
         {
-            var constructed = SemanticType.Class(cls.Name, parameters.Select(SemanticType.GenericParameter).ToArray());
+            var constructed = SemanticType.Class(cls.QualifiedName, parameters.Select(SemanticType.GenericParameter).ToArray());
             BindFromExpectedType(constructed, expectedType, parameters, bindings);
         }
 

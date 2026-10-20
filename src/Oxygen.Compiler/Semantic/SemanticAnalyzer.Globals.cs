@@ -29,6 +29,8 @@ public sealed partial class SemanticAnalyzer
             var unit = compilationUnits[unitIndex];
             _sourceName = sourceNames is not null && unitIndex < sourceNames.Count ? sourceNames[unitIndex] : null;
             var moduleName = unit.ModuleName ?? "program";
+            _typeScopeModule = moduleName;
+            _typeScopeImports = unit.Imports;
             foreach (var declaration in unit.Globals)
                 DeclareGlobalVariable(declaration, moduleName, functions, unit.Imports, expressionTypes, resolvedCalls);
         }
@@ -91,7 +93,7 @@ public sealed partial class SemanticAnalyzer
     // the class's module.
     private Scope GlobalScopeOf(string functionModuleName)
     {
-        var owner = _classesByName.Values.FirstOrDefault(cls => $"{cls.ModuleName}.{cls.Name}" == functionModuleName);
+        var owner = _classesByName.Values.FirstOrDefault(cls => cls.QualifiedName == functionModuleName);
         return ModuleScope(owner?.ModuleName ?? functionModuleName);
     }
 

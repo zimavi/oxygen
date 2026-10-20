@@ -168,7 +168,8 @@ public sealed partial class SemanticAnalyzer
         _baseCalls.Clear();
         _constructionCalls.Clear();
         _functionContexts.Clear();
-        _classContexts.Clear();
+        _typeContexts.Clear();
+        _resolvedTypeSyntax.Clear();
         _analyzedSpecializations.Clear();
         _fieldInitializerOverrides = null;
         _loopDepth = 0;
@@ -185,9 +186,12 @@ public sealed partial class SemanticAnalyzer
             var unit = compilationUnits[unitIndex];
             _sourceName = SourceNameAt(unitIndex);
             var moduleName = unit.ModuleName ?? "program";
+            _typeScopeModule = moduleName;
+            _typeScopeImports = unit.Imports;
             foreach (var declaration in unit.Enums)
             {
-                if (_enumsByName.ContainsKey(declaration.Name) || _structsByName.ContainsKey(declaration.Name))
+                var key = QualifiedTypeName(moduleName, declaration.Name);
+                if (_enumsByName.ContainsKey(key) || _structsByName.ContainsKey(key))
                     throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
                 var isFlags = ValidateEnumAnnotations(declaration);
                 var members = new List<EnumMemberSymbol>();
@@ -214,17 +218,19 @@ public sealed partial class SemanticAnalyzer
                         throw Error($"Enum '{declaration.Name}' member values overflow", member.Location);
                     next = value + 1;
                 }
-                _enumsByName.Add(declaration.Name,
+                _enumsByName.Add(key,
                     new EnumSymbol(declaration.Name, declaration.UnderlyingType, members, declaration, declaration.Visibility)
                     {
-                        IsFlags = isFlags
+                        IsFlags = isFlags,
+                        ModuleName = moduleName
                     });
             }
             foreach (var declaration in unit.Unions)
             {
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
-                if (_enumsByName.ContainsKey(declaration.Name) || _structsByName.ContainsKey(declaration.Name)
-                    || _unionsByName.ContainsKey(declaration.Name))
+                var key = QualifiedTypeName(moduleName, declaration.Name);
+                if (_enumsByName.ContainsKey(key) || _structsByName.ContainsKey(key)
+                    || _unionsByName.ContainsKey(key))
                     throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A type named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
                 var names = new HashSet<string>(StringComparer.Ordinal);
                 var cases = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
@@ -242,17 +248,21 @@ public sealed partial class SemanticAnalyzer
                     }
                     return result;
                 });
-                _unionsByName.Add(declaration.Name, new UnionSymbol(declaration.Name, cases, declaration,
-                    declaration.Visibility, declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
+                _unionsByName.Add(key, new UnionSymbol(declaration.Name, cases, declaration,
+                    declaration.Visibility, declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray())
+                {
+                    ModuleName = moduleName
+                });
             }
             foreach (var declaration in unit.Structs)
             {
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
-                if (_structsByName.ContainsKey(declaration.Name))
+                var key = QualifiedTypeName(moduleName, declaration.Name);
+                if (_structsByName.ContainsKey(key))
                     throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"A struct named '{declaration.Name}' is already declared", declaration.Location, declaration.Name.Length);
                 var annotations = ParseStructLayout(declaration);
-                _declarationSourceNames[declaration.Name] = _sourceName;
-                _structsByName.Add(declaration.Name,
+                _declarationSourceNames[key] = _sourceName;
+                _structsByName.Add(key,
                     new StructSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
                         annotations.IsPacked, annotations.Alignment,
                         declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray()));
@@ -260,18 +270,20 @@ public sealed partial class SemanticAnalyzer
             foreach (var declaration in unit.Interfaces)
             {
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
-                EnsureTypeNameAvailable(declaration.Name, declaration.Location);
-                _interfacesByName.Add(declaration.Name,
+                var key = QualifiedTypeName(moduleName, declaration.Name);
+                EnsureTypeNameAvailable(declaration.Name, declaration.Location, key);
+                _interfacesByName.Add(key,
                     new InterfaceSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
                         declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(), []));
             }
             foreach (var declaration in unit.Classes)
             {
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
-                EnsureTypeNameAvailable(declaration.Name, declaration.Location);
+                var key = QualifiedTypeName(moduleName, declaration.Name);
+                EnsureTypeNameAvailable(declaration.Name, declaration.Location, key);
                 ValidateClassAnnotations(declaration);
-                _declarationSourceNames[declaration.Name] = _sourceName;
-                _classesByName.Add(declaration.Name,
+                _declarationSourceNames[key] = _sourceName;
+                _classesByName.Add(key,
                     new ClassSymbol(declaration.Name, moduleName, declaration.BaseType,
                         declaration.Interfaces, [], [], [], declaration.Destructor, declaration, declaration.Visibility,
                         declaration.IsValue,
@@ -283,8 +295,19 @@ public sealed partial class SemanticAnalyzer
         {
             var unit = compilationUnits[unitIndex];
             _sourceName = SourceNameAt(unitIndex);
+            _typeScopeModule = unit.ModuleName ?? "program";
+            _typeScopeImports = unit.Imports;
+            // Every type of the unit is declared in its module and sees the unit's imports, so its context is the unit's.
+            var unitContext = new DeclarationContext(_typeScopeModule, unit.Imports, SourceNameAt(unitIndex));
+            foreach (var name in unit.Enums.Select(declaration => declaration.Name)
+                .Concat(unit.Unions.Select(declaration => declaration.Name))
+                .Concat(unit.Structs.Select(declaration => declaration.Name))
+                .Concat(unit.Interfaces.Select(declaration => declaration.Name))
+                .Concat(unit.Classes.Select(declaration => declaration.Name)))
+                _typeContexts[QualifiedTypeName(_typeScopeModule, name)] = unitContext;
             foreach (var declaration in unit.Interfaces)
             {
+                var interfaceKey = QualifiedTypeName(_typeScopeModule, declaration.Name);
                 var methods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.Methods.Select(method =>
                         CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray());
@@ -296,7 +319,7 @@ public sealed partial class SemanticAnalyzer
                 var interfaceProperties = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.DeclaredProperties.Select(property => new PropertySymbol(
                         property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray());
-                _interfacesByName[declaration.Name] = _interfacesByName[declaration.Name] with
+                _interfacesByName[interfaceKey] = _interfacesByName[interfaceKey] with
                 {
                     Methods = methods,
                     Properties = interfaceProperties
@@ -304,6 +327,7 @@ public sealed partial class SemanticAnalyzer
             }
             foreach (var declaration in unit.Classes)
             {
+                var classKey = QualifiedTypeName(_typeScopeModule, declaration.Name);
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.Fields.Where(field => !field.IsStatic).Select(field =>
                             new ClassFieldSymbol(field.Name, ResolveValueType(field.Type, $"Field '{field.Name}'", field.Location), field, field.Visibility, field.IsConst))
@@ -358,9 +382,10 @@ public sealed partial class SemanticAnalyzer
                 {
                     var types = declaration.InterfaceTypeSyntaxes is { Count: > 0 }
                         ? declaration.InterfaceTypeSyntaxes.Select(ResolveType).ToList()
-                        : declaration.Interfaces.Select(name => SemanticType.Interface(name)).ToList();
+                        : declaration.Interfaces.Select(name => SemanticType.Interface(FindTypeName(name, declaration.Location) ?? name)).ToList();
                     if (declaration.BaseTypeSyntax is { Count: > 0 }
-                        && _interfacesByName.ContainsKey(declaration.BaseTypeSyntax[0].NamedType!))
+                        && FindTypeName(declaration.BaseTypeSyntax[0].NamedType!, declaration.Location) is { } baseInterface
+                        && _interfacesByName.ContainsKey(baseInterface))
                         types.Insert(0, ResolveType(declaration.BaseTypeSyntax[0]));
                     return types;
                 });
@@ -368,9 +393,13 @@ public sealed partial class SemanticAnalyzer
                 var properties = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
                     declaration.DeclaredProperties.Select(property => new PropertySymbol(
                         property.Name, ResolveType(property.Type), property, property.Visibility)).ToArray());
-                _ownClassFields[declaration.Name] = fields;
-                _classesByName[declaration.Name] = _classesByName[declaration.Name] with
+                _ownClassFields[classKey] = fields;
+                var baseTypeName = declaration.BaseType is null
+                    ? null
+                    : FindTypeName(declaration.BaseType, declaration.Location) ?? declaration.BaseType;
+                _classesByName[classKey] = _classesByName[classKey] with
                 {
+                    BaseTypeName = baseTypeName,
                     Fields = fields,
                     Properties = properties,
                     Methods = methods,
@@ -394,15 +423,18 @@ public sealed partial class SemanticAnalyzer
         {
             var unit = compilationUnits[unitIndex];
             _sourceName = SourceNameAt(unitIndex);
+            _typeScopeModule = unit.ModuleName ?? "program";
+            _typeScopeImports = unit.Imports;
             foreach (var declaration in unit.Structs)
             {
+                var structKey = QualifiedTypeName(_typeScopeModule, declaration.Name);
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () => declaration.Fields
                     .Select(field => new StructFieldSymbol(field.Name, ResolveValueType(field.Type, $"Field '{field.Name}'", field.Location), field))
                     .ToArray());
                 if (fields.Select(field => field.Name).Distinct(StringComparer.Ordinal).Count() != fields.Length)
                     throw Error($"Struct '{declaration.Name}' contains duplicate fields", declaration.Location,
                         declaration.Name.Length);
-                _structsByName[declaration.Name] = _structsByName[declaration.Name] with { Fields = fields };
+                _structsByName[structKey] = _structsByName[structKey] with { Fields = fields };
             }
         }
         _sourceName = null;
@@ -426,6 +458,8 @@ public sealed partial class SemanticAnalyzer
                 ? null
                 : sourceNames[unitIndex];
             _sourceName = sourceName;
+            _typeScopeModule = moduleName;
+            _typeScopeImports = unit.Imports;
             var importAliases = new HashSet<string>(StringComparer.Ordinal);
             foreach (var import in unit.Imports)
             {
@@ -525,8 +559,9 @@ public sealed partial class SemanticAnalyzer
             }
             foreach (var classDeclaration in unit.Classes)
             {
-                _classContexts[classDeclaration.Name] = new DeclarationContext(moduleName, unit.Imports, sourceName);
-                foreach (var method in _classesByName[classDeclaration.Name].Methods.Concat(_classesByName[classDeclaration.Name].StaticMethods))
+                var classKey = QualifiedTypeName(moduleName, classDeclaration.Name);
+                _typeContexts[classKey] = new DeclarationContext(moduleName, unit.Imports, sourceName);
+                foreach (var method in _classesByName[classKey].Methods.Concat(_classesByName[classKey].StaticMethods))
                 {
                     var key = method.QualifiedName;
                     if (!functionsByName.TryGetValue(key, out var overloads))
@@ -578,7 +613,8 @@ public sealed partial class SemanticAnalyzer
                         parameter => parameter,
                         SemanticType.GenericParameter,
                         StringComparer.Ordinal);
-                    _typeParameterConstraints = ConstraintsFor(owner.Declaration.DeclaredTypeParameters);
+                    _typeParameterConstraints = InTypeScope(TypeScopeModuleOf(module.Name), module.Imports,
+                        () => ConstraintsFor(owner.Declaration.DeclaredTypeParameters));
                 }
                 else if (symbol.IsGeneric)
                 {
@@ -586,7 +622,8 @@ public sealed partial class SemanticAnalyzer
                         parameter => parameter.Name,
                         parameter => SemanticType.GenericParameter(parameter.Name),
                         StringComparer.Ordinal);
-                    _typeParameterConstraints = ConstraintsFor(symbol.Declaration.DeclaredTypeParameters);
+                    _typeParameterConstraints = InTypeScope(TypeScopeModuleOf(module.Name), module.Imports,
+                        () => ConstraintsFor(symbol.Declaration.DeclaredTypeParameters));
                 }
                 AnalyzeFunction(symbol, functionsByName, module.Name, module.Imports, expressionTypes, resolvedCalls);
             }
@@ -615,9 +652,11 @@ public sealed partial class SemanticAnalyzer
             _sourceName = diagnostics is null || sourceNames is null || unitIndex >= sourceNames.Count
                 ? null
                 : sourceNames[unitIndex];
+            _typeScopeModule = moduleName;
+            _typeScopeImports = unit.Imports;
             foreach (var declaration in unit.Classes)
             {
-                var classSymbol = _classesByName[declaration.Name];
+                var classSymbol = _classesByName[QualifiedTypeName(moduleName, declaration.Name)];
                 if (!classSymbol.IsGeneric)
                     AnalyzeAccessorBodies(classSymbol, moduleName, unit.Imports, functionsByName, expressionTypes,
                         resolvedCalls, diagnostics, SourceNameAt(unitIndex));
@@ -740,7 +779,8 @@ public sealed partial class SemanticAnalyzer
             new Dictionary<Expression, GlobalVariableSymbol>(_globalReferences, ReferenceEqualityComparer.Instance),
             new HashSet<CallExpression>(_baseCalls, ReferenceEqualityComparer.Instance),
             new Dictionary<ClassConstructionExpression, CallExpression>(_constructionCalls, ReferenceEqualityComparer.Instance),
-            new Dictionary<SyntaxNode, int[]>(_argumentOrders, ReferenceEqualityComparer.Instance));
+            new Dictionary<SyntaxNode, int[]>(_argumentOrders, ReferenceEqualityComparer.Instance),
+            new Dictionary<TypeSyntax, SemanticType>(_resolvedTypeSyntax, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

@@ -148,7 +148,7 @@ public sealed partial class LlvmModuleGenerator
     {
         for (var cls = model.Classes.GetValueOrDefault(typeName); cls is not null;
              cls = cls.BaseTypeName is null ? null : model.Classes.GetValueOrDefault(cls.BaseTypeName))
-            if (_destructors.TryGetValue(cls.Name, out var destructor))
+            if (_destructors.TryGetValue(cls.QualifiedName, out var destructor))
                 return destructor;
         return null;
     }

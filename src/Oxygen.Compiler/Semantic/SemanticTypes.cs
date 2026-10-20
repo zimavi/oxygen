@@ -74,25 +74,46 @@ public sealed record SemanticType(
         Kind == SemanticTypeKind.Primitive &&
         Primitive is not (PrimitiveType.F32 or PrimitiveType.F64 or PrimitiveType.Bool or PrimitiveType.Void);
 
-    public override string ToString() =>
+    // The name a diagnostic shows: the simple name of the type, without its module.
+    public override string ToString() => Format(qualified: false);
+
+    // The full name of the type, with its module, which identifies it in the model.
+    public string ToQualifiedString() => Format(qualified: true);
+
+    private string Format(bool qualified) =>
         Kind switch
         {
             SemanticTypeKind.String => "string",
-            SemanticTypeKind.Pointer => $"{Pointee}*",
-            SemanticTypeKind.Struct => FormatNamed(StructName ?? "struct"),
-            SemanticTypeKind.Class => FormatNamed(StructName ?? "class"),
-            SemanticTypeKind.Interface => FormatNamed(StructName ?? "interface"),
-            SemanticTypeKind.Array => $"{ElementType}[{ArrayLength}]",
-            SemanticTypeKind.Enum => EnumName ?? "enum",
-            SemanticTypeKind.Union => FormatNamed(EnumName ?? "union"),
+            SemanticTypeKind.Pointer => $"{Pointee!.Format(qualified)}*",
+            SemanticTypeKind.Struct => FormatNamed(StructName ?? "struct", qualified),
+            SemanticTypeKind.Class => FormatNamed(StructName ?? "class", qualified),
+            SemanticTypeKind.Interface => FormatNamed(StructName ?? "interface", qualified),
+            SemanticTypeKind.Array => $"{ElementType!.Format(qualified)}[{ArrayLength}]",
+            SemanticTypeKind.Enum => DisplayName(EnumName ?? "enum", qualified),
+            SemanticTypeKind.Union => FormatNamed(EnumName ?? "union", qualified),
             SemanticTypeKind.GenericParameter => GenericParameterName ?? "generic",
             _ => Primitive?.ToString().ToLowerInvariant() ?? "unknown"
         };
 
-    private string FormatNamed(string name) =>
-        TypeArguments is { Count: > 0 }
-            ? $"{name}<{string.Join(", ", TypeArguments)}>"
-            : name;
+    private string FormatNamed(string name, bool qualified)
+    {
+        var shown = DisplayName(name, qualified);
+        return TypeArguments is { Count: > 0 }
+            ? $"{shown}<{string.Join(", ", TypeArguments.Select(argument => argument.Format(qualified)))}>"
+            : shown;
+    }
+
+    // A qualified name is `module.Name`, where the module may itself contain dots. A specialized name carries its type
+    // arguments after `__ox_`, and those are kept as they are. The simple name is the part after the module.
+    private static string DisplayName(string name, bool qualified)
+    {
+        if (qualified)
+            return name;
+        var specialization = name.IndexOf("__ox_", StringComparison.Ordinal);
+        var head = specialization < 0 ? name : name[..specialization];
+        var tail = specialization < 0 ? string.Empty : name[specialization..];
+        return head[(head.LastIndexOf('.') + 1)..] + tail;
+    }
 }
 
 // Structural equality of semantic types. Type arguments are lists, so they are compared by content, not by reference.

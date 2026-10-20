@@ -62,27 +62,27 @@ public sealed partial class SemanticAnalyzer
             if (classSymbol.IsValue)
             {
                 if (classSymbol.BaseTypeName is not null)
-                    throw DeclarationError(classSymbol.Name, $"Value class '{classSymbol.Name}' cannot inherit from another class",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Value class '{classSymbol.Name}' cannot inherit from another class",
                         classSymbol.Declaration.Location);
                 if (classSymbol.InterfaceNames.Count != 0)
-                    throw DeclarationError(classSymbol.Name, $"Value class '{classSymbol.Name}' cannot implement interfaces",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Value class '{classSymbol.Name}' cannot implement interfaces",
                         classSymbol.Declaration.Location);
                 if (classSymbol.Methods.Any(method => method.Declaration.IsVirtual || method.Declaration.IsOverride))
-                    throw DeclarationError(classSymbol.Name, $"Value class '{classSymbol.Name}' cannot declare virtual or override methods",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Value class '{classSymbol.Name}' cannot declare virtual or override methods",
                         classSymbol.Declaration.Location);
                 if (classSymbol.DeclaredProperties.Any(property =>
                         property.Declaration.IsVirtual || property.Declaration.IsOverride))
-                    throw DeclarationError(classSymbol.Name, $"Value class '{classSymbol.Name}' cannot declare virtual or override properties",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Value class '{classSymbol.Name}' cannot declare virtual or override properties",
                         classSymbol.Declaration.Location);
             }
             // A base name that is an interface is already part of InterfaceNames.
             if (classSymbol.BaseTypeName is not null
                 && !_classesByName.ContainsKey(classSymbol.BaseTypeName)
                 && !_interfacesByName.ContainsKey(classSymbol.BaseTypeName))
-                throw DeclarationError(classSymbol.Name, $"Base class '{classSymbol.BaseTypeName}' is not declared", classSymbol.Declaration.Location);
+                throw DeclarationError(classSymbol.QualifiedName, $"Base class '{classSymbol.Declaration.BaseType}' is not declared", classSymbol.Declaration.Location);
             foreach (var interfaceName in classSymbol.InterfaceNames)
                 if (!_interfacesByName.ContainsKey(interfaceName))
-                    throw DeclarationError(classSymbol.Name, $"Interface '{interfaceName}' is not declared", classSymbol.Declaration.Location);
+                    throw DeclarationError(classSymbol.QualifiedName, $"Interface '{interfaceName}' is not declared", classSymbol.Declaration.Location);
             var inherited = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
                 ? [] : GetClassMethods(classSymbol.BaseTypeName, []);
             var inheritedProperties = classSymbol.BaseTypeName is null || !_classesByName.ContainsKey(classSymbol.BaseTypeName)
@@ -93,15 +93,15 @@ public sealed partial class SemanticAnalyzer
                 if (method.Declaration.IsOverride)
                 {
                     if (overridden is null)
-                        throw DeclarationError(classSymbol.Name, $"Method '{method.Name}' is marked 'override' but does not override a base method",
+                        throw DeclarationError(classSymbol.QualifiedName, $"Method '{method.Name}' is marked 'override' but does not override a base method",
                             method.Declaration.Location, method.Name.Length);
                     if (!overridden.Declaration.IsVirtual && !overridden.Declaration.IsOverride)
-                        throw DeclarationError(classSymbol.Name, $"Method '{method.Name}' cannot override non-virtual method '{overridden.Name}'",
+                        throw DeclarationError(classSymbol.QualifiedName, $"Method '{method.Name}' cannot override non-virtual method '{overridden.Name}'",
                             method.Declaration.Location, method.Name.Length);
                 }
                 else if (overridden is not null && (overridden.Declaration.IsVirtual || overridden.Declaration.IsOverride))
                 {
-                    throw DeclarationError(classSymbol.Name, $"Method '{method.Name}' overrides a virtual method and must be marked 'override'",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Method '{method.Name}' overrides a virtual method and must be marked 'override'",
                         method.Declaration.Location, method.Name.Length);
                 }
             }
@@ -112,16 +112,16 @@ public sealed partial class SemanticAnalyzer
                 if (property.Declaration.IsOverride)
                 {
                     if (overridden is null)
-                        throw DeclarationError(classSymbol.Name, $"Property '{property.Name}' is marked 'override' but does not override a base property",
+                        throw DeclarationError(classSymbol.QualifiedName, $"Property '{property.Name}' is marked 'override' but does not override a base property",
                             property.Declaration.Location, property.Name.Length);
                     if (!overridden.Declaration.IsVirtual && !overridden.Declaration.IsOverride)
-                        throw DeclarationError(classSymbol.Name, $"Property '{property.Name}' cannot override a non-virtual property",
+                        throw DeclarationError(classSymbol.QualifiedName, $"Property '{property.Name}' cannot override a non-virtual property",
                             property.Declaration.Location, property.Name.Length);
                 }
                 else if (overridden is not null
                          && (overridden.Declaration.IsVirtual || overridden.Declaration.IsOverride))
                 {
-                    throw DeclarationError(classSymbol.Name, $"Property '{property.Name}' overrides a virtual property and must be marked 'override'",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Property '{property.Name}' overrides a virtual property and must be marked 'override'",
                         property.Declaration.Location, property.Name.Length);
                 }
             }
@@ -132,18 +132,18 @@ public sealed partial class SemanticAnalyzer
                         .SequenceEqual(contract.Parameters.Select(parameter => parameter.Type), SemanticTypeComparer.Instance)
                     && SemanticTypeComparer.Instance.Equals(method.ReturnType, contract.ReturnType)).ToList();
                 if (implementations.Count == 0)
-                    throw DeclarationError(classSymbol.Name, $"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
                         classSymbol.Declaration.Location);
                 // Interface members are public, so the implementation that satisfies the contract must be public too.
                 if (!implementations.Any(method => method.Visibility == Visibility.Public))
-                    throw DeclarationError(classSymbol.Name, $"Interface method '{contract.Name}' must be implemented as public in class '{classSymbol.Name}'",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Interface method '{contract.Name}' must be implemented as public in class '{classSymbol.Name}'",
                         classSymbol.Declaration.Location);
             }
             foreach (var contract in classSymbol.InterfaceNames.SelectMany(name => _interfacesByName[name].DeclaredProperties))
             {
                 var implementation = classSymbol.Fields.FirstOrDefault(field => field.Name == contract.Name);
                 if (implementation is null || !SemanticTypeComparer.Instance.Equals(implementation.Type, contract.Type))
-                    throw DeclarationError(classSymbol.Name, $"Class '{classSymbol.Name}' does not implement interface property '{contract.Name}'",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Class '{classSymbol.Name}' does not implement interface property '{contract.Name}'",
                         classSymbol.Declaration.Location);
                 if (contract.Declaration.HasGetter
                     && !classSymbol.DeclaredProperties.Concat(
@@ -151,13 +151,13 @@ public sealed partial class SemanticAnalyzer
                                 ? baseClass.DeclaredProperties
                                 : [])
                         .Any(property => property.Name == contract.Name && property.Declaration.HasGetter))
-                    throw DeclarationError(classSymbol.Name, $"Class '{classSymbol.Name}' does not provide a getter for interface property '{contract.Name}'",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Class '{classSymbol.Name}' does not provide a getter for interface property '{contract.Name}'",
                         classSymbol.Declaration.Location);
                 if ((contract.Declaration.HasSetter || contract.Declaration.HasInitializer)
                     && !classSymbol.DeclaredProperties.Any(property =>
                         property.Name == contract.Name
                         && (property.Declaration.HasSetter || property.Declaration.HasInitializer)))
-                    throw DeclarationError(classSymbol.Name, $"Class '{classSymbol.Name}' does not provide a setter for interface property '{contract.Name}'",
+                    throw DeclarationError(classSymbol.QualifiedName, $"Class '{classSymbol.Name}' does not provide a setter for interface property '{contract.Name}'",
                         classSymbol.Declaration.Location);
             }
         }

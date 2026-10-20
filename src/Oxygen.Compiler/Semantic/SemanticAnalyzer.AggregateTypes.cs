@@ -25,20 +25,22 @@ public sealed partial class SemanticAnalyzer
             IReadOnlyList<SemanticType>? concreteArguments = arguments.Any(item => item is null)
                 ? null
                 : arguments.Select(item => item!).ToArrayOrNull();
-            if (_classesByName.ContainsKey(syntax.NamedType))
-                return SemanticType.Class(syntax.NamedType, concreteArguments);
-            if (_interfacesByName.ContainsKey(syntax.NamedType))
-                return SemanticType.Interface(syntax.NamedType, concreteArguments);
-            if (_unionsByName.ContainsKey(syntax.NamedType))
-                return SemanticType.Union(syntax.NamedType, concreteArguments);
-            if (_structsByName.ContainsKey(syntax.NamedType))
-                return SemanticType.Struct(syntax.NamedType, concreteArguments);
+            if (TypeNameOrNull(syntax.NamedType) is not { } typeName)
+                return null;
+            if (_classesByName.ContainsKey(typeName))
+                return SemanticType.Class(typeName, concreteArguments);
+            if (_interfacesByName.ContainsKey(typeName))
+                return SemanticType.Interface(typeName, concreteArguments);
+            if (_unionsByName.ContainsKey(typeName))
+                return SemanticType.Union(typeName, concreteArguments);
+            if (_structsByName.ContainsKey(typeName))
+                return SemanticType.Struct(typeName, concreteArguments);
             return null;
         }
         return syntax.Primitive is null ? null : SemanticType.FromPrimitive(syntax.Primitive.Value);
     }
 
-    private static TypeSyntax RewriteTypeSyntax(TypeSyntax syntax,
+    private TypeSyntax RewriteTypeSyntax(TypeSyntax syntax,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames)
     {
@@ -55,24 +57,27 @@ public sealed partial class SemanticAnalyzer
                 .Select(item => RewriteTypeSyntax(item, substitutions, aggregateNames)).ToArray();
             // The specialization is keyed by the structural arguments (`Cell<i32>`), not by the
             // already renamed ones (`Cell__ox_i32`).
+            // The key names the qualified type, as the model does, so the source name is resolved in the current scope.
+            var typeName = TypeNameOrNull(syntax.NamedType) ?? syntax.NamedType;
             var baseType = new SemanticType(
-                SemanticTypeKind.Struct, null, null, syntax.NamedType,
+                SemanticTypeKind.Struct, null, null, typeName,
                 null, null) { TypeArguments = syntax.DeclaredTypeArguments.Select(item =>
                     SemanticTypeFromSyntax(item, substitutions, aggregateNames)).ToArray() };
             var kinds = new[] { SemanticTypeKind.Class, SemanticTypeKind.Interface, SemanticTypeKind.Union, SemanticTypeKind.Struct };
             foreach (var kind in kinds)
             {
-                var candidate = baseType with { Kind = kind, EnumName = kind == SemanticTypeKind.Union ? syntax.NamedType : null,
-                    StructName = kind == SemanticTypeKind.Union ? null : syntax.NamedType };
+                var candidate = baseType with { Kind = kind, EnumName = kind == SemanticTypeKind.Union ? typeName : null,
+                    StructName = kind == SemanticTypeKind.Union ? null : typeName };
                 if (aggregateNames.TryGetValue(AggregateKey(candidate), out var name))
                     return new TypeSyntax(null, false, syntax.Location, NamedType: name);
             }
-            return syntax with { TypeArguments = arguments };
+            // A name that no aggregate specialization covers keeps its type, now named by its qualified name in the current scope.
+            return syntax with { NamedType = TypeNameOrNull(syntax.NamedType) ?? syntax.NamedType, TypeArguments = arguments };
         }
         return syntax;
     }
 
-    private static SemanticType SemanticTypeFromSyntax(TypeSyntax syntax,
+    private SemanticType SemanticTypeFromSyntax(TypeSyntax syntax,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames) =>
         syntax.NamedType is not null && substitutions.TryGetValue(syntax.NamedType, out var replacement)
@@ -84,13 +89,14 @@ public sealed partial class SemanticAnalyzer
                     ? AggregateTypeFromSyntax(syntax, substitutions, aggregateNames)
                     : SemanticType.String;
 
-    private static SemanticType AggregateTypeFromSyntax(
+    private SemanticType AggregateTypeFromSyntax(
         TypeSyntax syntax,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames)
     {
         var arguments = syntax.DeclaredTypeArguments
             .Select(item => SemanticTypeFromSyntax(item, substitutions, aggregateNames)).ToArrayOrNull();
+        var typeName = TypeNameOrNull(syntax.NamedType!) ?? syntax.NamedType!;
         foreach (var kind in new[]
                  {
                      SemanticTypeKind.Class, SemanticTypeKind.Interface,
@@ -98,16 +104,16 @@ public sealed partial class SemanticAnalyzer
                  })
         {
             var candidate = kind == SemanticTypeKind.Union
-                ? SemanticType.Union(syntax.NamedType!, arguments)
+                ? SemanticType.Union(typeName, arguments)
                 : kind == SemanticTypeKind.Class
-                    ? SemanticType.Class(syntax.NamedType!, arguments)
+                    ? SemanticType.Class(typeName, arguments)
                     : kind == SemanticTypeKind.Interface
-                        ? SemanticType.Interface(syntax.NamedType!, arguments)
-                        : SemanticType.Struct(syntax.NamedType!, arguments);
+                        ? SemanticType.Interface(typeName, arguments)
+                        : SemanticType.Struct(typeName, arguments);
             if (aggregateNames.ContainsKey(AggregateKey(candidate)))
                 return candidate;
         }
-        return SemanticType.Struct(syntax.NamedType!, arguments);
+        return SemanticType.Struct(typeName, arguments);
     }
 
     private static bool ContainsGenericParameter(SemanticType type) =>
@@ -145,9 +151,10 @@ public sealed partial class SemanticAnalyzer
         };
 
     // Uses the same separator as SemanticType.ToString so the key reads the same at every nesting
-    // depth; the balanced angle brackets keep distinct argument groupings distinct.
+    // depth; the balanced angle brackets keep distinct argument groupings distinct. The arguments are qualified, so
+    // types with one simple name in two modules have different keys.
     private static string AggregateKey(SemanticType type) =>
-        $"{type.Kind}:{AggregateBaseName(type)}<{string.Join(", ", type.TypeArguments ?? [])}>";
+        $"{type.Kind}:{AggregateBaseName(type)}<{string.Join(", ", (type.TypeArguments ?? []).Select(argument => argument.ToQualifiedString()))}>";
 
     // Aggregate arguments are encoded by their own specialized name with a length prefix, so
     // `Box<Cell<i32>>` and `Box<Cell<i64>>` differ, and `Box<Cell<i32>, i64>` cannot collide with
@@ -161,7 +168,7 @@ public sealed partial class SemanticAnalyzer
                 return "p" + EncodeAggregateArguments([argument.Pointee!]);
             var baseName = AggregateBaseName(argument);
             if (baseName is null)
-                return argument.ToString()!.Replace(" ", string.Empty);
+                return argument.ToQualifiedString().Replace(" ", string.Empty);
             var name = argument.TypeArguments is { Count: > 0 }
                 ? $"{baseName}__ox_{EncodeAggregateArguments(argument.TypeArguments)}"
                 : baseName;

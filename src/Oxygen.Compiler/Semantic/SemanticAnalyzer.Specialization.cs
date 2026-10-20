@@ -47,11 +47,11 @@ public sealed partial class SemanticAnalyzer
         var methods = source.Methods.Select(method =>
             SpecializeMethod(method, instantiation.Methods.GetValueOrDefault(method.Declaration) ?? method.Declaration,
                 $"{source.ModuleName}.{name}", substitutions, aggregateNames,
-                specializedMethods, expressionTypes, resolvedCalls, name)).ToArray();
+                specializedMethods, expressionTypes, resolvedCalls, $"{source.ModuleName}.{name}")).ToArray();
         var staticMethods = source.StaticMethods.Select(method =>
             SpecializeMethod(method, instantiation.Methods.GetValueOrDefault(method.Declaration) ?? method.Declaration,
                 $"{source.ModuleName}.{name}", substitutions, aggregateNames,
-                specializedMethods, expressionTypes, resolvedCalls, name)).ToArray();
+                specializedMethods, expressionTypes, resolvedCalls, $"{source.ModuleName}.{name}")).ToArray();
         var constructors = source.Constructors.Select(constructor =>
         {
             var instantiated = instantiation.Constructors.GetValueOrDefault(constructor.Declaration)
@@ -150,7 +150,7 @@ public sealed partial class SemanticAnalyzer
     {
         var methods = source.Methods.Select(method =>
             SpecializeMethod(method, method.Declaration, $"{source.ModuleName}.{name}", substitutions, aggregateNames,
-                specializedMethods, expressionTypes, resolvedCalls, name)).ToArray();
+                specializedMethods, expressionTypes, resolvedCalls, $"{source.ModuleName}.{name}")).ToArray();
         var properties = source.DeclaredProperties.Select(property => property with
         {
             Type = NormalizeAggregate(SubstituteAggregate(property.Type, substitutions, aggregateNames), aggregateNames),

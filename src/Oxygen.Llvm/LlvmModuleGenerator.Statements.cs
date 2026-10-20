@@ -182,13 +182,13 @@ public sealed partial class LlvmModuleGenerator
                     if (targetType.IsInterface)
                     {
                         var iface = model.Interfaces[targetType.StructName!];
-                        var setter = _propertyAccessors[(iface.Name, member.MemberName, PropertyAccessorKind.Set)];
+                        var setter = _propertyAccessors[(iface.QualifiedName, member.MemberName, PropertyAccessorKind.Set)];
                         var receiver = values.TryGetValue(targetIdentifier.Name, out var interfaceValue)
                             ? interfaceValue
                             : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
                         var table = builder.BuildExtractValue(receiver, 1, "interface.table");
                         var objectValue = builder.BuildExtractValue(receiver, 0, "interface.data");
-                        var slot = _interfaceSlots[iface.Name].ToList().IndexOf(setter);
+                        var slot = _interfaceSlots[iface.QualifiedName].ToList().IndexOf(setter);
                         var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), table,
                             [LLVMValueRef.CreateConstInt(_context.Int64Type, (ulong)slot, false)],
                             (ReadOnlySpan<char>)"interface.property.slot");
@@ -246,14 +246,14 @@ public sealed partial class LlvmModuleGenerator
                     var thisProperty = owner?.DeclaredProperties.First(property => property.Name == thisMember.MemberName);
                     if (owner is not null && thisProperty is not null)
                     {
-                        var setter = _propertyAccessors[(owner.Name, thisProperty.Name, PropertyAccessorKind.Set)];
+                        var setter = _propertyAccessors[(owner.QualifiedName, thisProperty.Name, PropertyAccessorKind.Set)];
                         var setterType = ToLlvmFunctionType(setter, model);
                         var setterTarget = llvmFunctions[setter];
                         if (thisProperty.Declaration.IsVirtual || thisProperty.Declaration.IsOverride)
                         {
                             var slot = GetVirtualMethods(owner, model).Select((candidate, index) => (candidate, index))
                                 .First(pair => pair.candidate == setter).index;
-                            var slotAddress = builder.BuildStructGEP2(_classTypes[owner.Name], values["this"],
+                            var slotAddress = builder.BuildStructGEP2(_classTypes[owner.QualifiedName], values["this"],
                                 (uint)slot + 1, "property.vtable.slot");
                             setterTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                                 slotAddress, "property.vtable.target");

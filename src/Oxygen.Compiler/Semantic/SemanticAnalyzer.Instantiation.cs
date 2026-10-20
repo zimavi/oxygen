@@ -11,11 +11,11 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ImportDeclaration> Imports,
         string? SourceName);
 
-    // Module, imports and source file of each declared function and class, so instantiations are
-    // analyzed in the context of their declaration rather than the context of whoever uses them.
+    // Module, imports and source file of each declared function and type, keyed by a type's qualified name, so
+    // instantiations are analyzed in the context of their declaration rather than the context of whoever uses them.
     private readonly Dictionary<FunctionDeclaration, DeclarationContext> _functionContexts =
         new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<string, DeclarationContext> _classContexts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DeclarationContext> _typeContexts = new(StringComparer.Ordinal);
     private readonly HashSet<FunctionDeclaration> _analyzedSpecializations = new(ReferenceEqualityComparer.Instance);
 
     // Field initializers of the class instantiation whose constructor is being analyzed.
@@ -44,9 +44,10 @@ public sealed partial class SemanticAnalyzer
                 continue;
             foreach (var constraint in parameters[index].Constraints)
             {
-                if (!_interfacesByName.ContainsKey(constraint))
+                var interfaceName = FindTypeName(constraint, parameters[index].Location);
+                if (interfaceName is null || !_interfacesByName.ContainsKey(interfaceName))
                     throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Interface '{constraint}' is not declared", parameters[index].Location, constraint.Length);
-                if (!Satisfies(arguments[index], constraint))
+                if (!Satisfies(arguments[index], interfaceName))
                     throw Error(
                         $"Type '{arguments[index]}' does not satisfy the constraint '{constraint}' of type parameter " +
                         $"'{parameters[index].Name}'",
@@ -185,9 +186,9 @@ public sealed partial class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
-        var context = _classContexts.GetValueOrDefault(cls.Name);
+        var context = _typeContexts.GetValueOrDefault(cls.QualifiedName);
         var imports = context?.Imports ?? [];
-        var ownerModule = $"{cls.ModuleName}.{cls.Name}";
+        var ownerModule = cls.QualifiedName;
         var name = instance.ToString()!;
         var cloner = new InstantiationCloner(substitutions);
         SemanticType Substitute(SemanticType type) => SubstituteGenericType(type, substitutions);

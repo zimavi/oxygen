@@ -14,7 +14,8 @@ public sealed partial class LlvmModuleGenerator
         var separator = symbol.ModuleName.LastIndexOf('.');
         if (separator < 0)
             return false;
-        var owner = symbol.ModuleName[(separator + 1)..];
+        // A method's module name is its owner's qualified name.
+        var owner = symbol.ModuleName;
         return model.Classes.TryGetValue(owner, out var cls) && cls.IsGeneric
             || model.Interfaces.TryGetValue(owner, out var iface) && iface.IsGeneric;
     }
@@ -43,17 +44,9 @@ public sealed partial class LlvmModuleGenerator
         }
         if (IsClassMethod(symbol, model))
         {
-            var owner = model.Interfaces.Values.FirstOrDefault(iface => iface.Methods.Contains(symbol))?.Name
-                ?? model.Classes.Values.FirstOrDefault(cls => cls.Methods.Contains(symbol))?.Name
-                ?? symbol.ModuleName[(symbol.ModuleName.LastIndexOf('.') + 1)..];
-            if (!model.Classes.ContainsKey(owner) && !model.Interfaces.ContainsKey(owner))
-            {
-                var candidates = model.Classes.Keys
-                    .Where(name => name.StartsWith(owner + "__ox_", StringComparison.Ordinal))
-                    .ToArray();
-                if (candidates.Length == 1)
-                    owner = candidates[0];
-            }
+            var owner = model.Interfaces.Values.FirstOrDefault(iface => iface.Methods.Contains(symbol))?.QualifiedName
+                ?? model.Classes.Values.FirstOrDefault(cls => cls.Methods.Contains(symbol))?.QualifiedName
+                ?? symbol.ModuleName;
             if (!model.Classes.ContainsKey(owner) && !model.Interfaces.ContainsKey(owner))
                 throw new InvalidOperationException($"Cannot lower owner '{owner}' for '{symbol.QualifiedName}'. Classes: {string.Join(", ", model.Classes.Keys)}");
             try
@@ -159,7 +152,7 @@ public sealed partial class LlvmModuleGenerator
             }
             return type;
         }
-        var directKey = $"{type.Kind}:{type.StructName ?? type.EnumName}<{string.Join(",", type.TypeArguments)}>";
+        var directKey = $"{type.Kind}:{type.StructName ?? type.EnumName}<{string.Join(", ", (type.TypeArguments ?? []).Select(argument => argument.ToQualifiedString()))}>";
         if (model.AggregateSpecializations.TryGetValue(directKey, out var directSpecialized))
             return type.Kind == SemanticTypeKind.Union
                 ? type with { EnumName = directSpecialized, TypeArguments = null }
@@ -168,7 +161,7 @@ public sealed partial class LlvmModuleGenerator
         {
             TypeArguments = type.TypeArguments.Select(argument => NormalizeAggregateType(argument, model)).ToArray()
         };
-        var key = $"{normalized.Kind}:{normalized.StructName ?? normalized.EnumName}<{string.Join(",", normalized.TypeArguments)}>";
+        var key = $"{normalized.Kind}:{normalized.StructName ?? normalized.EnumName}<{string.Join(", ", (normalized.TypeArguments ?? []).Select(argument => argument.ToQualifiedString()))}>";
         if (!model.AggregateSpecializations.TryGetValue(key, out var specialized))
             return normalized;
         return normalized.Kind == SemanticTypeKind.Union
@@ -303,8 +296,12 @@ public sealed partial class LlvmModuleGenerator
 
     // Specializations are keyed by structural types (`Box<Cell<i32>>`), so the type is built
     // structurally and normalized to its specialized name once, at the top.
+    // The analyzer resolved every type syntax in its own scope, so that resolved type is used. A syntax it never resolved is
+    // read from its names, which are only correct for names that are already qualified.
     private SemanticType FromTypeSyntax(TypeSyntax syntax, SemanticModel model) =>
-        NormalizeAggregateType(StructuralTypeFromSyntax(syntax, model), model);
+        NormalizeAggregateType(model.ResolvedTypeSyntax.TryGetValue(syntax, out var resolved)
+            ? resolved
+            : StructuralTypeFromSyntax(syntax, model), model);
 
     private static SemanticType StructuralTypeFromSyntax(TypeSyntax syntax, SemanticModel model)
     {

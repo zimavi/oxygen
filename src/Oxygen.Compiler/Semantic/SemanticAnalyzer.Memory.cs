@@ -168,7 +168,8 @@ public sealed partial class SemanticAnalyzer
     private bool IsStackObject(Expression expression, Scope scope) => expression switch
     {
         ClassConstructionExpression construction =>
-            _classesByName.TryGetValue(construction.TypeName, out var cls) && !cls.IsValue,
+            FindTypeName(construction.TypeName, construction.Location) is { } className
+            && _classesByName.TryGetValue(className, out var cls) && !cls.IsValue,
         IdentifierExpression identifier =>
             scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration
             && _stackObjectLocals.Contains(declaration),

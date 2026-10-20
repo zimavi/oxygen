@@ -270,7 +270,7 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        var baseClass = model.Classes["Base"];
+        var baseClass = model.Classes["program.Base"];
         var parameterless = OxygenNameMangler.MangleConstructor(baseClass.ModuleName, baseClass, baseClass.Constructors[0]);
         var withValue = OxygenNameMangler.MangleConstructor(baseClass.ModuleName, baseClass, baseClass.Constructors[1]);
         Assert.Contains($"call void @{withValue}(", ir);
@@ -318,8 +318,8 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("%class.StackTrace", ir);
-        Assert.Contains("%class.Exception", ir);
+        Assert.Contains("%class.program.StackTrace", ir);
+        Assert.Contains("%class.program.Exception", ir);
     }
 
     [Fact]
@@ -341,8 +341,8 @@ public sealed class LlvmTests
     [Fact]
     public void EmitsVirtualClassCallThroughVtableSlot()
     {
-        var model = Analyze(
-            NullReferenceClasses + "class Base { virtual i32 value() { return 1; } } " +
+        var model = AnalyzeWithStdException(
+            "class Base { virtual i32 value() { return 1; } } " +
             "class Child : Base { override i32 value() { return 2; } } " +
             "i32 main() { Base value = new Child(); return value.value(); }");
 
@@ -459,8 +459,8 @@ public sealed class LlvmTests
 
         Assert.Contains("__oxygen_runtime_is_instance", ir);
         Assert.Contains("__oxygen_runtime_invalid_cast", ir);
-        Assert.Contains("oxygen.type.info.Item", ir);
-        Assert.Contains("oxygen.type.info.Printable", ir);
+        Assert.Contains("oxygen.type.info.program.Item", ir);
+        Assert.Contains("oxygen.type.info.program.Printable", ir);
         // The kind field is written through a constant address, which LLVM does not name, so the
         // assertion checks the stored value: 2 is the interface kind.
         Assert.Contains("store i32 2, ptr getelementptr", ir);
@@ -471,15 +471,15 @@ public sealed class LlvmTests
     [Fact]
     public void EmitsCallableInterfaceMethodTableAndIndirectCall()
     {
-        var model = Analyze(
-            NullReferenceClasses + "interface Printable { i32 value(); } " +
+        var model = AnalyzeWithStdException(
+            "interface Printable { i32 value(); } " +
             "class Item : Printable { i32 value() { return 7; } } " +
             "i32 main() { Printable printable = new Item(); return printable.value(); }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("oxygen.interface.table.Item.Printable", ir);
+        Assert.Contains("oxygen.interface.table.program.Item.program.Printable", ir);
         Assert.Contains("interface.slot", ir);
         Assert.Contains("interface.call", ir);
         Assert.Contains("load ptr", ir);
@@ -568,7 +568,7 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("oxygen.interface.table.Item.Named", ir);
+        Assert.Contains("oxygen.interface.table.program.Item.program.Named", ir);
         Assert.Contains("interface.property.slot", ir);
         Assert.Contains("interface.property.call", ir);
     }
@@ -1060,6 +1060,15 @@ public sealed class LlvmTests
         var tokenizer = new Tokenizer(Log.Logger);
         var unit = new Parser(tokenizer.Tokenize(source), Log.Logger).Parse();
         return new SemanticAnalyzer(Log.Logger).Analyze([unit]);
+    }
+
+    // The declared part of std.exception is its own unit, so its classes have their qualified names, as the checks require.
+    private static SemanticModel AnalyzeWithStdException(string source)
+    {
+        var tokenizer = new Tokenizer(Log.Logger);
+        var standard = new Parser(tokenizer.Tokenize("module std.exception; " + NullReferenceClasses), Log.Logger).Parse();
+        var unit = new Parser(tokenizer.Tokenize(source), Log.Logger).Parse();
+        return new SemanticAnalyzer(Log.Logger).Analyze([standard, unit]);
     }
 
     private sealed class RecordingToolRunner : INativeToolRunner

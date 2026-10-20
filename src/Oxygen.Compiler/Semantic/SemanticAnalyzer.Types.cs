@@ -17,7 +17,15 @@ public sealed partial class SemanticAnalyzer
         return type;
     }
 
+    // Resolves a type syntax in the current scope, and records the result on the node for the backend.
     private SemanticType ResolveType(TypeSyntax syntax)
+    {
+        var resolved = ResolveTypeCore(syntax);
+        _resolvedTypeSyntax[syntax] = resolved;
+        return resolved;
+    }
+
+    private SemanticType ResolveTypeCore(TypeSyntax syntax)
     {
         if (syntax.IsInferred)
         {
@@ -40,39 +48,40 @@ public sealed partial class SemanticAnalyzer
                     throw Error($"Generic parameter '{syntax.NamedType}' cannot have type arguments", syntax.Location);
                 return syntax.IsPointer ? SemanticType.PointerTo(generic) : generic;
             }
-            if (_enumsByName.ContainsKey(syntax.NamedType))
+            // The name denotes a type of the current module or of one it imports; the type is keyed by its qualified name.
+            var typeName = FindTypeName(syntax.NamedType, syntax.Location)
+                ?? throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
+            if (_enumsByName.ContainsKey(typeName))
             {
                 if (syntax.IsPointer)
-                    return SemanticType.PointerTo(SemanticType.Enum(syntax.NamedType));
-                return SemanticType.Enum(syntax.NamedType);
+                    return SemanticType.PointerTo(SemanticType.Enum(typeName));
+                return SemanticType.Enum(typeName);
             }
-            if (_unionsByName.ContainsKey(syntax.NamedType))
+            if (_unionsByName.ContainsKey(typeName))
             {
-                ValidateTypeArgumentCount(syntax, _unionsByName[syntax.NamedType].DeclaredTypeParameters.Count);
-                var union = SemanticType.Union(syntax.NamedType, ResolveTypeArguments(syntax));
+                ValidateTypeArgumentCount(syntax, _unionsByName[typeName].DeclaredTypeParameters.Count);
+                var union = SemanticType.Union(typeName, ResolveTypeArguments(syntax));
                 if (syntax.IsPointer)
                     return SemanticType.PointerTo(union);
                 return union;
             }
-            if (_classesByName.ContainsKey(syntax.NamedType))
+            if (_classesByName.ContainsKey(typeName))
             {
-                ValidateTypeArgumentCount(syntax, _classesByName[syntax.NamedType].DeclaredTypeParameters.Count);
-                var namedClass = SemanticType.Class(syntax.NamedType, ResolveTypeArguments(syntax));
+                ValidateTypeArgumentCount(syntax, _classesByName[typeName].DeclaredTypeParameters.Count);
+                var namedClass = SemanticType.Class(typeName, ResolveTypeArguments(syntax));
                 if (namedClass.TypeArguments is not null)
-                    ValidateTypeArgumentConstraints(_classesByName[syntax.NamedType].Declaration.DeclaredTypeParameters,
+                    ValidateTypeArgumentConstraints(_classesByName[typeName].Declaration.DeclaredTypeParameters,
                         namedClass.TypeArguments, syntax.Location);
                 return syntax.IsPointer ? SemanticType.PointerTo(namedClass) : namedClass;
             }
-            if (_interfacesByName.ContainsKey(syntax.NamedType))
+            if (_interfacesByName.ContainsKey(typeName))
             {
-                ValidateTypeArgumentCount(syntax, _interfacesByName[syntax.NamedType].DeclaredTypeParameters.Count);
-                var namedInterface = SemanticType.Interface(syntax.NamedType, ResolveTypeArguments(syntax));
+                ValidateTypeArgumentCount(syntax, _interfacesByName[typeName].DeclaredTypeParameters.Count);
+                var namedInterface = SemanticType.Interface(typeName, ResolveTypeArguments(syntax));
                 return syntax.IsPointer ? SemanticType.PointerTo(namedInterface) : namedInterface;
             }
-            if (!_structsByName.ContainsKey(syntax.NamedType))
-                throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
-            ValidateTypeArgumentCount(syntax, _structsByName[syntax.NamedType].DeclaredTypeParameters.Count);
-            var named = SemanticType.Struct(syntax.NamedType, ResolveTypeArguments(syntax));
+            ValidateTypeArgumentCount(syntax, _structsByName[typeName].DeclaredTypeParameters.Count);
+            var named = SemanticType.Struct(typeName, ResolveTypeArguments(syntax));
             return syntax.IsPointer ? SemanticType.PointerTo(named) : named;
         }
 
@@ -153,7 +162,7 @@ public sealed partial class SemanticAnalyzer
     private void ValidateStructLayout(StructSymbol structure, HashSet<string> active)
     {
         if (!active.Add(structure.Name))
-            throw DeclarationError(structure.Name, $"Struct '{structure.Name}' contains a recursive by-value field", structure.Declaration.Location,
+            throw DeclarationError(structure.QualifiedName, $"Struct '{structure.Name}' contains a recursive by-value field", structure.Declaration.Location,
                 structure.Name.Length);
         foreach (var field in structure.Fields.Where(field => field.Type.IsStruct))
             ValidateStructLayout(_structsByName[field.Type.StructName!], active);

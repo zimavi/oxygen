@@ -84,7 +84,8 @@ public sealed partial class SemanticAnalyzer
         bool allowVoid)
     {
         var unionParts = call.Name.Split('.');
-        if (unionParts.Length == 2 && _unionsByName.TryGetValue(unionParts[0], out var union))
+        var unionName = unionParts.Length == 2 ? FindTypeName(unionParts[0], call.Location) : null;
+        if (unionName is not null && _unionsByName.TryGetValue(unionName, out var union))
         {
             if (HasNamedArguments(call.Arguments))
                 throw Error($"The payload of union case '{unionParts[1]}' is given by position, not by name", call.Location);
@@ -108,7 +109,7 @@ public sealed partial class SemanticAnalyzer
                     throw Error($"Union case '{item.Name}' expects {item.PayloadType}, got {actual}", call.Location);
                 if (expectedType is not null)
                     BindFromExpectedType(
-                        SemanticType.Union(union.Name, typeParameters.Select(SemanticType.GenericParameter).ToArray()),
+                        SemanticType.Union(union.QualifiedName, typeParameters.Select(SemanticType.GenericParameter).ToArray()),
                         expectedType, typeParameters, typeBindings);
             }
 
@@ -125,7 +126,7 @@ public sealed partial class SemanticAnalyzer
             }
 
             var unionArguments = typeParameters.Count == 0 ? null : typeParameters.Select(name => typeBindings[name]).ToArray();
-            return SemanticType.Union(union.Name, unionArguments);
+            return SemanticType.Union(union.QualifiedName, unionArguments);
         }
         // `functionName` is the name the overloads are looked up by. It is the call name, except for a receiver chain that
         // names a module, where it is the whole dotted name, as in `std.io.print(...)`.
@@ -159,7 +160,8 @@ public sealed partial class SemanticAnalyzer
             if (receiverName == "base")
                 _baseCalls.Add(call);
             // `Class.method(...)` calls a static method of a class. A class name is not a variable.
-            if (receiverType is null && _classesByName.TryGetValue(receiverName, out var staticClass))
+            if (receiverType is null && FindTypeName(receiverName, call.Location) is { } staticClassName
+                && _classesByName.TryGetValue(staticClassName, out var staticClass))
                 return AnalyzeStaticCall(call, staticClass, methodName, scope, functions, moduleName, imports,
                     expressionTypes, resolvedCalls, allowVoid);
             if (receiverType is not null)
@@ -352,13 +354,13 @@ public sealed partial class SemanticAnalyzer
         if (receiverType.IsGenericParameter
             && ConstraintDeclaring(receiverType, methodName, call.Location,
                 constraint => constraint.Methods.Any(method => method.Name == methodName)) is { } declaringInterface)
-            receiverType = SemanticType.Interface(declaringInterface.Name);
+            receiverType = SemanticType.Interface(declaringInterface.QualifiedName);
         if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
         {
             // A method's owner is the class named by the last segment of its module name.
-            var namedMethods = GetClassMethods(receiverClass.Name, []).Where(method => method.Name == methodName).ToArray();
+            var namedMethods = GetClassMethods(receiverClass.QualifiedName, []).Where(method => method.Name == methodName).ToArray();
             var methodCandidates = namedMethods.Where(method => IsMemberAccessible(method.Visibility,
-                MethodOwnerName(method), MethodOwnerModule(method), moduleName, receiverClass.Name)).ToArray();
+                MethodOwnerName(method), MethodOwnerModule(method), moduleName, receiverClass.QualifiedName)).ToArray();
             if (methodCandidates.Length == 0 && namedMethods.Length > 0)
                 throw Error($"Method '{methodName}' of class '{receiverClass.Name}' cannot be used here", call.Location);
             var substitutions = receiverClass.DeclaredTypeParameters
@@ -522,6 +524,25 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ImportDeclaration> imports,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions)
     {
+        var candidates = new List<FunctionSymbol>();
+        foreach (var key in NameCandidates(name, moduleName, imports))
+        {
+            if (functions.TryGetValue(key, out var resolved))
+                candidates.AddRange(resolved.Where(symbol =>
+                    symbol.Visibility == Visibility.Public || symbol.ModuleName == moduleName));
+        }
+
+        return candidates
+            .GroupBy(symbol => symbol.QualifiedName + ":" + string.Join(",", symbol.Parameters.Select(p => p.Type))
+                + ":" + symbol.ReturnType)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    // The qualified names that a name can denote in a module: the module's own declarations, the declarations of its imports,
+    // and the name as written, for a fully qualified reference. Functions and types are both looked up this way.
+    private static List<string> NameCandidates(string name, string moduleName, IReadOnlyList<ImportDeclaration> imports)
+    {
         var keys = new List<string>();
         if (!name.Contains('.', StringComparison.Ordinal))
             keys.Add($"{moduleName}.{name}");
@@ -562,19 +583,7 @@ public sealed partial class SemanticAnalyzer
             }
         }
 
-        var candidates = new List<FunctionSymbol>();
-        foreach (var key in keys.Distinct(StringComparer.Ordinal))
-        {
-            if (functions.TryGetValue(key, out var resolved))
-                candidates.AddRange(resolved.Where(symbol =>
-                    symbol.Visibility == Visibility.Public || symbol.ModuleName == moduleName));
-        }
-
-        return candidates
-            .GroupBy(symbol => symbol.QualifiedName + ":" + string.Join(",", symbol.Parameters.Select(p => p.Type))
-                + ":" + symbol.ReturnType)
-            .Select(group => group.First())
-            .ToList();
+        return keys.Distinct(StringComparer.Ordinal).ToList();
     }
 
     // Whether a function is a method of a class, instance or static, rather than a free function of a module.

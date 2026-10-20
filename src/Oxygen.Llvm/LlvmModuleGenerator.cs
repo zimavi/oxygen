@@ -116,7 +116,7 @@ public sealed partial class LlvmModuleGenerator
             _virtualSlotCount = concreteClasses.Select(cls => GetVirtualMethods(cls, model).Count)
                 .DefaultIfEmpty().Max();
             foreach (var cls in concreteClasses)
-                _classTypes[cls.Name] = context.CreateNamedStruct($"class.{cls.Name}");
+                _classTypes[cls.QualifiedName] = context.CreateNamedStruct($"class.{cls.QualifiedName}");
             foreach (var cls in concreteClasses)
             {
                 var fields = (cls.IsValue
@@ -124,13 +124,13 @@ public sealed partial class LlvmModuleGenerator
                         : new[] { LLVMTypeRef.CreatePointer(_context.Int8Type, 0) }
                             .Concat(Enumerable.Repeat(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _virtualSlotCount)))
                     .Concat(cls.Fields.Select(field => ToLlvmType(field.Type, model))).ToArray();
-                _classTypes[cls.Name].StructSetBody(fields, false);
+                _classTypes[cls.QualifiedName].StructSetBody(fields, false);
             }
 
             foreach (var cls in concreteClasses)
-                _runtimeTypeInfos[cls.Name] = AddRuntimeTypeInfoGlobal(module, cls.Name);
+                _runtimeTypeInfos[cls.QualifiedName] = AddRuntimeTypeInfoGlobal(module, cls.QualifiedName);
             foreach (var interfaceSymbol in concreteInterfaces)
-                _runtimeTypeInfos[interfaceSymbol.Name] = AddRuntimeTypeInfoGlobal(module, interfaceSymbol.Name);
+                _runtimeTypeInfos[interfaceSymbol.QualifiedName] = AddRuntimeTypeInfoGlobal(module, interfaceSymbol.QualifiedName);
             foreach (var symbol in symbols)
             {
                 var functionType = ToLlvmFunctionType(symbol, model);
@@ -143,8 +143,8 @@ public sealed partial class LlvmModuleGenerator
             foreach (var iface in concreteInterfaces)
             {
                 var slots = GetInterfaceSlots(iface);
-                _interfaceSlots[iface.Name] = slots;
-                foreach (var cls in concreteClasses.Where(cls => ClassImplementsInterface(cls.Name, iface.Name, model)))
+                _interfaceSlots[iface.QualifiedName] = slots;
+                foreach (var cls in concreteClasses.Where(cls => ClassImplementsInterface(cls.QualifiedName, iface.QualifiedName, model)))
                     AddInterfaceTable(module, cls, iface, slots, llvmFunctions, model);
             }
             var allocType = LLVMTypeRef.CreateFunction(
@@ -191,17 +191,17 @@ public sealed partial class LlvmModuleGenerator
                 foreach (var ctor in cls.Constructors)
                 {
                     var type = LLVMTypeRef.CreateFunction(_context.VoidType,
-                        new[] { LLVMTypeRef.CreatePointer(_classTypes[cls.Name], 0) }
+                        new[] { LLVMTypeRef.CreatePointer(_classTypes[cls.QualifiedName], 0) }
                             .Concat(ctor.Parameters.Select(p => ToLlvmType(p.Type, model))).ToArray(), false);
                     _constructors[ConstructorKey(cls, ctor)] = DeclareNativeFunction(module, 
                         OxygenNameMangler.MangleConstructor(cls.ModuleName, cls, ctor), type);
                 }
 
                 if (cls.Destructor is not null)
-                    _destructors[cls.Name] = DeclareNativeFunction(module, 
+                    _destructors[cls.QualifiedName] = DeclareNativeFunction(module, 
                         OxygenNameMangler.MangleDestructor(cls.ModuleName, cls),
                         LLVMTypeRef.CreateFunction(_context.VoidType,
-                            [LLVMTypeRef.CreatePointer(_classTypes[cls.Name], 0)], false));
+                            [LLVMTypeRef.CreatePointer(_classTypes[cls.QualifiedName], 0)], false));
             }
             var boundsFailureType = LLVMTypeRef.CreateFunction(
                 _context.VoidType, [_context.Int64Type, _context.Int64Type], false);
@@ -236,7 +236,7 @@ public sealed partial class LlvmModuleGenerator
                 foreach (var ctor in cls.Constructors)
                     EmitConstructor(context, builder, _constructors[ConstructorKey(cls, ctor)], cls, ctor, model, llvmFunctions);
                 if (cls.Destructor is not null)
-                    EmitDestructor(context, builder, _destructors[cls.Name], cls, model, llvmFunctions);
+                    EmitDestructor(context, builder, _destructors[cls.QualifiedName], cls, model, llvmFunctions);
             }
 
             EmitNativeMain(context, builder, module, model, llvmFunctions);
@@ -278,7 +278,7 @@ public sealed partial class LlvmModuleGenerator
         && !RuntimeInformation.OSDescription.Contains("mingw", StringComparison.OrdinalIgnoreCase);
 
     private static string ConstructorKey(ClassSymbol cls, ConstructorSymbol ctor) =>
-            cls.Name + "(" + string.Join(",", ctor.Parameters.Select(p => OxygenNameMangler.EncodeType(p.Type))) + ")";
+            cls.QualifiedName + "(" + string.Join(",", ctor.Parameters.Select(p => OxygenNameMangler.EncodeType(p.Type))) + ")";
 
     private static bool IsInterfaceContract(FunctionSymbol symbol, SemanticModel model) =>
         model.Interfaces.Values.Any(iface => iface.Methods.Contains(symbol));

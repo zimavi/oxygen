@@ -26,4 +26,5 @@ public static class DiagnosticCode
     public const string OverloadConflict = "OX0208";
     public const string CannotInfer = "OX0209";
     public const string FlagsMember = "OX0210";
+    public const string AmbiguousType = "OX0211";
 }

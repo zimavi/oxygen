@@ -141,7 +141,8 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types,
         IDictionary<CallExpression, FunctionSymbol> calls)
     {
-        if (!_unionsByName.TryGetValue(construction.UnionName, out var union))
+        if (FindTypeName(construction.UnionName, construction.Location) is not { } unionName
+            || !_unionsByName.TryGetValue(unionName, out var union))
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Union '{construction.UnionName}' is not declared", construction.Location);
         if (!union.CasesByName.TryGetValue(construction.CaseName, out var item))
             throw Error($"Union '{construction.UnionName}' has no case '{construction.CaseName}'", construction.Location);
@@ -154,7 +155,7 @@ public sealed partial class SemanticAnalyzer
             if (!CanAssign(item.PayloadType, construction.Arguments[0], actual))
                 throw Error($"Union case '{construction.CaseName}' expects {item.PayloadType}, got {actual}", construction.Location);
         }
-        return SemanticType.Union(union.Name);
+        return SemanticType.Union(union.QualifiedName);
     }
 
     // An array literal in a context that expects an array takes that element type, and each element must convert to it
@@ -209,7 +210,8 @@ public sealed partial class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
-        if (!_structsByName.TryGetValue(literal.TypeName, out var structure))
+        if (FindTypeName(literal.TypeName, literal.Location) is not { } structName
+            || !_structsByName.TryGetValue(structName, out var structure))
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Struct '{literal.TypeName}' is not declared", literal.Location, literal.TypeName.Length);
         var fields = new HashSet<string>(StringComparer.Ordinal);
         foreach (var field in literal.Fields)
@@ -224,7 +226,7 @@ public sealed partial class SemanticAnalyzer
         }
         if (fields.Count != structure.Fields.Count)
             throw Error($"Struct literal '{literal.TypeName}' must initialize every field", literal.Location, literal.TypeName.Length);
-        return SemanticType.Struct(literal.TypeName);
+        return SemanticType.Struct(structName);
     }
 
     private SemanticType AnalyzeMemberAccess(
@@ -253,11 +255,12 @@ public sealed partial class SemanticAnalyzer
         }
 
         if (member.Target is IdentifierExpression enumIdentifier
-            && _enumsByName.TryGetValue(enumIdentifier.Name, out var enumSymbol))
+            && FindTypeName(enumIdentifier.Name, member.Location) is { } enumName
+            && _enumsByName.TryGetValue(enumName, out var enumSymbol))
         {
             var memberSymbol = enumSymbol.Members.FirstOrDefault(candidate => candidate.Name == member.MemberName)
                 ?? throw Error($"Enum '{enumSymbol.Name}' has no member named '{member.MemberName}'", member.Location, member.MemberName.Length);
-            return SemanticType.Enum(enumSymbol.Name);
+            return SemanticType.Enum(enumSymbol.QualifiedName);
         }
 
         // A null literal has no type that could have members, so the access can be rejected at compile time.
@@ -274,7 +277,7 @@ public sealed partial class SemanticAnalyzer
         if (targetType.IsGenericParameter
             && ConstraintDeclaring(targetType, member.MemberName, member.Location,
                 constraint => constraint.DeclaredProperties.Any(property => property.Name == member.MemberName)) is { } declaringInterface)
-            targetType = SemanticType.Interface(declaringInterface.Name);
+            targetType = SemanticType.Interface(declaringInterface.QualifiedName);
         // An array and a string have a read-only length, of type usize.
         if ((targetType.IsArray || targetType.Kind == SemanticTypeKind.String) && member.MemberName == "length")
             return SemanticType.FromPrimitive(PrimitiveType.USize);
@@ -303,7 +306,7 @@ public sealed partial class SemanticAnalyzer
                 // Protected and public fields are checked against the receiver's class, as before.
                 var checkedClass = field.Visibility == Visibility.Private ? DeclaringClass(field, cls) : cls;
                 EnsureMemberAccessible(field.Visibility, "Field", field.Name, checkedClass, moduleName, member.Location,
-                    checkedClass.Name);
+                    checkedClass.QualifiedName);
                 return SubstituteGenericType(field.Type, substitutions);
             }
             // A static field of a base class is reached through an object of the subclass, as through the subclass name. A static
@@ -334,7 +337,7 @@ public sealed partial class SemanticAnalyzer
             var contract = interfaceSymbol.DeclaredProperties
                 .FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (contract is null)
-                throw Error($"Interface '{targetType.StructName}' has no member named '{member.MemberName}'",
+                throw Error($"Interface '{targetType}' has no member named '{member.MemberName}'",
                     member.Location);
             var getter = contract.Declaration.Accessors.FirstOrDefault(
                 accessor => accessor.Kind == PropertyAccessorKind.Get);
@@ -348,7 +351,7 @@ public sealed partial class SemanticAnalyzer
             throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Member access requires a struct or class value, got {targetType}", member.Location);
         var structure = _structsByName[targetType.StructName!];
         return structure.Fields.FirstOrDefault(field => field.Name == member.MemberName)?.Type
-            ?? throw Error($"Struct '{targetType.StructName}' has no field named '{member.MemberName}'", member.Location, member.MemberName.Length);
+            ?? throw Error($"Struct '{targetType}' has no field named '{member.MemberName}'", member.Location, member.MemberName.Length);
     }
 
     private SemanticType AnalyzeNewExpression(
@@ -358,7 +361,8 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> calls,
         SemanticType? expectedType = null)
     {
-        if (expression.Type.NamedType is null || !_classesByName.TryGetValue(expression.Type.NamedType, out var cls)
+        var newName = expression.Type.NamedType is null ? null : FindTypeName(expression.Type.NamedType, expression.Location);
+        if (newName is null || !_classesByName.TryGetValue(newName, out var cls)
             || expression.Type.IsPointer || expression.Type.IsArray || expression.Type.IsString)
             throw Error("Only declared classes can be constructed with 'new'", expression.Location);
         RequireConstructibleHere(cls, expression.Location);
@@ -379,14 +383,15 @@ public sealed partial class SemanticAnalyzer
     {
         // `Name(...)` builds an object when Name is a class. When no class has that name but a function does, it is a call of
         // that function, whatever the capitalization. The call is recorded against the expression and emitted in its place.
-        if (!_classesByName.ContainsKey(expression.TypeName)
+        var className = FindTypeName(expression.TypeName, expression.Location);
+        if ((className is null || !_classesByName.ContainsKey(className))
             && ResolveFunctions(expression.TypeName, moduleName, imports, functions).Any())
         {
             var call = new CallExpression(expression.TypeName, expression.Arguments, expression.Location, expression.TypeArguments);
             _constructionCalls[expression] = call;
             return AnalyzeCall(call, scope, functions, moduleName, imports, types, calls, expectedType, false);
         }
-        if (!_classesByName.TryGetValue(expression.TypeName, out var cls))
+        if (className is null || !_classesByName.TryGetValue(className, out var cls))
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Class '{expression.TypeName}' is not declared", expression.Location);
         RequireConstructibleHere(cls, expression.Location);
         var arguments = expression.Arguments.Select(argument =>
@@ -466,7 +471,7 @@ public sealed partial class SemanticAnalyzer
         _argumentOrders[construction] = chosen.order!;
         var typeArguments = cls.DeclaredTypeParameters.Select(name => chosen.bindings![name]).ToArray();
         ValidateTypeArgumentConstraints(cls.Declaration.DeclaredTypeParameters, typeArguments, location);
-        return SemanticType.Class(cls.Name, cls.DeclaredTypeParameters.Count == 0 ? null : typeArguments);
+        return SemanticType.Class(cls.QualifiedName, cls.DeclaredTypeParameters.Count == 0 ? null : typeArguments);
     }
 
     private SemanticType AnalyzeUnary(

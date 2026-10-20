@@ -127,7 +127,7 @@ public sealed partial class SemanticAnalyzer
                             forInStatement.Collection.Location);
                     else
                     {
-                        var iterCandidates = GetClassMethods(collectionClass.Name, [])
+                        var iterCandidates = GetClassMethods(collectionClass.QualifiedName, [])
                             .Where(method => method.Name == "iter" && method.Parameters.Count == 0).ToArray();
                         if (iterCandidates.Length != 1)
                             throw Error($"Collection class '{collectionClass.Name}' must declare exactly one iter() method",
@@ -143,7 +143,7 @@ public sealed partial class SemanticAnalyzer
                             throw ErrorWithCode(DiagnosticCode.MustReturn, "Iterator 'iter()' must return an iterator class", iterCall.Location);
                         // The receiver for next() is represented by the iterator value
                         // in the lowering; resolve the declared method directly here.
-                        var nextCandidates = GetClassMethods(iteratorClass.Name, [])
+                        var nextCandidates = GetClassMethods(iteratorClass.QualifiedName, [])
                             .Where(method => method.Name == "next" && method.Parameters.Count == 0).ToArray();
                         if (nextCandidates.Length != 1)
                             throw Error($"Iterator class '{iteratorClass.Name}' must declare exactly one next() method",
@@ -151,7 +151,7 @@ public sealed partial class SemanticAnalyzer
                         var next = nextCandidates[0];
                         var option = SubstituteGenericType(next.ReturnType,
                             TypeArgumentSubstitutions(iteratorClass, iteratorType));
-                        if (!option.IsUnion || !string.Equals(option.EnumName, "Option", StringComparison.Ordinal)
+                        if (!option.IsUnion || !string.Equals(option.EnumName, OptionUnion, StringComparison.Ordinal)
                             || option.TypeArguments is not { Count: 1 })
                             throw ErrorWithCode(DiagnosticCode.MustReturn, "Iterator next() must return Option<T> with the iteration element type",
                                 forInStatement.Collection.Location);
@@ -471,12 +471,18 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Loop and conditional conditions must be bool, got {type}", location);
     }
 
+    // The qualified name of the standard library's base exception class, which `throw` accepts.
+    private const string ExceptionClass = "std.exception.Exception";
+
+    // The qualified name of the standard library's Option union, which the for-in protocol requires from `next()`.
+    private const string OptionUnion = "std.collection.Option";
+
     private bool IsExceptionType(SemanticType type)
     {
         if (!type.IsClass || type.StructName is null || !_classesByName.ContainsKey(type.StructName))
             return false;
-        return string.Equals(type.StructName, "Exception", StringComparison.Ordinal)
-               || IsClassDerivedFrom(type.StructName, "Exception");
+        return string.Equals(type.StructName, ExceptionClass, StringComparison.Ordinal)
+               || IsClassDerivedFrom(type.StructName, ExceptionClass);
     }
 
     private void AnalyzeVariableDeclaration(
@@ -635,9 +641,9 @@ public sealed partial class SemanticAnalyzer
             if (current is MemberAccessExpression && innerType is not null && IsOwnedClass(innerType)
                 && ConstRootName(inner, scope, expressionTypes) is { } root)
             {
-                if (_currentOwnerClass?.Name != innerType.StructName)
+                if (_currentOwnerClass?.QualifiedName != innerType.StructName)
                     throw ErrorWithCode(DiagnosticCode.ConstAssignment, 
-                        $"Cannot assign to a field of const variable '{root}' outside class '{innerType.StructName}'",
+                        $"Cannot assign to a field of const variable '{root}' outside class '{innerType}'",
                         target.Location, root.Length);
                 return;
             }

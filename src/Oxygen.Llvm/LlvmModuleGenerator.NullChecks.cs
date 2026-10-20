@@ -62,7 +62,7 @@ public sealed partial class LlvmModuleGenerator
         LLVMBuilderRef builder, string message, SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        const string className = "NullReferenceException";
+        const string className = "std.exception.NullReferenceException";
         if (!model.Classes.TryGetValue(className, out var cls))
             throw new InvalidOperationException(
                 $"Internal compiler error: '{className}' is not loaded, so a null reference cannot be reported. " +

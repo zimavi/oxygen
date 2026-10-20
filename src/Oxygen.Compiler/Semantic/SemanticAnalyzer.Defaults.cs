@@ -129,14 +129,18 @@ public sealed partial class SemanticAnalyzer
         foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads).ToList())
         {
             var module = functionModules[symbol];
+            _typeScopeModule = module.Name;
+            _typeScopeImports = module.Imports;
             ValidateParameterDefaults(symbol.Name, symbol.Parameters, symbol.IsExternal, module.Name, module.Imports,
                 functionsByName, expressionTypes, resolvedCalls, diagnostics, functionSources.GetValueOrDefault(symbol));
         }
 
-        foreach (var (className, context) in _classContexts)
+        foreach (var (classKey, context) in _typeContexts)
         {
-            if (!_classesByName.TryGetValue(className, out var cls))
+            if (!_classesByName.TryGetValue(classKey, out var cls))
                 continue;
+            _typeScopeModule = context.ModuleName;
+            _typeScopeImports = context.Imports;
             foreach (var constructor in cls.Constructors)
             {
                 ValidateParameterDefaults(cls.Name, constructor.Parameters, false, context.ModuleName, context.Imports,

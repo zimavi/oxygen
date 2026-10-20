@@ -76,7 +76,7 @@ public sealed partial class LlvmModuleGenerator
                 return PropertyPlace(builder, cls, property, receiver, model, llvmFunctions);
             var fieldIndex = cls.Fields.Select((field, index) => (field, index))
                 .First(pair => pair.field.Name == member.MemberName).index;
-            var address = builder.BuildStructGEP2(_classTypes[cls.Name], receiver,
+            var address = builder.BuildStructGEP2(_classTypes[cls.QualifiedName], receiver,
                 (uint)FieldOffset(cls, model, fieldIndex), $"field.{member.MemberName}");
             return MemoryPlace(builder, memberType, address, member.MemberName);
         }
@@ -103,8 +103,8 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var getter = _propertyAccessors[(cls.Name, property.Name, PropertyAccessorKind.Get)];
-        var setter = _propertyAccessors[(cls.Name, property.Name, PropertyAccessorKind.Set)];
+        var getter = _propertyAccessors[(cls.QualifiedName, property.Name, PropertyAccessorKind.Get)];
+        var setter = _propertyAccessors[(cls.QualifiedName, property.Name, PropertyAccessorKind.Set)];
         return new Place(
             () => EmitCallOrInvoke(builder, ToLlvmFunctionType(getter, model),
                 AccessorTarget(builder, cls, property, getter, receiver, model, llvmFunctions), [receiver], "property.get"),
@@ -127,7 +127,7 @@ public sealed partial class LlvmModuleGenerator
             return llvmFunctions[accessor];
         var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
             .First(pair => pair.candidate == accessor).index;
-        var slotAddress = builder.BuildStructGEP2(_classTypes[cls.Name], receiver, (uint)slot + 1, "property.vtable.slot");
+        var slotAddress = builder.BuildStructGEP2(_classTypes[cls.QualifiedName], receiver, (uint)slot + 1, "property.vtable.slot");
         return builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), slotAddress, "property.vtable.target");
     }
 

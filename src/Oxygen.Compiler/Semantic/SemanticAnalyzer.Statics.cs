@@ -33,19 +33,22 @@ public sealed partial class SemanticAnalyzer
             var unit = units[unitIndex];
             _sourceName = sourceNames is not null && unitIndex < sourceNames.Count ? sourceNames[unitIndex] : null;
             var moduleName = unit.ModuleName ?? "program";
+            _typeScopeModule = moduleName;
+            _typeScopeImports = unit.Imports;
             foreach (var declaration in unit.Classes)
             {
                 if (!declaration.Fields.Any(field => field.IsStatic))
                     continue;
                 if (declaration.Fields.GroupBy(field => field.Name, StringComparer.Ordinal).Any(group => group.Count() > 1))
                     throw Error($"Class '{declaration.Name}' contains duplicate fields", declaration.Location);
-                var cls = _classesByName[declaration.Name];
+                var classKey = QualifiedTypeName(moduleName, declaration.Name);
+                var cls = _classesByName[classKey];
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () => declaration.Fields
                     .Where(field => field.IsStatic)
                     .Select(field => DeclareStaticField(cls, field, moduleName, unit.Imports, functionsByName,
                         expressionTypes, resolvedCalls))
                     .ToArray());
-                _classesByName[declaration.Name] = cls with { StaticFields = fields };
+                _classesByName[classKey] = cls with { StaticFields = fields };
                 if (declaration.DeclaredTypeParameters.Count == 0)
                     _globals.AddRange(fields);
             }
@@ -90,7 +93,7 @@ public sealed partial class SemanticAnalyzer
         }
 
         var declaration = new GlobalVariableDeclaration(field.Type, name, field.IsConst, field.Initializer, field.Location);
-        var symbol = new GlobalVariableSymbol(name, $"{cls.ModuleName}.{cls.Name}", type, field.IsConst, value, declaration);
+        var symbol = new GlobalVariableSymbol(name, cls.QualifiedName, type, field.IsConst, value, declaration);
         _globalSymbols[declaration] = symbol;
         return symbol;
     }
@@ -116,9 +119,9 @@ public sealed partial class SemanticAnalyzer
                 !substitutions.TryGetValue(parameter, out var argument) || ContainsGenericParameter(argument)))
             return template.StaticFields;
 
-        var instance = SemanticType.Class(template.Name,
+        var instance = SemanticType.Class(template.QualifiedName,
             template.DeclaredTypeParameters.Select(parameter => substitutions[parameter]).ToArray());
-        var key = instance.ToString()!;
+        var key = instance.ToQualifiedString();
         if (_instanceStaticFields.TryGetValue(key, out var existing))
             return existing;
 
@@ -126,7 +129,7 @@ public sealed partial class SemanticAnalyzer
         {
             var declaration = new GlobalVariableDeclaration(field.Declaration.Type, field.Name, field.IsConst,
                 field.Declaration.Initializer, field.Declaration.Location);
-            var symbol = new GlobalVariableSymbol(field.Name, $"{template.ModuleName}.{key}",
+            var symbol = new GlobalVariableSymbol(field.Name, key,
                 SubstituteGenericType(field.Type, substitutions), field.IsConst, field.Value, declaration);
             _globalSymbols[declaration] = symbol;
             return symbol;
@@ -140,7 +143,8 @@ public sealed partial class SemanticAnalyzer
     // variable of the same name takes precedence.
     private ClassSymbol? StaticTargetClass(Expression target, Scope scope) =>
         target is IdentifierExpression identifier
-            && _classesByName.TryGetValue(identifier.Name, out var cls)
+            && FindTypeName(identifier.Name, identifier.Location) is { } className
+            && _classesByName.TryGetValue(className, out var cls)
             && LookupVariableType(scope, identifier.Name, identifier.Location) is null
             ? cls
             : null;
@@ -184,7 +188,7 @@ public sealed partial class SemanticAnalyzer
 
         RequireReachableFrom(cls, owner, member.Location, member.MemberName, member.MemberName.Length);
         var symbol = owner.StaticFields.First(field => field.Name == member.MemberName);
-        if (!IsMemberAccessible(StaticFieldVisibility(owner, symbol), owner.Name, owner.ModuleName, moduleName, owner.Name))
+        if (!IsMemberAccessible(StaticFieldVisibility(owner, symbol), owner.QualifiedName, owner.ModuleName, moduleName, owner.QualifiedName))
             throw Error($"Static field '{member.MemberName}' of '{owner.Name}' cannot be used here", member.Location, member.MemberName.Length);
         return symbol;
     }
@@ -212,7 +216,7 @@ public sealed partial class SemanticAnalyzer
             ? null
             : call.ExplicitTypeArguments.Select(ResolveType).ToArray();
         // Inside its own body, a generic class names its current instance: `Box.total()` is `Box<T>.total()` for its own T.
-        if (typeArguments is null && cls.DeclaredTypeParameters.Count > 0 && _currentOwnerTemplate == cls.Name
+        if (typeArguments is null && cls.DeclaredTypeParameters.Count > 0 && _currentOwnerTemplate == cls.QualifiedName
             && cls.DeclaredTypeParameters.All(_genericTypes.ContainsKey))
             typeArguments = cls.DeclaredTypeParameters.Select(parameter => _genericTypes[parameter]).ToArray();
         if (typeArguments is null && cls.DeclaredTypeParameters.Count > 0)
@@ -225,7 +229,7 @@ public sealed partial class SemanticAnalyzer
         {
             if (cls.StaticFields.Any(field => field.Name == methodName))
                 throw Error($"'{methodName}' of '{cls.Name}' is a static field, not a method; a generic class's static field is named by its bare name inside the class", call.Location, methodName.Length);
-            if (GetClassMethods(cls.Name, []).Any(method => method.Name == methodName))
+            if (GetClassMethods(cls.QualifiedName, []).Any(method => method.Name == methodName))
                 throw Error($"Method '{methodName}' of '{cls.Name}' is an instance method; call it on an object",
                     call.Location, methodName.Length);
             throw ErrorWithCode(DiagnosticCode.NotDeclared,
@@ -233,13 +237,13 @@ public sealed partial class SemanticAnalyzer
         }
         RequireReachableFrom(cls, owner, call.Location, methodName, methodName.Length);
         var ownerTypeArguments = ReferenceEquals(owner, cls) ? typeArguments : null;
-        _callReceiverTypes[call] = SemanticType.Class(owner.Name, ownerTypeArguments);
+        _callReceiverTypes[call] = SemanticType.Class(owner.QualifiedName, ownerTypeArguments);
         var substitutions = owner.DeclaredTypeParameters
             .Zip(ownerTypeArguments ?? [], (name, type) => (name, type))
             .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
 
         var candidates = named.Where(method => IsMemberAccessible(method.Visibility,
-            MethodOwnerName(method), MethodOwnerModule(method), moduleName, owner.Name)).ToArray();
+            MethodOwnerName(method), MethodOwnerModule(method), moduleName, owner.QualifiedName)).ToArray();
         if (candidates.Length == 0)
             throw Error($"Static method '{methodName}' of '{owner.Name}' cannot be used here", call.Location, methodName.Length);
 

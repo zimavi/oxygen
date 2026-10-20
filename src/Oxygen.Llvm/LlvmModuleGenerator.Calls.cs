@@ -12,12 +12,14 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef EmitCall(LLVMContextRef context, LLVMBuilderRef builder, CallExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var parts = expression.Name.Split('.');
-        if (parts.Length == 2 && model.Unions.TryGetValue(parts[0], out var union))
+        // A union case is constructed by `Union.Case(...)`. It names no function, so it has no resolved call, and its type is the
+        // union, which is keyed by its qualified name.
+        if (parts.Length == 2 && !model.ResolvedCalls.ContainsKey(expression)
+            && model.ExpressionTypes.TryGetValue(expression, out var constructedType) && constructedType.IsUnion)
         {
+            var unionType = NormalizeAggregateType(constructedType, model);
+            var union = model.Unions[unionType.EnumName!];
             var index = union.Cases.Select((item, i) => (item, i)).First(pair => pair.item.Name == parts[1]).i;
-            var unionType = NormalizeAggregateType(model.ExpressionTypes[expression], model);
-            if (unionType.EnumName is not null && model.Unions.TryGetValue(unionType.EnumName, out var specializedUnion))
-                union = specializedUnion;
             var result = LLVMValueRef.CreateConstNull(ToLlvmType(unionType, model));
             result = builder.BuildInsertValue(result, LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)index, false), 0, "union.tag");
             if (expression.Arguments.Count == 1)
@@ -48,9 +50,9 @@ public sealed partial class LlvmModuleGenerator
             else if (!values.TryGetValue(receiver, out receiverValue))
                 receiverValue = builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiver], receiver);
             else if (receiver == "this"
-                && model.Classes[function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..]].IsValue)
+                && model.Classes[function.ModuleName].IsValue)
             {
-                var receiverClassName = function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..];
+                var receiverClassName = function.ModuleName;
                 receiverValue = builder.BuildLoad2(
                     _classTypes[receiverClassName], receiverValue, "this.value");
             }
@@ -61,9 +63,9 @@ public sealed partial class LlvmModuleGenerator
                 EmitNullReferenceCheck(builder, receiverValue, function.Name, "called", model, llvmFunctions);
                 var iface = model.Interfaces[receiverType.StructName!];
                 var contract = function;
-                var slot = _interfaceSlots[iface.Name].ToList().IndexOf(contract);
+                var slot = _interfaceSlots[iface.QualifiedName].ToList().IndexOf(contract);
                 if (slot < 0)
-                    slot = _interfaceSlots[iface.Name].ToList().FindIndex(candidate =>
+                    slot = _interfaceSlots[iface.QualifiedName].ToList().FindIndex(candidate =>
                         candidate.Name == function.Name && candidate.Parameters.Select(p => p.Type)
                             .SequenceEqual(function.Parameters.Select(p => p.Type)));
                 var tableEntry = builder.BuildGEP2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
@@ -130,7 +132,7 @@ public sealed partial class LlvmModuleGenerator
             if (slotPair.candidate is not null)
             {
                 var slot = slotPair.index;
-                var tableSlot = builder.BuildStructGEP2(_classTypes[receiverClass.Name], arguments[0],
+                var tableSlot = builder.BuildStructGEP2(_classTypes[receiverClass.QualifiedName], arguments[0],
                     (uint)slot + 1, "vtable.slot");
                 var rawTarget = builder.BuildLoad2(
                     LLVMTypeRef.CreatePointer(_context.Int8Type, 0), tableSlot, "vtable.target");

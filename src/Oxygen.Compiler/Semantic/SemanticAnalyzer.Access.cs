@@ -21,9 +21,8 @@ public sealed partial class SemanticAnalyzer
                 location, cls.Name.Length);
     }
 
-    // A method's module name ends with its owner class: `module.Class`.
-    private static string MethodOwnerName(FunctionSymbol method) =>
-        method.ModuleName[(method.ModuleName.LastIndexOf('.') + 1)..];
+    // A method's module name is its owner class's qualified name: `module.Class`.
+    private static string MethodOwnerName(FunctionSymbol method) => method.ModuleName;
 
     private static string MethodOwnerModule(FunctionSymbol method) =>
         method.ModuleName[..Math.Max(0, method.ModuleName.LastIndexOf('.'))];
@@ -67,7 +66,7 @@ public sealed partial class SemanticAnalyzer
     // A class with a private destructor is destroyed only by its own members, so its objects are created only inside it.
     private void RequireConstructibleHere(ClassSymbol cls, SourceLocation location)
     {
-        if (cls.Destructor is { Visibility: Visibility.Private } && _currentOwnerClass?.Name != cls.Name)
+        if (cls.Destructor is { Visibility: Visibility.Private } && _currentOwnerClass?.QualifiedName != cls.QualifiedName)
             throw Error(
                 $"Class '{cls.Name}' has a private destructor, so its objects can only be created inside the class",
                 location, cls.Name.Length);
@@ -81,15 +80,15 @@ public sealed partial class SemanticAnalyzer
             // Inside a class body the module name can carry the class name, so the class's own module is used there.
             Visibility.Internal => string.Equals(ownerModuleName, _currentOwnerClass?.ModuleName ?? moduleName, StringComparison.Ordinal),
             Visibility.Protected => _currentOwnerClass is not null
-                && (_currentOwnerClass.Name == ownerClassName || IsClassDerivedFrom(_currentOwnerClass.Name, ownerClassName))
-                && (receiverClassName is null || IsClassDerivedFrom(receiverClassName, _currentOwnerClass.Name)),
-            _ => _currentOwnerClass is not null && _currentOwnerClass.Name == ownerClassName
+                && (_currentOwnerClass.QualifiedName == ownerClassName || IsClassDerivedFrom(_currentOwnerClass.QualifiedName, ownerClassName))
+                && (receiverClassName is null || IsClassDerivedFrom(receiverClassName, _currentOwnerClass.QualifiedName)),
+            _ => _currentOwnerClass is not null && _currentOwnerClass.QualifiedName == ownerClassName
         };
 
     private void EnsureMemberAccessible(Visibility visibility, string memberKind, string memberName, ClassSymbol owner,
         string moduleName, SourceLocation location, string? receiverClassName = null)
     {
-        if (!IsMemberAccessible(visibility, owner.Name, owner.ModuleName, moduleName, receiverClassName))
+        if (!IsMemberAccessible(visibility, owner.QualifiedName, owner.ModuleName, moduleName, receiverClassName))
             throw Error(
                 $"{memberKind} '{memberName}' of class '{owner.Name}' is {visibility.ToString().ToLowerInvariant()} and cannot be used here",
                 location, memberName.Length);
@@ -108,8 +107,9 @@ public sealed partial class SemanticAnalyzer
             Visibility.Internal => _currentOwnerClass is null
                 || string.Equals(_currentOwnerClass.ModuleName, owner.ModuleName, StringComparison.Ordinal),
             Visibility.Protected => _currentOwnerClass is not null
-                && (_currentOwnerClass.Name == owner.Name || IsClassDerivedFrom(_currentOwnerClass.Name, owner.Name)),
-            _ => _currentOwnerClass is not null && _currentOwnerClass.Name == owner.Name
+                && (_currentOwnerClass.QualifiedName == owner.QualifiedName
+                    || IsClassDerivedFrom(_currentOwnerClass.QualifiedName, owner.QualifiedName)),
+            _ => _currentOwnerClass is not null && _currentOwnerClass.QualifiedName == owner.QualifiedName
         };
         if (!visible)
             throw Error($"Accessor for property '{property.Name}' is not accessible", location, property.Name.Length);

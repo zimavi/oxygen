@@ -149,6 +149,8 @@ internal static class DiagnosticAdvice
             "A generic use takes its type arguments from its arguments and its expected type. A type parameter that neither of them determines, or that two arguments bind to unrelated types, cannot be inferred.",
         DiagnosticCode.FlagsMember =>
             "A @flags enum combines its values with bitwise operators, so each member must be 0 or a single bit: a value with exactly one bit set.",
+        DiagnosticCode.AmbiguousType =>
+            "Types are declared in modules, and a name that a module declares and an import also brings in denotes two types. The name alone does not say which one is meant.",
         _ => null
     };
 
@@ -194,6 +196,8 @@ internal static class DiagnosticAdvice
             "Write the type arguments explicitly, such as Option<string>.None or Box<i32>(4), or pass arguments of one type for each type parameter.",
         DiagnosticCode.FlagsMember =>
             "Give the member a value that is 0 or a power of two, such as 1, 2, 4 or 8, or remove @flags if the values are not bits.",
+        DiagnosticCode.AmbiguousType =>
+            "Write the qualified name of the type you mean, such as std.exception.Exception, or the module's import alias with the name.",
         _ => null
     };
 }

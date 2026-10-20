@@ -26,12 +26,27 @@ public sealed class SemanticTests
     [Fact]
     public void ValidatesExceptionFlowAndCatchScope()
     {
-        var model = Analyze(
-            "class Exception { } class Failure : Exception { } " +
+        // A thrown class derives from the standard library's Exception, which the program imports.
+        var model = AnalyzeWithStdException(
+            "class Failure : Exception { } " +
             "i32 main() { try { throw new Failure(); } catch (Failure error) { return 1; } catch { return 2; } }");
 
-        Assert.Contains(model.Classes.Keys, name => name == "Failure");
+        Assert.Contains(model.Classes.Keys, name => name == "program.Failure");
     }
+
+    // The standard library's Option, as the module a program imports. The for-in protocol requires that Option.
+    private SemanticModel AnalyzeWithStdOption(string source) =>
+        new SemanticAnalyzer(Log.Logger).Analyze([
+            Parse("module std.collection; public union Option<T> { Some(T); None; }"),
+            Parse("import std.collection; " + source)
+        ]);
+
+    // The standard library's Exception, as the module a program imports. A program that throws derives from it.
+    private SemanticModel AnalyzeWithStdException(string source) =>
+        new SemanticAnalyzer(Log.Logger).Analyze([
+            Parse("module std.exception; public class Exception { }"),
+            Parse("import std.exception; " + source)
+        ]);
 
     [Fact]
     public void ExceptionConstructorAcceptsMessageAndInitializesTraceInternally()
@@ -45,13 +60,13 @@ public sealed class SemanticTests
 
         Assert.Contains(model.Functions.Values, symbol =>
             symbol.IsExternal && symbol.NativeName == "__oxygen_runtime_exception_trace_count");
-        Assert.Contains(model.Classes["StackTrace"].Constructors,
+        Assert.Contains(model.Classes["program.StackTrace"].Constructors,
             constructor => constructor.Parameters.Single().Type.IsClass
-                && constructor.Parameters.Single().Type.StructName == "Exception");
-        Assert.Contains(model.Classes["Exception"].Constructors,
+                && constructor.Parameters.Single().Type.StructName == "program.Exception");
+        Assert.Contains(model.Classes["program.Exception"].Constructors,
             constructor => constructor.Parameters.Count == 1
                 && constructor.Parameters[0].Type.Kind == SemanticTypeKind.String);
-        Assert.Contains(model.Classes["Failure"].Constructors,
+        Assert.Contains(model.Classes["program.Failure"].Constructors,
             constructor => constructor.Parameters.Count == 1
                 && constructor.Parameters[0].Type.Kind == SemanticTypeKind.String);
     }
@@ -74,10 +89,10 @@ public sealed class SemanticTests
 
         var model = new SemanticAnalyzer(Log.Logger).Analyze([standardUnit, stringsUnit, mainUnit]);
 
-        Assert.Contains("Exception", model.Classes.Keys);
+        Assert.Contains("std.exception.Exception", model.Classes.Keys);
         Assert.Contains(model.Functions.Values, symbol =>
             symbol.NativeName == "__oxygen_runtime_exception_trace_count");
-        Assert.Contains(model.Classes["Exception"].Constructors,
+        Assert.Contains(model.Classes["std.exception.Exception"].Constructors,
             constructor => constructor.Parameters.Count == 1
                 && constructor.Parameters[0].Type.Kind == SemanticTypeKind.String);
     }
@@ -98,7 +113,7 @@ public sealed class SemanticTests
     public void CatchBindingIsScopedToCatchBody()
     {
         var exception = Assert.Throws<SemanticException>(() =>
-            Analyze("class Exception { } i32 main() { try { return 0; } catch (Exception error) { return 1; } return error; }"));
+            AnalyzeWithStdException("i32 main() { try { return 0; } catch (Exception error) { return 1; } return error; }"));
         Assert.Contains("Variable 'error' is not declared", exception.Message);
     }
 
@@ -106,7 +121,7 @@ public sealed class SemanticTests
     public void RequiresCatchAllToBeLast()
     {
         var exception = Assert.Throws<SemanticException>(() =>
-            Analyze("class Exception { } class Failure : Exception { } i32 main() { try { return 0; } catch { return 1; } catch (Failure error) { return 2; } }"));
+            AnalyzeWithStdException("class Failure : Exception { } i32 main() { try { return 0; } catch { return 1; } catch (Failure error) { return 2; } }"));
         Assert.Contains("catch-all clause must be last", exception.Message);
     }
 
@@ -126,8 +141,8 @@ public sealed class SemanticTests
         var model = Analyze(
             "class Box { i32 value; Box(i32 initial) { value = initial; } i32 get() { return value; } } i32 main() { Box box = new Box(42); return box.get(); }");
 
-        Assert.Contains("Box", model.Classes.Keys);
-        Assert.Equal(SemanticType.Class("Box"), model.ExpressionTypes.Values.First(type => type.IsClass));
+        Assert.Contains("program.Box", model.Classes.Keys);
+        Assert.Equal(SemanticType.Class("program.Box"), model.ExpressionTypes.Values.First(type => type.IsClass));
         Assert.Contains(model.ResolvedCalls.Values, method => method.Name == "get");
     }
 
@@ -158,7 +173,7 @@ public sealed class SemanticTests
             "switch (value) { case Some(number): return number; case None: return 0; } }");
 
         var specialized = Assert.Single(model.Unions, pair =>
-            pair.Key.StartsWith("Option__ox_", StringComparison.Ordinal)).Value;
+            pair.Key.StartsWith("program.Option__ox_", StringComparison.Ordinal)).Value;
         Assert.False(specialized.IsGeneric);
         Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), specialized.Cases[0].PayloadType);
     }
@@ -172,9 +187,9 @@ public sealed class SemanticTests
             "i32 main() { Boxed<i32> box = new Box<i32>(42); return box.get(); }");
 
         Assert.Contains(model.Interfaces.Keys, name =>
-            name.StartsWith("Boxed__ox_", StringComparison.Ordinal));
+            name.StartsWith("program.Boxed__ox_", StringComparison.Ordinal));
         Assert.Contains(model.Classes.Keys, name =>
-            name.StartsWith("Box__ox_", StringComparison.Ordinal));
+            name.StartsWith("program.Box__ox_", StringComparison.Ordinal));
         Assert.Contains(model.ResolvedCalls.Values, call =>
             call.Name == "get" && call.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I32));
     }
@@ -208,12 +223,12 @@ public sealed class SemanticTests
 
         // Each nested argument produces its own specialization, and the outer ones hold the
         // specialized inner class rather than an unspecialized `Cell<...>`.
-        Assert.Equal(2, model.Classes.Keys.Count(name => name.StartsWith("Box__ox_", StringComparison.Ordinal)));
+        Assert.Equal(2, model.Classes.Keys.Count(name => name.StartsWith("program.Box__ox_", StringComparison.Ordinal)));
         var boxes = model.Classes.Values
             .Where(cls => cls.Name.StartsWith("Box__ox_", StringComparison.Ordinal))
             .ToArray();
         Assert.Equal(
-            [SemanticType.Class("Cell__ox_i32"), SemanticType.Class("Cell__ox_i64")],
+            [SemanticType.Class("program.Cell__ox_i32"), SemanticType.Class("program.Cell__ox_i64")],
             boxes.Select(cls => cls.Fields.Single().Type).OrderBy(type => type.ToString()).ToArray());
     }
 
@@ -232,8 +247,8 @@ public sealed class SemanticTests
         // from mangling to the same specialization name.
         var names = model.AggregateSpecializations.Values.ToArray();
         Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count());
-        Assert.Contains("Class:Pair<One<i32>, i64>", model.AggregateSpecializations.Keys);
-        Assert.Contains("Class:One<Pair<i32, i64>>", model.AggregateSpecializations.Keys);
+        Assert.Contains("Class:program.Pair<program.One<i32>, i64>", model.AggregateSpecializations.Keys);
+        Assert.Contains("Class:program.One<program.Pair<i32, i64>>", model.AggregateSpecializations.Keys);
     }
 
     [Fact]
@@ -350,12 +365,12 @@ public sealed class SemanticTests
             "T roundTrip() { var cell = Cell(value); return cell.read(); } } " +
             "i32 main() { Holder<i32> holder = new Holder<i32>(42); return holder.roundTrip(); }");
 
-        Assert.Contains("Cell__ox_i32", model.Classes.Keys);
-        var roundTrip = model.Classes["Holder__ox_i32"].Methods.Single(method => method.Name == "roundTrip");
+        Assert.Contains("program.Cell__ox_i32", model.Classes.Keys);
+        var roundTrip = model.Classes["program.Holder__ox_i32"].Methods.Single(method => method.Name == "roundTrip");
         var read = Assert.Single(model.ResolvedCalls, pair =>
             ReferenceEquals(pair.Key, FindCall(roundTrip.Declaration.Body, "cell.read"))).Value;
         Assert.Equal("program.Cell__ox_i32", read.ModuleName);
-        Assert.Equal(SemanticType.Class("Cell__ox_i32"),
+        Assert.Equal(SemanticType.Class("program.Cell__ox_i32"),
             model.CallReceiverTypes[FindCall(roundTrip.Declaration.Body, "cell.read")]);
     }
 
@@ -375,7 +390,7 @@ public sealed class SemanticTests
         var specializations = model.Modules["util"].Where(function => function.Name == "first").ToArray();
         var concrete = Assert.Single(specializations, function => function.IsSpecialized);
         Assert.Equal([SemanticType.FromPrimitive(PrimitiveType.I64)], concrete.SpecializationArguments);
-        var constructor = model.Classes["Box__ox_i64"].Constructors.Single();
+        var constructor = model.Classes["program.Box__ox_i64"].Constructors.Single();
         Assert.Same(concrete, model.ResolvedCalls[FindCall(constructor.Declaration.Body, "util.first")]);
     }
 
@@ -466,9 +481,9 @@ public sealed class SemanticTests
     {
         var model = Analyze("@value class Point { } i32 main() { Point point = Point(); return 0; }");
 
-        Assert.True(model.Classes["Point"].IsValue);
+        Assert.True(model.Classes["program.Point"].IsValue);
         Assert.Contains(model.ExpressionTypes, pair =>
-            pair.Key is ClassConstructionExpression && pair.Value == SemanticType.Class("Point"));
+            pair.Key is ClassConstructionExpression && pair.Value == SemanticType.Class("program.Point"));
     }
 
     [Fact]
@@ -522,8 +537,7 @@ public sealed class SemanticTests
     [Fact]
     public void ResolvesForInIteratorProtocol()
     {
-        var model = Analyze(
-            "union Option<T> { Some(T); None; } " +
+        var model = AnalyzeWithStdOption(
             "class Iter { i32 index; Option<i32> next() { return Option.None(); } } " +
             "class Values { Iter iter() { return new Iter(); } } " +
             "i32 main() { Values values = new Values(); for (var value in values) { return value; } return 0; }");
@@ -538,8 +552,7 @@ public sealed class SemanticTests
     [Fact]
     public void ResolvesIteratorProtocolForNonIdentifierCollectionExpression()
     {
-        var model = Analyze(
-            "union Option<T> { Some(T); None; } " +
+        var model = AnalyzeWithStdOption(
             "class Iter { Option<i64> next() { return Option.None(); } } " +
             "class Values { Iter iter() { return new Iter(); } } " +
             "Values getValues() { return new Values(); } " +
@@ -574,7 +587,7 @@ public sealed class SemanticTests
             "class Box { i32 value; Box(i32 value) { this.value = value; } i32 get(i32 value) { i32 local = value; return this.value + local; } } i32 main() { Box box = new Box(41); return box.get(1); }");
 
         Assert.Contains(model.ExpressionTypes, pair =>
-            pair.Key is ThisExpression && pair.Value == SemanticType.Class("Box"));
+            pair.Key is ThisExpression && pair.Value == SemanticType.Class("program.Box"));
     }
 
     [Fact]
@@ -605,7 +618,7 @@ public sealed class SemanticTests
         var model = Analyze(
             "interface Printable { i32 value(); } class Item : Printable { i32 value() { return 1; } } i32 main() { return 0; }");
 
-        Assert.Single(model.Interfaces["Printable"].Methods);
+        Assert.Single(model.Interfaces["program.Printable"].Methods);
     }
 
     [Fact]
@@ -614,7 +627,7 @@ public sealed class SemanticTests
         var model = Analyze(
             "interface Iterator<T> { T next(T value); } class Item<T> : Iterator<T> { T next(T value) { return value; } } i32 main() { return 0; }");
 
-        Assert.Single(model.Interfaces["Iterator"].Methods);
+        Assert.Single(model.Interfaces["program.Iterator"].Methods);
     }
 
     [Fact]
@@ -623,7 +636,7 @@ public sealed class SemanticTests
         var model = Analyze(
             "union Option<T> { Some(T); None; } interface Iterator<T> { Option<T> next(); } class Item<T> : Iterator<T> { Option<T> next() { return Option<T>.None; } } i32 main() { return 0; }");
 
-        Assert.Single(model.Interfaces["Iterator"].Methods);
+        Assert.Single(model.Interfaces["program.Iterator"].Methods);
     }
 
     [Fact]
@@ -632,7 +645,7 @@ public sealed class SemanticTests
         var model = Analyze(
             "interface Producer<T> { T value(); } class Item : Producer<i32> { i32 value() { return 1; } } i32 main() { return 0; }");
 
-        Assert.Single(model.Interfaces["Producer"].Methods);
+        Assert.Single(model.Interfaces["program.Producer"].Methods);
     }
 
     [Fact]
@@ -661,8 +674,8 @@ public sealed class SemanticTests
             }
             """);
 
-        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Interface("Printable"));
-        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Class("Item"));
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Interface("program.Printable"));
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Class("program.Item"));
     }
 
     [Fact]
@@ -724,7 +737,7 @@ public sealed class SemanticTests
             }
             """);
 
-        Assert.Equal(3, model.Enums["Color"].Members.Count);
+        Assert.Equal(3, model.Enums["program.Color"].Members.Count);
         Assert.Equal(SemanticType.FromPrimitive(PrimitiveType.I32), model.ExpressionTypes.Values.Last());
     }
 
@@ -734,8 +747,8 @@ public sealed class SemanticTests
         var model = Analyze(
             "union Result { Ok(i32); Error(i32); Empty; } i32 main() { Result value = Result.Ok(42); switch (value) { case Ok(number): return number; case Error(code): return code; case Empty: return 0; } }");
 
-        Assert.Equal(3, model.Unions["Result"].Cases.Count);
-        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Union("Result"));
+        Assert.Equal(3, model.Unions["program.Result"].Cases.Count);
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Union("program.Result"));
     }
 
     [Fact]
@@ -1001,7 +1014,7 @@ public sealed class SemanticTests
             "i32 f(A value) { return 1; } i32 f(B value) { return 2; } i32 main() { C item = new C(); return f(item); }");
 
         var call = model.ResolvedCalls.Values.Single(function => function.Name == "f");
-        Assert.Equal("A", call.Parameters[0].Type.StructName);
+        Assert.Equal("program.A", call.Parameters[0].Type.StructName);
     }
 
     [Fact]
@@ -1137,8 +1150,8 @@ public sealed class SemanticTests
     public void StructurallyEqualGenericTypesAreEqualWhenBuiltSeparately()
     {
         // The type arguments are lists, so a record's default equality would compare them by reference.
-        var first = SemanticType.Class("Box", [SemanticType.FromPrimitive(PrimitiveType.I32)]);
-        var second = SemanticType.Class("Box", [SemanticType.FromPrimitive(PrimitiveType.I32)]);
+        var first = SemanticType.Class("program.Box", [SemanticType.FromPrimitive(PrimitiveType.I32)]);
+        var second = SemanticType.Class("program.Box", [SemanticType.FromPrimitive(PrimitiveType.I32)]);
 
         Assert.True(first == second);
         Assert.Equal(first.GetHashCode(), second.GetHashCode());
@@ -2074,8 +2087,8 @@ public sealed class SemanticTests
             }
             """);
 
-        Assert.True(model.Enums["Access"].IsFlags);
-        Assert.Equal(0b111, model.Enums["Access"].FlagsMask);
+        Assert.True(model.Enums["program.Access"].IsFlags);
+        Assert.Equal(0b111, model.Enums["program.Access"].FlagsMask);
     }
 
     [Fact]
@@ -2564,7 +2577,7 @@ public sealed class SemanticTests
         var model = Analyze(
             "class Base { } class Child : Base { } i32 main() { Base value = new Child(); Child child = value as Child; return child is Child ? 1 : 0; }");
 
-        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Class("Child"));
+        Assert.Contains(model.ExpressionTypes.Values, type => type == SemanticType.Class("program.Child"));
         Assert.Contains(model.ExpressionTypes.Keys, expression => expression is IsExpression);
     }
 
@@ -2817,7 +2830,7 @@ public sealed class SemanticTests
             "class Base { Base(i32 value) { } Base(string text) { } } " +
             "class Child : Base { Child() : base(\"text\") { } } i32 main() { return 0; }");
 
-        var constructor = model.Classes["Child"].Constructors.Single().Declaration;
+        var constructor = model.Classes["program.Child"].Constructors.Single().Declaration;
         Assert.Equal(1, model.ConstructorChainTargets[constructor]);
     }
 
@@ -2829,7 +2842,7 @@ public sealed class SemanticTests
             "Item(string text) { value = 2; } } " +
             "i32 main() { Item item = new Item(\"text\"); return item.value; }");
 
-        var parameterless = model.Classes["Item"].Constructors[0].Declaration;
+        var parameterless = model.Classes["program.Item"].Constructors[0].Declaration;
         Assert.Equal(1, model.ConstructorChainTargets[parameterless]);
         var creation = Assert.IsType<NewExpression>(
             Assert.IsType<VariableDeclarationStatement>(model.MainFunction!.Declaration.Body.Statements[0]).Initializer);
@@ -2843,7 +2856,7 @@ public sealed class SemanticTests
             "class Base { i32 value = 1; } class Child : Base { i32 extra = 2; Child() { } } " +
             "i32 main() { return 0; }");
 
-        var constructor = model.Classes["Child"].Constructors.Single().Declaration;
+        var constructor = model.Classes["program.Child"].Constructors.Single().Declaration;
         Assert.Equal(0, model.ConstructorChainTargets[constructor]);
     }
 
@@ -2975,8 +2988,8 @@ public sealed class SemanticTests
     [Fact]
     public void AssignmentInTheTryBodyCountsOnlyWhenNoCatchCanSkipIt()
     {
-        var exception = Assert.Throws<SemanticException>(() => Analyze(
-            "class Exception { } class Failure : Exception { } " +
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeWithStdException(
+            "class Failure : Exception { } " +
             "i32 main() { i32 x; try { x = 1; } catch (Failure error) { } return x; }"));
 
         Assert.Contains("'x' may be read before it is assigned", exception.Message);
@@ -3060,7 +3073,7 @@ public sealed class SemanticTests
             "class C : B { } " +
             "i32 main() { return 0; }");
 
-        Assert.Equal(["x"], model.Classes["C"].Fields.Select(field => field.Name));
+        Assert.Equal(["x"], model.Classes["program.C"].Fields.Select(field => field.Name));
     }
 
     [Fact]

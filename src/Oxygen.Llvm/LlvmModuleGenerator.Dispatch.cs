@@ -37,7 +37,7 @@ public sealed partial class LlvmModuleGenerator
     private IReadOnlyList<FunctionSymbol> GetClassAccessors(ClassSymbol cls, SemanticModel model) =>
         cls.DeclaredProperties.SelectMany(property => property.Declaration.Accessors
             .Where(accessor => accessor.Kind is PropertyAccessorKind.Get or PropertyAccessorKind.Set)
-            .Select(accessor => _propertyAccessors[(cls.Name, property.Name, accessor.Kind)])).ToArray();
+            .Select(accessor => _propertyAccessors[(cls.QualifiedName, property.Name, accessor.Kind)])).ToArray();
 
     private IEnumerable<FunctionSymbol> CreatePropertyAccessorSymbols(ClassSymbol cls, SemanticModel model)
     {
@@ -60,8 +60,8 @@ public sealed partial class LlvmModuleGenerator
                     IsVirtual: property.Declaration.IsVirtual, IsOverride: property.Declaration.IsOverride);
                 var symbol = new FunctionSymbol(name,
                     accessor.Kind == PropertyAccessorKind.Get ? property.Type : SemanticType.FromPrimitive(PrimitiveType.Void),
-                    parameters, declaration, $"{cls.ModuleName}.{cls.Name}", accessor.Visibility);
-                _propertyAccessors[(cls.Name, property.Name, accessor.Kind)] = symbol;
+                    parameters, declaration, cls.QualifiedName, accessor.Visibility);
+                _propertyAccessors[(cls.QualifiedName, property.Name, accessor.Kind)] = symbol;
                 _accessorSymbols.Add(symbol);
                 yield return symbol;
             }
@@ -88,9 +88,9 @@ public sealed partial class LlvmModuleGenerator
                     IsExternalDeclaration: true);
                 var symbol = new FunctionSymbol(name,
                     accessor.Kind == PropertyAccessorKind.Get ? property.Type : SemanticType.FromPrimitive(PrimitiveType.Void),
-                    parameters, declaration, $"{iface.ModuleName}.{iface.Name}", accessor.Visibility,
+                    parameters, declaration, iface.QualifiedName, accessor.Visibility,
                     IsExternal: true);
-                _propertyAccessors[(iface.Name, property.Name, accessor.Kind)] = symbol;
+                _propertyAccessors[(iface.QualifiedName, property.Name, accessor.Kind)] = symbol;
                 _accessorSymbols.Add(symbol);
                 yield return symbol;
             }
@@ -102,7 +102,7 @@ public sealed partial class LlvmModuleGenerator
         foreach (var property in iface.DeclaredProperties)
             foreach (var accessor in property.Declaration.Accessors.Where(accessor =>
                          accessor.Kind is PropertyAccessorKind.Get or PropertyAccessorKind.Set))
-                if (_propertyAccessors.TryGetValue((iface.Name, property.Name, accessor.Kind), out var symbol))
+                if (_propertyAccessors.TryGetValue((iface.QualifiedName, property.Name, accessor.Kind), out var symbol))
                     slots.Add(symbol);
         return slots;
     }
@@ -123,10 +123,10 @@ public sealed partial class LlvmModuleGenerator
         var initializer = entries.Length == 0
             ? LLVMValueRef.CreateConstNull(tableType)
             : LLVMValueRef.CreateConstArray(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), entries);
-        var table = module.AddGlobal(tableType, $"oxygen.interface.table.{cls.Name}.{iface.Name}");
+        var table = module.AddGlobal(tableType, $"oxygen.interface.table.{cls.QualifiedName}.{iface.QualifiedName}");
         table.Linkage = LLVMLinkage.LLVMInternalLinkage;
         table.Initializer = initializer;
-        _interfaceTables[(cls.Name, iface.Name)] = table;
+        _interfaceTables[(cls.QualifiedName, iface.QualifiedName)] = table;
     }
 
     private FunctionSymbol ResolveInterfaceImplementation(ClassSymbol cls, InterfaceSymbol iface, FunctionSymbol contract,
@@ -139,7 +139,7 @@ public sealed partial class LlvmModuleGenerator
             var kind = contract.Name.StartsWith("get_", StringComparison.Ordinal)
                 ? PropertyAccessorKind.Get : PropertyAccessorKind.Set;
             var (owner, property) = FindClassProperty(cls, propertyName, model);
-            return _propertyAccessors[(owner.Name, property.Name, kind)];
+            return _propertyAccessors[(owner.QualifiedName, property.Name, kind)];
         }
         return GetClassMethodsForDispatch(cls, model)
             .First(method => method.Name == contract.Name
@@ -153,7 +153,7 @@ public sealed partial class LlvmModuleGenerator
         if (property is not null) return (cls, property);
         if (cls.BaseTypeName is not null && model.Classes.TryGetValue(cls.BaseTypeName, out var baseClass))
             return FindClassProperty(baseClass, name, model);
-        throw new InvalidOperationException($"Class '{cls.Name}' has no property '{name}'.");
+        throw new InvalidOperationException($"Class '{cls.QualifiedName}' has no property '{name}'.");
     }
 
     private static IReadOnlyList<FunctionSymbol> GetClassMethodsForDispatch(ClassSymbol cls, SemanticModel model)

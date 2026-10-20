@@ -8,16 +8,22 @@ namespace Oxygen.Compiler.Semantic;
 // Generics: substitution, inference and specialization of generic functions and classes.
 public sealed partial class SemanticAnalyzer
 {
-    // The constraint interfaces of each type parameter. Each constraint must name a declared interface.
+    // The constraint interfaces of each type parameter, by qualified name. Each constraint must name a declared interface in
+    // the current scope.
     private IReadOnlyDictionary<string, IReadOnlyList<string>> ConstraintsFor(IReadOnlyList<TypeParameterSyntax> parameters)
     {
         var constraints = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         foreach (var parameter in parameters)
         {
+            var interfaces = new List<string>();
             foreach (var constraint in parameter.Constraints)
-                if (!_interfacesByName.ContainsKey(constraint))
+            {
+                var interfaceName = FindTypeName(constraint, parameter.Location);
+                if (interfaceName is null || !_interfacesByName.ContainsKey(interfaceName))
                     throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Interface '{constraint}' is not declared", parameter.Location, constraint.Length);
-            constraints[parameter.Name] = parameter.Constraints;
+                interfaces.Add(interfaceName);
+            }
+            constraints[parameter.Name] = interfaces;
         }
         return constraints;
     }
@@ -74,21 +80,21 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
         SourceLocation location)
     {
-        ValidateTypeArgumentConstraints(generic.Declaration.DeclaredTypeParameters,
-            generic.DeclaredGenericParameters.Select(name => substitutions[name]).ToArray(), location);
-        var declaration = CloneFunction(generic.Declaration, substitutions);
+        InFunctionScopeOf(generic.Declaration, () => ValidateTypeArgumentConstraints(generic.Declaration.DeclaredTypeParameters,
+            generic.DeclaredGenericParameters.Select(name => substitutions[name]).ToArray(), location));
+        var declaration = InFunctionScopeOf(generic.Declaration, () => CloneFunction(generic.Declaration, substitutions));
         var previous = _genericTypes;
         _genericTypes = substitutions;
         var specializationArguments = generic.DeclaredGenericParameters
             .Select(parameter => substitutions[parameter])
             .ToArray();
-        var symbol = new FunctionSymbol(
+        var symbol = InFunctionScopeOf(generic.Declaration, () => new FunctionSymbol(
             generic.Name,
             ResolveType(declaration.ReturnType),
             declaration.Parameters.Select(parameter =>
                 new ParameterSymbol(parameter.Name, ResolveType(parameter.Type), parameter)).ToArray(),
             declaration, generic.ModuleName, generic.Visibility, generic.NativeName, false, generic.CInterop, [],
-            specializationArguments);
+            specializationArguments));
         _genericTypes = previous;
         _usedFunctions.Add(generic);
         // Inside a generic body (e.g. `alloc<T>` in `List<T>`) the arguments are still type

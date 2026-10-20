@@ -27,12 +27,19 @@ public sealed partial class SemanticAnalyzer
         var outerCatchDepth = _catchDepth;
         var outerStatementErrorReported = _statementErrorReported;
         var outerFailedDeclarations = _failedDeclarations.ToArray();
+        // The body's type names are those of its module and imports. A generic instance has its own module, so the scope is saved too.
+        var outerModule = _typeScopeModule;
+        var outerImports = _typeScopeImports;
+        _typeScopeModule = TypeScopeModuleOf(moduleName);
+        _typeScopeImports = imports;
         try
         {
             AnalyzeFunctionBody(function, functions, moduleName, imports, expressionTypes, resolvedCalls, constructor);
         }
         finally
         {
+            _typeScopeModule = outerModule;
+            _typeScopeImports = outerImports;
             _loopDepth = outerLoopDepth;
             _breakableDepth = outerBreakableDepth;
             _catchDepth = outerCatchDepth;
@@ -57,7 +64,8 @@ public sealed partial class SemanticAnalyzer
         var globals = GlobalScopeOf(moduleName);
         var scope = new Scope(globals, MarkVariableUsed);
         var className = function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..];
-        if (_classesByName.TryGetValue(className, out var ownerClass))
+        // A method's module name is its class's qualified name, so the owner is found by that key.
+        if (_classesByName.TryGetValue(function.ModuleName, out var ownerClass))
         {
             var ownerTypeArguments = ownerClass.DeclaredTypeParameters
                 .Select(parameter => _genericTypes.TryGetValue(parameter, out var type)
@@ -69,7 +77,7 @@ public sealed partial class SemanticAnalyzer
             scope = isStatic
                 ? new Scope(globals, MarkVariableUsed, thisError: "'this' cannot be used in a static method")
                 : new Scope(globals, MarkVariableUsed,
-                    SemanticType.Class(ownerClass.Name, ownerTypeArguments.Length == 0 ? null : ownerTypeArguments));
+                    SemanticType.Class(ownerClass.QualifiedName, ownerTypeArguments.Length == 0 ? null : ownerTypeArguments));
             DeclareStaticFieldsIn(scope, InstanceStaticFields(ownerClass, _genericTypes));
             foreach (var field in isStatic ? Array.Empty<ClassFieldSymbol>() : ownerClass.Fields)
             {
@@ -80,10 +88,10 @@ public sealed partial class SemanticAnalyzer
                     field.IsConst, field.Declaration, false));
             }
         }
-        _currentOwnerClass = _classesByName.GetValueOrDefault(className);
+        _currentOwnerClass = _classesByName.GetValueOrDefault(function.ModuleName);
         _currentIsConstructor = constructor is not null;
         _currentIsStaticMethod = function.Declaration.IsStatic;
-        _currentOwnerTemplate = className;
+        _currentOwnerTemplate = function.ModuleName;
         var parameterScope = new Scope(scope, MarkVariableUsed);
         // A constructor's initializer runs before the object's fields are initialized, so its arguments see the
         // parameters but neither the fields nor `this`.

@@ -84,6 +84,7 @@ public sealed record InterfaceSymbol(
     IReadOnlyList<string>? TypeParameters = null,
     IReadOnlyList<PropertySymbol>? Properties = null)
 {
+    public string QualifiedName => $"{ModuleName}.{Name}";
     public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
     public IReadOnlyList<PropertySymbol> DeclaredProperties => Properties ?? [];
     public bool IsGeneric => DeclaredTypeParameters.Count != 0;
@@ -98,6 +99,10 @@ public sealed record EnumSymbol(
     EnumDeclaration Declaration,
     Visibility Visibility)
 {
+    // The module that declares the enum. Its qualified name is the key of the enum in the model.
+    public string ModuleName { get; init; } = "program";
+    public string QualifiedName => $"{ModuleName}.{Name}";
+
     public IReadOnlyDictionary<string, EnumMemberSymbol> MembersByName =>
         Members.ToDictionary(member => member.Name, StringComparer.Ordinal);
 
@@ -113,6 +118,9 @@ public sealed record UnionSymbol(
     string Name, IReadOnlyList<UnionCaseSymbol> Cases, UnionDeclaration Declaration, Visibility Visibility,
     IReadOnlyList<string>? TypeParameters = null)
 {
+    // The module that declares the union. Its qualified name is the key of the union in the model.
+    public string ModuleName { get; init; } = "program";
+    public string QualifiedName => $"{ModuleName}.{Name}";
     public IReadOnlyList<string> DeclaredTypeParameters => TypeParameters ?? [];
     public bool IsGeneric => DeclaredTypeParameters.Count != 0;
     public IReadOnlyDictionary<string, UnionCaseSymbol> CasesByName =>
@@ -218,9 +226,11 @@ public sealed class SemanticModel
         IReadOnlyDictionary<Expression, GlobalVariableSymbol>? globalReferences = null,
         IReadOnlySet<CallExpression>? baseCalls = null,
         IReadOnlyDictionary<ClassConstructionExpression, CallExpression>? constructionCalls = null,
-        IReadOnlyDictionary<SyntaxNode, int[]>? argumentOrders = null)
+        IReadOnlyDictionary<SyntaxNode, int[]>? argumentOrders = null,
+        IReadOnlyDictionary<TypeSyntax, SemanticType>? resolvedTypeSyntax = null)
     {
         ArgumentOrders = argumentOrders ?? new Dictionary<SyntaxNode, int[]>();
+        ResolvedTypeSyntax = resolvedTypeSyntax ?? new Dictionary<TypeSyntax, SemanticType>(ReferenceEqualityComparer.Instance);
         ConstructionCalls = constructionCalls ?? new Dictionary<ClassConstructionExpression, CallExpression>();
         BaseCalls = baseCalls ?? new HashSet<CallExpression>();
         Globals = globals ?? [];
@@ -307,4 +317,8 @@ public sealed class SemanticModel
     // The constructor called by each constructor's `: this(...)`, `: base(...)`, or implicit base call, as an
     // index into Constructors of the class it targets: the declaring class for `this`, its base class otherwise.
     public IReadOnlyDictionary<ConstructorDeclaration, int> ConstructorChainTargets { get; }
+
+    // The type that the analyzer resolved for each type syntax, by node. A name in a module is resolved in that module's
+    // scope, so the backend reads the resolved type rather than the name.
+    public IReadOnlyDictionary<TypeSyntax, SemanticType> ResolvedTypeSyntax { get; }
 }

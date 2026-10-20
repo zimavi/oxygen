@@ -231,6 +231,19 @@ void __oxygen_runtime_rethrow(void)
 #endif
 }
 
+/* The simple name of a type, without its module: `std.exception.Exception` is shown as `Exception`. A specialized name keeps
+   its type arguments, which follow `__ox_`. */
+static const char *display_type_name(const char *name)
+{
+    const char *end = strstr(name, "__ox_");
+    const char *stop = end == NULL ? name + strlen(name) : end;
+    const char *dot = NULL;
+    for (const char *p = name; p < stop; p++)
+        if (*p == '.')
+            dot = p;
+    return dot == NULL ? name : dot + 1;
+}
+
 void __oxygen_runtime_unhandled_object(void *exception_handle)
 {
 #if !defined(_WIN32)
@@ -239,7 +252,7 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
     const oxygen_runtime_type_info *type =
         object == NULL ? NULL : *(const oxygen_runtime_type_info *const *)object;
     fprintf(stderr, "Unhandled %s", type == NULL || type->name == NULL
-        ? "Exception" : type->name);
+        ? "Exception" : display_type_name(type->name));
     if (type != NULL && type->message_offset != 0 && object != NULL)
     {
         const oxygen_string *message =
@@ -267,7 +280,7 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
     const oxygen_runtime_type_info *type =
         object == NULL ? NULL : *(const oxygen_runtime_type_info *const *)object;
     fprintf(stderr, "Unhandled %s",
-        type == NULL || type->name == NULL ? "Exception" : type->name);
+        type == NULL || type->name == NULL ? "Exception" : display_type_name(type->name));
     if (type != NULL && type->message_offset != 0 && object != NULL)
     {
         const oxygen_string *message =
