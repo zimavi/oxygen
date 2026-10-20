@@ -89,6 +89,7 @@ public sealed partial class LlvmModuleGenerator
             var symbols = model.Functions.Values
                 .Concat(model.ResolvedCalls.Values)
                 .Concat(concreteClasses.SelectMany(cls => cls.Methods))
+                .Concat(concreteClasses.SelectMany(cls => cls.StaticMethods))
                 .Concat(concreteInterfaces.SelectMany(iface => iface.Methods))
                 .Concat(accessorSymbols)
                 .Where(symbol => !symbol.IsGeneric && !HasGenericAggregateOwner(symbol, model)

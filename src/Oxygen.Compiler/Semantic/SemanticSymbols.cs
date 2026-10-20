@@ -63,6 +63,13 @@ public sealed record ClassSymbol(
     public IReadOnlyList<PropertySymbol> DeclaredProperties => Properties ?? [];
     public IReadOnlyList<SemanticType> DeclaredInterfaceTypes => InterfaceTypes ?? [];
 
+    // The static fields of the class: one value for the class, shared by all instances. Each is a global variable named by the
+    // class, so a generic class has one per instantiation. They are not part of an instance's layout.
+    public IReadOnlyList<GlobalVariableSymbol> StaticFields { get; init; } = [];
+
+    // The static methods of the class: functions of the class with no receiver. They are called as `Class.method(...)`.
+    public IReadOnlyList<FunctionSymbol> StaticMethods { get; init; } = [];
+
     // Whether the class declares the field, as opposed to inheriting it from its base class. Property storage
     // belongs to the class that declares the property.
     public bool DeclaresField(string name) =>
@@ -202,7 +209,7 @@ public sealed class SemanticModel
         IReadOnlySet<VariableDeclarationStatement>? deletedLocals = null,
         IReadOnlySet<DeleteStatement>? runtimeCheckedDeletes = null,
         IReadOnlyList<GlobalVariableSymbol>? globals = null,
-        IReadOnlyDictionary<IdentifierExpression, GlobalVariableSymbol>? globalReferences = null,
+        IReadOnlyDictionary<Expression, GlobalVariableSymbol>? globalReferences = null,
         IReadOnlySet<CallExpression>? baseCalls = null,
         IReadOnlyDictionary<ClassConstructionExpression, CallExpression>? constructionCalls = null,
         IReadOnlyDictionary<SyntaxNode, int[]>? argumentOrders = null)
@@ -211,7 +218,7 @@ public sealed class SemanticModel
         ConstructionCalls = constructionCalls ?? new Dictionary<ClassConstructionExpression, CallExpression>();
         BaseCalls = baseCalls ?? new HashSet<CallExpression>();
         Globals = globals ?? [];
-        GlobalReferences = globalReferences ?? new Dictionary<IdentifierExpression, GlobalVariableSymbol>();
+        GlobalReferences = globalReferences ?? new Dictionary<Expression, GlobalVariableSymbol>();
         Functions = functions;
         ExpressionTypes = expressionTypes;
         MainFunction = mainFunction;
@@ -250,7 +257,7 @@ public sealed class SemanticModel
     public IReadOnlyList<GlobalVariableSymbol> Globals { get; }
 
     // The identifiers that name a module-level variable. A local or parameter of the same name is not in this map.
-    public IReadOnlyDictionary<IdentifierExpression, GlobalVariableSymbol> GlobalReferences { get; }
+    public IReadOnlyDictionary<Expression, GlobalVariableSymbol> GlobalReferences { get; }
 
     public IReadOnlyDictionary<Expression, SemanticType> ExpressionTypes { get; }
 

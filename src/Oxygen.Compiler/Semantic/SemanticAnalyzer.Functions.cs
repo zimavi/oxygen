@@ -64,9 +64,14 @@ public sealed partial class SemanticAnalyzer
                     ? type
                     : SemanticType.GenericParameter(parameter))
                 .ToArray();
-            scope = new Scope(globals, MarkVariableUsed,
-                SemanticType.Class(ownerClass.Name, ownerTypeArguments.Length == 0 ? null : ownerTypeArguments));
-            foreach (var field in ownerClass.Fields)
+            // A static method has no `this`, so it sees the class's static fields but none of its instance fields.
+            var isStatic = function.Declaration.IsStatic;
+            scope = isStatic
+                ? new Scope(globals, MarkVariableUsed, thisError: "'this' cannot be used in a static method")
+                : new Scope(globals, MarkVariableUsed,
+                    SemanticType.Class(ownerClass.Name, ownerTypeArguments.Length == 0 ? null : ownerTypeArguments));
+            DeclareStaticFieldsIn(scope, InstanceStaticFields(ownerClass, _genericTypes));
+            foreach (var field in isStatic ? Array.Empty<ClassFieldSymbol>() : ownerClass.Fields)
             {
                 // A private field belongs to the class that declares it, so a subclass cannot name it.
                 if (field.Visibility == Visibility.Private && !IsDeclaredBy(field, ownerClass))
@@ -77,6 +82,8 @@ public sealed partial class SemanticAnalyzer
         }
         _currentOwnerClass = _classesByName.GetValueOrDefault(className);
         _currentIsConstructor = constructor is not null;
+        _currentIsStaticMethod = function.Declaration.IsStatic;
+        _currentOwnerTemplate = className;
         var parameterScope = new Scope(scope, MarkVariableUsed);
         // A constructor's initializer runs before the object's fields are initialized, so its arguments see the
         // parameters but neither the fields nor `this`.

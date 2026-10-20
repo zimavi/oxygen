@@ -169,6 +169,12 @@ public sealed partial class LlvmModuleGenerator
                     if (_dropFlags.ContainsKey(address))
                         SetDropFlag(builder, address, assignment.Value is NewExpression);
                 }
+                else if (assignment.Target is MemberAccessExpression staticField && model.GlobalReferences.ContainsKey(staticField))
+                {
+                    // `Class.field = value` stores to the static field's global.
+                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                        model.ExpressionTypes[assignment.Target], model), _globalVariables[model.GlobalReferences[staticField]]);
+                }
                 else if (assignment.Target is MemberAccessExpression member
                     && member.Target is IdentifierExpression targetIdentifier)
                 {

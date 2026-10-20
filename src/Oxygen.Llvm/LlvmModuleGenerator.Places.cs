@@ -52,6 +52,8 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var memberType = ToLlvmType(model.ExpressionTypes[member], model);
+        if (model.GlobalReferences.TryGetValue(member, out var staticField))
+            return MemoryPlace(builder, memberType, _globalVariables[staticField], member.MemberName);
         if (member.Target is ThisExpression)
         {
             var owner = ThisPropertyOwner(member, model);

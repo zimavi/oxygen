@@ -203,8 +203,9 @@ public sealed partial class Parser
             var hasVisibility = false;
             var isVirtual = false;
             var isOverride = false;
+            var isStatic = false;
             while (Current.Kind is TokenKind.Public or TokenKind.Private or TokenKind.Protected or TokenKind.Internal
-                   or TokenKind.Virtual or TokenKind.Override)
+                   or TokenKind.Virtual or TokenKind.Override or TokenKind.Static)
             {
                 if (Current.Kind is TokenKind.Public or TokenKind.Private or TokenKind.Protected or TokenKind.Internal)
                 {
@@ -217,11 +218,17 @@ public sealed partial class Parser
                     isVirtual = true;
                 else if (Match(TokenKind.Override))
                     isOverride = true;
+                else if (Match(TokenKind.Static))
+                    isStatic = true;
             }
             if (isVirtual && isOverride)
                 throw Error("A class method cannot be both 'virtual' and 'override'.", Current);
+            if (isStatic && (isVirtual || isOverride))
+                throw Error("A static member cannot be 'virtual' or 'override'.", Current);
             if (Check(TokenKind.Tilde))
             {
+                if (isStatic)
+                    throw Error("A destructor cannot be static.", Current);
                 var destructorLocation = Advance().Location;
                 var destructorName = Consume(TokenKind.Identifier, "Expected a destructor name.").Lexeme;
                 Consume(TokenKind.OpenParenthesis, "Expected '(' after destructor name.");
@@ -236,6 +243,8 @@ public sealed partial class Parser
 
             if (Check(TokenKind.Identifier) && Current.Lexeme == name && Peek(1).Kind == TokenKind.OpenParenthesis)
             {
+                if (isStatic)
+                    throw Error("A constructor cannot be static.", Current);
                 var constructorLocation = Current.Location;
                 Advance();
                 var parameters = ParseParameters();
@@ -253,10 +262,12 @@ public sealed partial class Parser
             {
                 var parameters = ParseParameters();
                 methods.Add(new FunctionDeclaration(type, memberName, parameters, ParseBlock(), memberVisibility,
-                    memberLocation, IsVirtual: isVirtual, IsOverride: isOverride));
+                    memberLocation, IsVirtual: isVirtual, IsOverride: isOverride, IsStatic: isStatic));
             }
             else if (Check(TokenKind.OpenBrace))
             {
+                if (isStatic)
+                    throw Error("Static properties are not supported yet.", Current);
                 properties.Add(ParseProperty(type, memberName, memberVisibility, memberLocation, isVirtual, isOverride));
             }
             else
@@ -270,7 +281,7 @@ public sealed partial class Parser
                     throw Error("A const class field must have an initializer.", Current);
                 Consume(TokenKind.Semicolon, "Expected ';' after class field.");
                 fields.Add(new ClassFieldDeclaration(type, memberName, memberVisibility, memberLocation,
-                    initializer, isConst));
+                    initializer, isConst, isStatic));
             }
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after class declaration.");
@@ -310,6 +321,8 @@ public sealed partial class Parser
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
             var memberVisibility = ParseVisibility(Visibility.Public);
+            if (Check(TokenKind.Static))
+                throw Error("An interface cannot declare static members; its contract is per instance.", Current);
             var methodLocation = Current.Location;
             var returnType = ParseType(allowInferred: false);
             var methodName = ConsumeIdentifierLike("Expected an interface method name.").Lexeme;

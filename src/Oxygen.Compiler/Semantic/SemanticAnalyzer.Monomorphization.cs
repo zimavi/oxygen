@@ -60,7 +60,7 @@ public sealed partial class SemanticAnalyzer
                 AddSyntax(argument, genericParameters);
         }
 
-        foreach (var type in expressionTypes.Values)
+        foreach (var type in expressionTypes.Values.Concat(_callReceiverTypes.Values))
             AddType(type);
         foreach (var symbol in functions.Values.Concat(functionsByName.Values.SelectMany(item => item)))
         {
@@ -74,7 +74,7 @@ public sealed partial class SemanticAnalyzer
                 AddType(field.Type);
             foreach (var property in cls.DeclaredProperties)
                 AddType(property.Type);
-            foreach (var method in cls.Methods)
+            foreach (var method in cls.Methods.Concat(cls.StaticMethods))
             {
                 AddType(method.ReturnType);
                 foreach (var parameter in method.Parameters)
@@ -140,7 +140,7 @@ public sealed partial class SemanticAnalyzer
                     AddType(SubstituteAggregate(field.Type, substitutions, aggregateNames));
                 foreach (var property in cls.DeclaredProperties)
                     AddType(SubstituteAggregate(property.Type, substitutions, aggregateNames));
-                foreach (var method in cls.Methods)
+                foreach (var method in cls.Methods.Concat(cls.StaticMethods))
                 {
                     AddType(SubstituteAggregate(method.ReturnType, substitutions, aggregateNames));
                     foreach (var parameter in method.Parameters)
@@ -224,10 +224,10 @@ public sealed partial class SemanticAnalyzer
                     cls, instantiations[key], specializedName, substitutions, aggregateNames, specializedMethods,
                     specializedDeclarations, newExpressionTypes, newResolvedCalls);
                 _classesByName[specializedName] = specialized;
-                AddSpecializedMethods(functions, functionsByName, specialized.Methods);
+                AddSpecializedMethods(functions, functionsByName, specialized.Methods.Concat(specialized.StaticMethods).ToArray());
                 foreach (var field in specialized.Fields)
                     AddType(field.Type);
-                foreach (var method in specialized.Methods)
+                foreach (var method in specialized.Methods.Concat(specialized.StaticMethods))
                 {
                     AddType(method.ReturnType);
                     foreach (var parameter in method.Parameters)

@@ -96,7 +96,8 @@ public sealed record ClassFieldDeclaration(
     Visibility Visibility,
     SourceLocation Location,
     Expression? Initializer = null,
-    bool IsConst = false) : SyntaxNode(Location);
+    bool IsConst = false,
+    bool IsStatic = false) : SyntaxNode(Location);
 
 public enum PropertyAccessorKind { Get, Set, Init }
 
@@ -202,7 +203,8 @@ public sealed record FunctionDeclaration(
     bool IsExternalDeclaration = false,
     IReadOnlyList<TypeParameterSyntax>? TypeParameters = null,
     bool IsVirtual = false,
-    bool IsOverride = false) : SyntaxNode(Location)
+    bool IsOverride = false,
+    bool IsStatic = false) : SyntaxNode(Location)
 {
     public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
     public IReadOnlyList<TypeParameterSyntax> DeclaredTypeParameters => TypeParameters ?? [];

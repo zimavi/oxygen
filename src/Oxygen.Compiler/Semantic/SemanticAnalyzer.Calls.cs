@@ -24,6 +24,19 @@ public sealed partial class SemanticAnalyzer
         return SemanticType.Class(owner.BaseTypeName, null);
     }
 
+    // The variable with a name, or null when no variable has that name. A class name is not a variable.
+    private static VariableSymbol? TryLookupVariable(Scope scope, string name, SourceLocation location)
+    {
+        try
+        {
+            return scope.Lookup(name, location);
+        }
+        catch (SemanticException)
+        {
+            return null;
+        }
+    }
+
     // The type of a variable named by a receiver, or null when no variable has that name.
     private static SemanticType? LookupVariableType(Scope scope, string name, SourceLocation location)
     {
@@ -145,6 +158,10 @@ public sealed partial class SemanticAnalyzer
             };
             if (receiverName == "base")
                 _baseCalls.Add(call);
+            // `Class.method(...)` calls a static method of a class. A class name is not a variable.
+            if (receiverType is null && _classesByName.TryGetValue(receiverName, out var staticClass))
+                return AnalyzeStaticCall(call, staticClass, methodName, scope, functions, moduleName, imports,
+                    expressionTypes, resolvedCalls, allowVoid);
             if (receiverType is not null)
             {
                 var methodResult = AnalyzeMethodCall(call, receiverType, methodName, scope, functions, moduleName, imports,
@@ -154,6 +171,8 @@ public sealed partial class SemanticAnalyzer
             }
         }
         var overloads = ResolveFunctions(functionName, moduleName, imports, functions);
+        // A method of a class is called through its class or an object, never by its bare name.
+        overloads = overloads.Where(function => !IsClassMethodSymbol(function)).ToList();
         if (overloads.Count == 0)
         {
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Function '{functionName}' is not declared", call.Location, functionName.Length);
@@ -365,6 +384,8 @@ public sealed partial class SemanticAnalyzer
             }
             if (methodMatches.Count > 1)
                 throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
+            if (receiverClass.StaticMethods.Any(method => method.Name == methodName))
+                throw Error($"Static method '{methodName}' is called through its class, as {receiverClass.Name}.{methodName}(...), not through an object", call.Location, methodName.Length);
             if (methodCandidates.Length > 0)
                 throw NoMatchingMethod(call, methodName, methodCandidates.Select(method => method.Parameters));
         }
@@ -543,6 +564,11 @@ public sealed partial class SemanticAnalyzer
             .Select(group => group.First())
             .ToList();
     }
+
+    // Whether a function is a method of a class, instance or static, rather than a free function of a module.
+    private bool IsClassMethodSymbol(FunctionSymbol function) =>
+        _classesByName.Values.Any(cls => cls.Methods.Concat(cls.StaticMethods)
+            .Any(method => ReferenceEquals(method.Declaration, function.Declaration)));
 
     private static bool HasSameParameterTypes(FunctionSymbol left, FunctionSymbol right) =>
         left.Parameters.Select(parameter => parameter.Type)

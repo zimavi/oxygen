@@ -21,6 +21,10 @@ public sealed partial class SemanticAnalyzer
             throw Error($"Field '{identifier.Name}' of class '{owner.Name}' is private and cannot be used here",
                 identifier.Location, identifier.Name.Length);
         }
+        catch (SemanticException) when (_currentIsStaticMethod && _currentOwnerClass?.Fields.Any(field => field.Name == identifier.Name) == true)
+        {
+            throw Error($"Instance field '{identifier.Name}' cannot be used in a static method", identifier.Location, identifier.Name.Length);
+        }
         RecordGlobalReference(identifier, symbol);
         if (symbol.Declaration is VariableDeclarationStatement declaration)
         {
@@ -233,6 +237,21 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
         bool forWrite = false)
     {
+        // `Class.field` names a static field of the class. A generic class has one per instantiation, so it is named inside the
+        // class's own body, where the bare name is used instead.
+        if (StaticTargetClass(member.Target, scope) is { } staticClass)
+        {
+            if (staticClass.DeclaredTypeParameters.Count > 0)
+                throw Error($"Static field '{member.MemberName}' of generic class '{staticClass.Name}' is named by its bare name inside the class",
+                    member.Location, member.MemberName.Length);
+            var staticField = StaticFieldOf(staticClass, member, moduleName);
+            if (forWrite && staticField.IsConst)
+                throw ErrorWithCode(DiagnosticCode.ConstAssignment,
+                    $"Cannot assign to const static field '{staticField.Name}'", member.Location, member.MemberName.Length);
+            _globalReferences[member] = staticField;
+            return staticField.Type;
+        }
+
         if (member.Target is IdentifierExpression enumIdentifier
             && _enumsByName.TryGetValue(enumIdentifier.Name, out var enumSymbol))
         {

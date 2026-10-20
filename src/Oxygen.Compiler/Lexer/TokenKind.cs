@@ -38,6 +38,7 @@ public enum TokenKind
     Extern,
     Virtual,
     Override,
+    Static,
     I8,
     I16,
     I32,

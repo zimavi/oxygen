@@ -114,6 +114,8 @@ public sealed partial class SemanticAnalyzer
         var definitelyNullVariables = _definitelyNullVariables.ToList();
         var ownerClass = _currentOwnerClass;
         var isConstructor = _currentIsConstructor;
+        var isStaticMethod = _currentIsStaticMethod;
+        var ownerTemplate = _currentOwnerTemplate;
         var loopDepth = _loopDepth;
         var breakableDepth = _breakableDepth;
         var genericTypes = _genericTypes;
@@ -146,6 +148,8 @@ public sealed partial class SemanticAnalyzer
             _definitelyNullVariables.UnionWith(definitelyNullVariables);
             _currentOwnerClass = ownerClass;
             _currentIsConstructor = isConstructor;
+            _currentIsStaticMethod = isStaticMethod;
+            _currentOwnerTemplate = ownerTemplate;
             _loopDepth = loopDepth;
             _breakableDepth = breakableDepth;
             _genericTypes = genericTypes;
@@ -194,7 +198,7 @@ public sealed partial class SemanticAnalyzer
                 fieldInitializers[field.Declaration] = cloner.Expression(field.Declaration.Initializer);
 
         var methods = new Dictionary<FunctionDeclaration, FunctionDeclaration>(ReferenceEqualityComparer.Instance);
-        foreach (var method in cls.Methods)
+        foreach (var method in cls.Methods.Concat(cls.StaticMethods))
         {
             var clone = cloner.Function(method.Declaration);
             methods[method.Declaration] = clone;

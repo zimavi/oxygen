@@ -759,6 +759,29 @@ public sealed class ParserTests
         Assert.IsType<IntegerLiteralExpression>(named.Value);
     }
 
+    [Fact]
+    public void ParsesStaticFieldsAndMethodsAsStaticMembers()
+    {
+        var unit = Parse("class Counter { static i32 count = 0; i32 id; static i32 next() { return 1; } i32 get() { return 2; } } " +
+            "i32 main() { return 0; }");
+
+        var counter = Assert.Single(unit.Classes, cls => cls.Name == "Counter");
+        Assert.True(counter.Fields.Single(field => field.Name == "count").IsStatic);
+        Assert.False(counter.Fields.Single(field => field.Name == "id").IsStatic);
+        Assert.True(counter.Methods.Single(method => method.Name == "next").IsStatic);
+        Assert.False(counter.Methods.Single(method => method.Name == "get").IsStatic);
+    }
+
+    [Fact]
+    public void RejectsStaticInterfaceMembersAndStaticVirtualMethods()
+    {
+        var interfaceError = Assert.Throws<ParseException>(() => Parse("interface Shape { static i32 sides(); }"));
+        Assert.Contains("An interface cannot declare static members", interfaceError.Message);
+
+        var virtualError = Assert.Throws<ParseException>(() => Parse("class C { static virtual i32 f() { return 1; } }"));
+        Assert.Contains("A static member cannot be 'virtual' or 'override'", virtualError.Message);
+    }
+
     private ParseResult ParseWithDiagnostics(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).ParseWithDiagnostics("main.oxy");
 

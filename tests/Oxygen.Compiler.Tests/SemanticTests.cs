@@ -3090,6 +3090,88 @@ public sealed class SemanticTests
         Assert.Contains("is given by position, not by name", diagnostic.Message);
     }
 
+    private const string CounterClass = "class Counter { static i32 count = 0; static const i32 limit = 3; i32 id; " +
+        "static i32 next(i32 step = 1) { count = count + step; return count; } i32 get() { return id; } } ";
+
+    [Fact]
+    public void AcceptsStaticFieldsAndStaticCallsThroughTheClassName()
+    {
+        var result = AnalyzeWithDiagnostics(CounterClass +
+            "i32 main() { Counter.count = Counter.count + 1; return Counter.next() + Counter.next(10) + Counter.limit; }");
+
+        Assert.NotNull(result.Model);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Theory]
+    [InlineData("i32 main() { return Counter.get(); }", "is an instance method; call it on an object")]
+    [InlineData("i32 main() { return Counter.id; }", "is an instance field; access it through an object")]
+    [InlineData("i32 main() { Counter c = new Counter(); return c.next(); }", "is called through its class")]
+    [InlineData("i32 main() { Counter.limit = 4; return 0; }", "Cannot assign to const static field 'limit'")]
+    [InlineData("i32 main() { return Counter.missing(); }", "has no static method named 'missing'")]
+    public void RejectsStaticMembersUsedAsInstanceMembersOrWrittenAsConstants(string body, string message)
+    {
+        var result = AnalyzeWithDiagnostics(CounterClass + body);
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains(message, diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsThisAndInstanceFieldsInsideAStaticMethod()
+    {
+        var thisResult = AnalyzeWithDiagnostics(
+            "class C { i32 id; static i32 f() { return this.id; } } i32 main() { return C.f(); }");
+        Assert.Contains("'this' cannot be used in a static method",
+            Assert.Single(thisResult.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).Message);
+
+        var fieldResult = AnalyzeWithDiagnostics(
+            "class C { i32 id; static i32 f() { return id; } } i32 main() { return C.f(); }");
+        Assert.Contains("Instance field 'id' cannot be used in a static method",
+            Assert.Single(fieldResult.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).Message);
+    }
+
+    [Fact]
+    public void RejectsAStaticFieldThroughASubclassThatDoesNotDeclareIt()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "class Base { static i32 n = 1; } class Child : Base { } i32 main() { return Child.n; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("is declared by 'Base', not 'Child'", diagnostic.Message);
+    }
+
+    [Theory]
+    [InlineData("class C { i32 h() { return 1; } i32 f() { return h(); } } i32 main() { return 0; }", "Function 'h' is not declared")]
+    [InlineData("class C { static i32 h() { return 1; } static i32 f() { return h(); } } i32 main() { return C.f(); }",
+        "Function 'h' is not declared")]
+    public void MethodsOfAClassAreNotCalledByTheirBareName(string source, string message)
+    {
+        var result = AnalyzeWithDiagnostics(source);
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains(message, diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsAPrivateStaticFieldOutsideItsClass()
+    {
+        var result = AnalyzeWithDiagnostics("class C { private static i32 secret = 1; } i32 main() { return C.secret; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("cannot be used here", diagnostic.Message);
+    }
+
+    [Fact]
+    public void RejectsAStaticFieldInitializerThatIsNotConstant()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "i32 pick() { return 3; } class C { static i32 x = pick(); } i32 main() { return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("must be initialized with a literal or an integer constant expression", diagnostic.Message);
+    }
+
     private const string OptionUnion = "union Option<T> { Some(T); None; } ";
 
     [Fact]

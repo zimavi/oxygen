@@ -55,6 +55,11 @@ public sealed partial class LlvmModuleGenerator
                 context, builder, creation, values, storage, model, llvmFunctions),
             IndexExpression index => builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[index], model),
                 EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions), "array.element"),
+            // `Class.field` reads the static field's global. The analyzer records the member access that names a static field.
+            MemberAccessExpression staticMember when model.GlobalReferences.ContainsKey(staticMember) => builder.BuildLoad2(
+                ToLlvmType(model.ExpressionTypes[staticMember], model),
+                _globalVariables[model.GlobalReferences[staticMember]],
+                staticMember.MemberName),
             MemberAccessExpression member => EmitMemberAccess(
                 context, builder, member, values, storage, model, llvmFunctions),
             CastExpression cast => EmitCast(

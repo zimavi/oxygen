@@ -12,7 +12,7 @@ public sealed partial class SemanticAnalyzer
     private readonly Dictionary<string, Scope> _moduleScopes = new(StringComparer.Ordinal);
     private readonly Dictionary<GlobalVariableDeclaration, GlobalVariableSymbol> _globalSymbols =
         new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<IdentifierExpression, GlobalVariableSymbol> _globalReferences =
+    private readonly Dictionary<Expression, GlobalVariableSymbol> _globalReferences =
         new(ReferenceEqualityComparer.Instance);
     private readonly List<GlobalVariableSymbol> _globals = [];
 

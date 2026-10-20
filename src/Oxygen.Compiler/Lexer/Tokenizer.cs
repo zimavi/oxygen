@@ -37,6 +37,7 @@ public sealed class Tokenizer
             ["extern"] = TokenKind.Extern,
             ["virtual"] = TokenKind.Virtual,
             ["override"] = TokenKind.Override,
+            ["static"] = TokenKind.Static,
             ["i8"] = TokenKind.I8,
             ["i16"] = TokenKind.I16,
             ["i32"] = TokenKind.I32,

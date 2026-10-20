@@ -641,7 +641,7 @@ public sealed partial class SemanticAnalyzer
                         target.Location, root.Length);
                 return;
             }
-            if (inner is IdentifierExpression identifier && scope.Lookup(identifier.Name, identifier.Location).IsConst)
+            if (inner is IdentifierExpression identifier && TryLookupVariable(scope, identifier.Name, identifier.Location) is { IsConst: true })
                 throw ErrorWithCode(DiagnosticCode.ConstAssignment, $"Cannot assign to a part of const variable '{identifier.Name}'", target.Location, identifier.Name.Length);
             current = inner;
         }
@@ -657,7 +657,7 @@ public sealed partial class SemanticAnalyzer
             if (expressionTypes.TryGetValue(current, out var currentType) && currentType.IsPointer)
                 return null;
         }
-        return current is IdentifierExpression identifier && scope.Lookup(identifier.Name, identifier.Location).IsConst
+        return current is IdentifierExpression identifier && TryLookupVariable(scope, identifier.Name, identifier.Location) is { IsConst: true }
             ? identifier.Name
             : null;
     }
@@ -679,16 +679,19 @@ public sealed partial class SemanticAnalyzer
         }
         else if (target is MemberAccessExpression member)
         {
+            // A class name is not a variable, so a static field written through it is checked by the member access.
+            var isStaticTarget = StaticTargetClass(member.Target, scope) is not null;
             var targetClass = member.Target is ThisExpression && _currentOwnerClass is not null
                 ? _currentOwnerClass
-                : member.Target is IdentifierExpression classIdentifier
+                : !isStaticTarget && member.Target is IdentifierExpression classIdentifier
                     && scope.Lookup(classIdentifier.Name, classIdentifier.Location).Type.IsClass
                     ? _classesByName[scope.Lookup(classIdentifier.Name, classIdentifier.Location).Type.StructName!]
                     : null;
             var field = targetClass?.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (field is not null && field.IsConst && !_currentIsConstructor)
                 throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot assign to const field '{field.Name}'", target.Location, field.Name.Length);
-            ValidatePropertyWrite(member, scope);
+            if (!isStaticTarget)
+                ValidatePropertyWrite(member, scope);
         }
         else if (target is IndexExpression index
                  && index.Target is IdentifierExpression indexIdentifier
@@ -707,7 +710,7 @@ public sealed partial class SemanticAnalyzer
         var targetClass = member.Target switch
         {
             ThisExpression when _currentOwnerClass is not null => _currentOwnerClass,
-            IdentifierExpression identifier when scope.Lookup(identifier.Name, identifier.Location).Type.IsClass
+            IdentifierExpression identifier when LookupVariableType(scope, identifier.Name, identifier.Location) is { IsClass: true }
                 => _classesByName[scope.Lookup(identifier.Name, identifier.Location).Type.StructName!],
             _ => null
         };

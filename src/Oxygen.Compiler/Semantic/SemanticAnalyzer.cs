@@ -292,7 +292,7 @@ public sealed partial class SemanticAnalyzer
             foreach (var declaration in unit.Classes)
             {
                 var fields = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
-                    declaration.Fields.Select(field =>
+                    declaration.Fields.Where(field => !field.IsStatic).Select(field =>
                             new ClassFieldSymbol(field.Name, ResolveValueType(field.Type, $"Field '{field.Name}'", field.Location), field, field.Visibility, field.IsConst))
                         .Concat(declaration.DeclaredProperties
                             .Where(property => property.Accessors.Any(accessor => accessor.Kind is PropertyAccessorKind.Get
@@ -308,8 +308,13 @@ public sealed partial class SemanticAnalyzer
                 foreach (var property in declaration.DeclaredProperties)
                     ValidatePropertyDeclaration(property);
                 var methods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
-                    declaration.Methods.Select(method =>
+                    declaration.Methods.Where(method => !method.IsStatic).Select(method =>
                         CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray());
+                var staticMethods = WithGenericTypes(declaration.DeclaredTypeParameters, () =>
+                    declaration.Methods.Where(method => method.IsStatic).Select(method =>
+                        CreateFunctionSymbol(method, $"{unit.ModuleName ?? "program"}.{declaration.Name}")).ToArray());
+                if (staticMethods.GroupBy(method => method.Name).Any(group => HasConflictingPair(group.ToList(), method => method.Parameters)))
+                    throw Error($"Class '{declaration.Name}' contains static methods whose overloads conflict: a call could match both", declaration.Location);
                 if (methods.GroupBy(MethodSignature).Any(group => group.Count() > 1
                     && group.Select(method => method.ReturnType).Distinct().Count() == 1))
                     throw Error($"Class '{declaration.Name}' contains duplicate methods", declaration.Location);
@@ -356,6 +361,7 @@ public sealed partial class SemanticAnalyzer
                     Fields = fields,
                     Properties = properties,
                     Methods = methods,
+                    StaticMethods = staticMethods,
                     Constructors = constructors,
                     InterfaceNames = interfaceTypes.Select(type => type.StructName!).ToArray(),
                     InterfaceTypes = interfaceTypes
@@ -507,7 +513,7 @@ public sealed partial class SemanticAnalyzer
             foreach (var classDeclaration in unit.Classes)
             {
                 _classContexts[classDeclaration.Name] = new DeclarationContext(moduleName, unit.Imports, sourceName);
-                foreach (var method in _classesByName[classDeclaration.Name].Methods)
+                foreach (var method in _classesByName[classDeclaration.Name].Methods.Concat(_classesByName[classDeclaration.Name].StaticMethods))
                 {
                     var key = method.QualifiedName;
                     if (!functionsByName.TryGetValue(key, out var overloads))
@@ -538,13 +544,14 @@ public sealed partial class SemanticAnalyzer
 
         var expressionTypes = new Dictionary<Expression, SemanticType>(ReferenceEqualityComparer.Instance);
         DeclareGlobalVariables(compilationUnits, sourceNames, functionsByName, expressionTypes, resolvedCalls);
+        DeclareStaticFields(compilationUnits, sourceNames, functionsByName, expressionTypes, resolvedCalls);
         ValidateDefaultParameters(functionsByName, functionSources, functionModules, expressionTypes, resolvedCalls, diagnostics);
         foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads).ToList())
         {
             if (symbol.IsExternal)
                 continue;
             var owner = _classesByName.Values.FirstOrDefault(cls =>
-                cls.Methods.Any(method => ReferenceEquals(method, symbol)));
+                cls.Methods.Concat(cls.StaticMethods).Any(method => ReferenceEquals(method, symbol)));
             var previousGenericTypes = _genericTypes;
             if (owner is not null)
                 _genericTypes = owner.DeclaredTypeParameters.ToDictionary(
@@ -701,7 +708,7 @@ public sealed partial class SemanticAnalyzer
             new HashSet<VariableDeclarationStatement>(_deletedAnywhere, ReferenceEqualityComparer.Instance),
             new HashSet<DeleteStatement>(_runtimeCheckedDeletes, ReferenceEqualityComparer.Instance),
             _globals.ToList(),
-            new Dictionary<IdentifierExpression, GlobalVariableSymbol>(_globalReferences, ReferenceEqualityComparer.Instance),
+            new Dictionary<Expression, GlobalVariableSymbol>(_globalReferences, ReferenceEqualityComparer.Instance),
             new HashSet<CallExpression>(_baseCalls, ReferenceEqualityComparer.Instance),
             new Dictionary<ClassConstructionExpression, CallExpression>(_constructionCalls, ReferenceEqualityComparer.Instance),
             new Dictionary<SyntaxNode, int[]>(_argumentOrders, ReferenceEqualityComparer.Instance));

@@ -48,6 +48,10 @@ public sealed partial class SemanticAnalyzer
             SpecializeMethod(method, instantiation.Methods.GetValueOrDefault(method.Declaration) ?? method.Declaration,
                 $"{source.ModuleName}.{name}", substitutions, aggregateNames,
                 specializedMethods, expressionTypes, resolvedCalls, name)).ToArray();
+        var staticMethods = source.StaticMethods.Select(method =>
+            SpecializeMethod(method, instantiation.Methods.GetValueOrDefault(method.Declaration) ?? method.Declaration,
+                $"{source.ModuleName}.{name}", substitutions, aggregateNames,
+                specializedMethods, expressionTypes, resolvedCalls, name)).ToArray();
         var constructors = source.Constructors.Select(constructor =>
         {
             var instantiated = instantiation.Constructors.GetValueOrDefault(constructor.Declaration)
@@ -111,7 +115,7 @@ public sealed partial class SemanticAnalyzer
             }).ToArray(),
             Properties = declaration.DeclaredProperties.Select(property =>
                 CloneProperty(property, substitutions, aggregateNames, expressionTypes, source, resolvedCalls)).ToArray(),
-            Methods = methods.Select(method => method.Declaration).ToArray(),
+            Methods = methods.Concat(staticMethods).Select(method => method.Declaration).ToArray(),
             Constructors = constructors.Select(constructor => constructor.Declaration).ToArray(),
             Destructor = destructor,
             TypeParameters = []
@@ -123,6 +127,8 @@ public sealed partial class SemanticAnalyzer
             InterfaceNames = interfaceNames,
             Fields = fields,
             Methods = methods,
+            StaticMethods = staticMethods,
+            StaticFields = InstanceStaticFields(source, substitutions),
             Constructors = constructors,
             Destructor = destructor,
             Declaration = classDeclaration,
