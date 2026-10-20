@@ -162,6 +162,10 @@ public sealed class Tokenizer
                 {
                     token = ReadString(source, ref position, ref line, ref column, location);
                 }
+                else if (source[position] == '\'')
+                {
+                    token = ReadCharacter(source, ref position, ref line, ref column, location);
+                }
                 else
                 {
                     token = ReadOperatorOrPunctuation(source, ref position, ref line, ref column, location);
@@ -290,6 +294,72 @@ public sealed class Tokenizer
             throw LexicalException.WithCode(DiagnosticCode.NumericSuffix, "Invalid numeric literal suffix", location);
         return new Token(TokenKind.IntegerLiteral,
             value.ToString(System.Globalization.CultureInfo.InvariantCulture) + suffix, location);
+    }
+
+    // A character literal is one ASCII character, or one escape from the string escapes plus \', between single quotes.
+    // Its value is that byte, so the token is the integer literal of the byte with the u8 suffix.
+    private static Token ReadCharacter(
+        string source, ref int position, ref int line, ref int column, SourceLocation location)
+    {
+        Advance(source[position], ref position, ref line, ref column);
+        if (position >= source.Length || source[position] is '\r' or '\n')
+            throw UnterminatedCharacter(location);
+        if (source[position] == '\'')
+            throw LexicalException.WithCode(DiagnosticCode.CharLiteral, "A character literal must hold one character", location);
+
+        int value;
+        if (source[position] == '\\')
+        {
+            Advance(source[position], ref position, ref line, ref column);
+            if (position >= source.Length || source[position] is '\r' or '\n')
+                throw UnterminatedCharacter(location);
+            value = source[position] switch
+            {
+                '\'' => '\'',
+                '"' => '"',
+                '\\' => '\\',
+                '/' => '/',
+                'b' => '\b',
+                'f' => '\f',
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                _ => throw SkipCharacterAndThrow(source, ref position, ref line, ref column, location,
+                    $"Unknown escape '\\{source[position]}' in a character literal")
+            };
+        }
+        else
+        {
+            if (source[position] > 127)
+                throw SkipCharacterAndThrow(source, ref position, ref line, ref column, location,
+                    "A character literal holds one ASCII character. For any other byte, write its number with the u8 suffix, such as 233u8");
+            value = source[position];
+        }
+
+        Advance(source[position], ref position, ref line, ref column);
+        if (position >= source.Length || source[position] is '\r' or '\n')
+            throw UnterminatedCharacter(location);
+        if (source[position] != '\'')
+            throw SkipCharacterAndThrow(source, ref position, ref line, ref column, location,
+                "A character literal holds one character, so a single quote must follow it");
+
+        Advance(source[position], ref position, ref line, ref column);
+        return new Token(TokenKind.IntegerLiteral, value.ToString(System.Globalization.CultureInfo.InvariantCulture) + "u8", location);
+    }
+
+    private static LexicalException UnterminatedCharacter(SourceLocation location) =>
+        LexicalException.WithCode(DiagnosticCode.CharLiteral, "Unterminated character literal", location);
+
+    // Reports a malformed character literal after skipping the rest of it, so the lexer does not read its characters
+    // as new tokens. The skip stops after the closing quote, or before the end of the line.
+    private static LexicalException SkipCharacterAndThrow(
+        string source, ref int position, ref int line, ref int column, SourceLocation location, string message)
+    {
+        while (position < source.Length && source[position] is not ('\'' or '\r' or '\n'))
+            Advance(source[position], ref position, ref line, ref column);
+        if (position < source.Length && source[position] == '\'')
+            Advance(source[position], ref position, ref line, ref column);
+        return LexicalException.WithCode(DiagnosticCode.CharLiteral, message, location);
     }
 
     private static Token ReadString(

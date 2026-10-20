@@ -44,12 +44,35 @@ does not perform IO.
 
 ## I/O
 
+## Characters
+
+A character literal is one ASCII character between single quotes, or one escape
+sequence. It has type `u8`, and its value is that byte. The escapes are the
+string escapes plus `\'`:
+
+```oxygen
+u8 letter = 'a';      // 97
+u8 newline = '\n';    // 10
+u8 quote = '\'';      // 39
+```
+
+A character literal holds exactly one ASCII character, so `''`, `'ab'`, and
+`'é'` are rejected. Other bytes are written as numbers with the `u8` suffix,
+such as `233u8`.
+
+A `u8` is a number, so `print` and `println` write its value in decimal:
+`io.print(97u8)` writes `97`. To write the byte as a character, use
+`io.print_char` or `io.println_char`. Those functions write a single byte as is,
+so a value of 128 or more is not a complete UTF-8 character on its own.
+
+## I/O
+
 The `stdlib.io` module provides `write_stdout(string)`, `write_stderr(string)`,
 and the generic `print<T : Printable>(T)` and `println<T : Printable>(T)`. The
 first two functions call the runtime's `oxygen_write_stdout` and
-`oxygen_write_stderr` primitives, which are the only output primitives in the
-runtime. They write the string's exact byte length, including embedded zero
-bytes. `println` appends a newline after the supplied value.
+`oxygen_write_stderr` primitives. They write the string's exact byte length,
+including embedded zero bytes. `print_char` and `println_char` write one byte
+through the runtime's `oxygen_write_stdout_byte` primitive. `println` appends a newline after the supplied value.
 
 `print` and `println` accept any type that implements `Printable`. Strings and
 the primitive types implement it by a built-in rule; each one is written by a

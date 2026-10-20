@@ -9,6 +9,9 @@ public extern void write_stdout(string value);
 @extern("oxygen_write_stderr")
 public extern void write_stderr(string value);
 
+@extern("oxygen_write_stdout_byte")
+public extern void write_stdout_byte(u8 value);
+
 // Values that print/println can write. Primitive types and string implement Printable by a built-in
 // rule; each one is written by the private `write` function for its type below. Classes implement it by
 // declaring `void write()`.
@@ -179,5 +182,15 @@ public void print<T : Printable>(T value) {
 
 public void println<T : Printable>(T value) {
     value.write();
+    write_stdout("\n");
+}
+
+// Writes a byte as the character it encodes, so 97u8 (or 'a') is written as a. print(value) of a u8 writes its number.
+public void print_char(u8 value) {
+    write_stdout_byte(value);
+}
+
+public void println_char(u8 value) {
+    write_stdout_byte(value);
     write_stdout("\n");
 }

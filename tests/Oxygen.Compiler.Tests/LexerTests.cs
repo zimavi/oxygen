@@ -253,4 +253,46 @@ public sealed class LexerTests
         Assert.Equal("An exponent needs digits after 'e'", exception.Message);
         Assert.Equal(DiagnosticCode.ExponentDigits, exception.Code);
     }
+
+    [Theory]
+    [InlineData("'a'", "97u8")]
+    [InlineData("' '", "32u8")]
+    [InlineData("'\"'", "34u8")]
+    [InlineData("'\\''", "39u8")]
+    [InlineData("'\\\\'", "92u8")]
+    [InlineData("'\\n'", "10u8")]
+    [InlineData("'\\t'", "9u8")]
+    public void CharacterLiteralIsTheU8ValueOfItsByte(string source, string expected)
+    {
+        var token = _lexer.Tokenize(source).First();
+
+        Assert.Equal(TokenKind.IntegerLiteral, token.Kind);
+        Assert.Equal(expected, token.Lexeme);
+    }
+
+    [Theory]
+    [InlineData("''", "one character")]
+    [InlineData("'ab'", "one character")]
+    [InlineData("'é'", "ASCII character")]
+    [InlineData("'\\q'", "Unknown escape")]
+    [InlineData("'a", "Unterminated character literal")]
+    [InlineData("'a\n'", "Unterminated character literal")]
+    public void MalformedCharacterLiteralIsRejectedWithItsOwnCode(string source, string messageFragment)
+    {
+        var exception = Assert.Throws<LexicalException>(() => _lexer.Tokenize(source).ToList());
+
+        Assert.Contains(messageFragment, exception.Message);
+        Assert.Equal(DiagnosticCode.CharLiteral, exception.Code);
+    }
+
+    [Fact]
+    public void MalformedCharacterLiteralIsReportedOnceAndLexingContinues()
+    {
+        var result = _lexer.TokenizeWithDiagnostics("i32 x = 'ab'; i32 y = 1;", "main.oxy");
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal(DiagnosticCode.CharLiteral, diagnostic.Code);
+        Assert.Contains(result.Tokens, token => token.Lexeme == "y");
+        Assert.Contains(result.Tokens, token => token.Lexeme == "1");
+    }
 }

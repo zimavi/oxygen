@@ -71,4 +71,34 @@ public sealed class PrintingIntegrationTests : IDisposable
             "79228162514264337593543950336\ninf\n-inf\nnan\n",
             run.Output.Replace("\r\n", "\n"));
     }
+
+    [SkippableFact]
+    public void PrintsBytesAsCharactersOrAsNumbers()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source,
+            """
+            import std.io;
+
+            i32 main() {
+                io.println_char('!');
+                io.print(97u8);
+                io.print_char(' ');
+                io.println_char('a');
+                io.print_char('\'');
+                io.println_char('"');
+                return 0;
+            }
+            """);
+        var executable = Path.Combine(_directory, "main.exe");
+
+        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "-o", executable, "-r", NativeProgram.RuntimeLibrary]);
+        Assert.True(build.ExitCode == 0, build.Error);
+
+        var run = NativeProgram.RunProcess(executable, []);
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("!\n97 a\n'\"\n", run.Output.Replace("\r\n", "\n"));
+    }
 }

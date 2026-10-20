@@ -19,3 +19,10 @@ void oxygen_write_stderr(const oxygen_string *value)
 {
     oxygen_write(stderr, value);
 }
+
+// Writes one byte as is. A byte of 128 or more is not a complete UTF-8 character on its own.
+void oxygen_write_stdout_byte(uint8_t value)
+{
+    fwrite(&value, 1, 1, stdout);
+    fflush(stdout);
+}
