@@ -226,8 +226,10 @@ public sealed partial class LlvmModuleGenerator
                         ToLlvmType(FromTypeSyntax(clause.ExceptionType, model), model), "caught.exception");
                 BuildNoThrowCall(builder, _exceptionEndCatch, []);
                 var pushedCatch = PushExceptionTarget(escape);
+                _caughtObjects.Push(caught);
                 var returned = EmitStatement(context, builder, function, clause.Body, values, storage,
                     model, llvmFunctions, emittedReturnType, loops);
+                _caughtObjects.Pop();
                 if (pushedCatch)
                     _exceptionContexts.Pop();
                 if (!returned && !(scope is not null && EmitFinallyCopy(context, builder, function, scope, values,

@@ -311,8 +311,9 @@ public sealed record BreakStatement(SourceLocation Location) : Statement(Locatio
 
 public sealed record ContinueStatement(SourceLocation Location) : Statement(Location);
 
+// `throw expression;` throws a value. `throw;` has no value and rethrows the exception of the catch clause it is in.
 public sealed record ThrowStatement(
-    Expression Value,
+    Expression? Value,
     SourceLocation Location) : Statement(Location);
 
 public sealed record DeleteStatement(

@@ -1803,6 +1803,15 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RethrowOutsideACatchClauseIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { throw; return 0; }"));
+
+        Assert.Contains("'throw;' rethrows the exception of a catch clause", exception.Message);
+    }
+
+    [Fact]
     public void ConstLocalNeedsAnInitializer()
     {
         var exception = Assert.Throws<SemanticException>(() =>

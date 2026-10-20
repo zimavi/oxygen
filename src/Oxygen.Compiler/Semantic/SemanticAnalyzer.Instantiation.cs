@@ -343,7 +343,7 @@ public sealed partial class SemanticAnalyzer
                 Collection = Expression(item.Collection),
                 Body = Statement(item.Body)
             },
-            ThrowStatement item => item with { Value = Expression(item.Value) },
+            ThrowStatement item => item with { Value = item.Value is null ? null : Expression(item.Value) },
             DeleteStatement item => item with { Target = Expression(item.Target) },
             TryStatement item => item with
             {

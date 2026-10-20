@@ -574,6 +574,25 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesRethrowWithoutAValue()
+    {
+        var unit = Parse("i32 main() { try { } catch (Exception e) { throw; } return 0; }");
+
+        var tryStatement = Assert.IsType<TryStatement>(unit.Functions[0].Body.Statements[0]);
+        var rethrow = Assert.IsType<ThrowStatement>(tryStatement.Catches[0].Body.Statements[0]);
+        Assert.Null(rethrow.Value);
+    }
+
+    [Fact]
+    public void GenericScanDoesNotReadStatementsAsTypeArguments()
+    {
+        var unit = Parse(
+            "i32 main() { i32 a = 1; i32 b = 2; i32 c = 3; i32 d = 4; a < b; c > d; return 0; }");
+
+        Assert.Equal(7, unit.Functions[0].Body.Statements.Count);
+    }
+
+    [Fact]
     public void ParsesConstructorInitializersWithThisAndBase()
     {
         var unit = Parse(

@@ -103,7 +103,9 @@ public sealed partial class SemanticAnalyzer
             },
             ThrowStatement item => item with
             {
-                Value = CloneExpression(item.Value, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
+                Value = item.Value is null
+                    ? null
+                    : CloneExpression(item.Value, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
             },
             SwitchStatement item => item with
             {

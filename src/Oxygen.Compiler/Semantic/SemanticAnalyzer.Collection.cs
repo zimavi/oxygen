@@ -24,7 +24,7 @@ public sealed partial class SemanticAnalyzer
                 .Concat(EnumerateExpressions(loop.Increment))
                 .Concat(EnumerateExpressions(loop.Body)),
             ForInStatement loop => EnumerateExpressions(loop.Collection).Concat(EnumerateExpressions(loop.Body)),
-            ThrowStatement @throw => EnumerateExpressions(@throw.Value),
+            ThrowStatement @throw => @throw.Value is null ? Array.Empty<Expression>() : EnumerateExpressions(@throw.Value),
             DeleteStatement @delete => EnumerateExpressions(@delete.Target),
             TryStatement @try => EnumerateExpressions(@try.Body)
                 .Concat(@try.Catches.SelectMany(item => EnumerateExpressions(item.Body)))

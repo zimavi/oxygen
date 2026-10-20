@@ -908,8 +908,8 @@ public sealed partial class Parser
 
     private ThrowStatement ParseThrow(SourceLocation location)
     {
-        var value = ParseExpression();
-        Consume(TokenKind.Semicolon, "Expected ';' after throw expression.");
+        var value = Check(TokenKind.Semicolon) ? null : ParseExpression();
+        Consume(TokenKind.Semicolon, value is null ? "Expected ';' after throw." : "Expected ';' after throw expression.");
         return new ThrowStatement(value, location);
     }
 
@@ -1241,6 +1241,10 @@ public sealed partial class Parser
                 depth++;
             else if (_tokens[index].Kind == TokenKind.GreaterThan && --depth == 0)
                 return index + 1 < _tokens.Count && _tokens[index + 1].Kind == TokenKind.Identifier;
+            // Type arguments never contain these tokens, so the '<' was a comparison.
+            else if (_tokens[index].Kind is TokenKind.Semicolon or TokenKind.OpenBrace or TokenKind.CloseBrace
+                     or TokenKind.CloseParenthesis or TokenKind.EndOfFile)
+                return false;
             index++;
         }
 

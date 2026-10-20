@@ -19,13 +19,21 @@ public sealed partial class SemanticAnalyzer
     {
         // A generic instance is analysed when a call to it is analysed, which can be inside the flow of another body. The
         // outer body's flow state is saved and restored, so the instance starts from a clean state.
+        // The loop, break and catch depths belong to the body being analysed too. A call to a generic function inside a loop or a
+        // catch clause analyses that function's body in the middle of this one, so the depths are saved and restored with it.
         var outerFlow = SaveAndResetFlowContext();
+        var outerLoopDepth = _loopDepth;
+        var outerBreakableDepth = _breakableDepth;
+        var outerCatchDepth = _catchDepth;
         try
         {
             AnalyzeFunctionBody(function, functions, moduleName, imports, expressionTypes, resolvedCalls, constructor);
         }
         finally
         {
+            _loopDepth = outerLoopDepth;
+            _breakableDepth = outerBreakableDepth;
+            _catchDepth = outerCatchDepth;
             RestoreFlowContext(outerFlow);
         }
     }
@@ -74,6 +82,7 @@ public sealed partial class SemanticAnalyzer
 
         _loopDepth = 0;
         _breakableDepth = 0;
+        _catchDepth = 0;
         if (constructor is not null && _currentOwnerClass is not null)
         {
             AnalyzeFieldInitializers(_currentOwnerClass, scope, functions, moduleName, imports,

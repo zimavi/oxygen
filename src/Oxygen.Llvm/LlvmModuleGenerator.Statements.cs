@@ -24,6 +24,9 @@ public sealed partial class LlvmModuleGenerator
     }
 
     // Sets the runtime flag of a local that some `delete` releases: true while its object is alive.
+    // The objects of the catch clauses whose bodies are being emitted, innermost last. `throw;` throws the innermost one again.
+    private readonly Stack<LLVMValueRef> _caughtObjects = new();
+
     private void SetDropFlag(LLVMBuilderRef builder, LLVMValueRef slot, bool alive) =>
         builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int1Type, alive ? 1UL : 0UL, false), _dropFlags[slot]);
 
@@ -707,9 +710,14 @@ public sealed partial class LlvmModuleGenerator
                     }
                     return false;
                 }
+            case ThrowStatement { Value: null }:
+                // `throw;` throws again the object of the innermost catch clause. The runtime's record of the caught exception is
+                // already released when the catch body runs, so the object is taken from the catch clause, not from the runtime.
+                EmitThrowObject(builder, _caughtObjects.Peek());
+                return true;
             case ThrowStatement throwStatement:
                 {
-                    var thrown = EmitExpression(context, builder, throwStatement.Value, values, storage, model, llvmFunctions);
+                    var thrown = EmitExpression(context, builder, throwStatement.Value!, values, storage, model, llvmFunctions);
                     EmitThrowObject(builder, thrown);
                     return true;
                 }
@@ -814,8 +822,10 @@ public sealed partial class LlvmModuleGenerator
                 Array.Empty<LLVMValueRef>(), (ReadOnlySpan<char>)string.Empty);
             if (outerExceptionContext is not null)
                 _exceptionContexts.Push(outerExceptionContext);
+            _caughtObjects.Push(objectValue);
             var returned = EmitStatement(context, builder, function, clause.Body, values, storage,
                 model, llvmFunctions, emittedReturnType, loops);
+            _caughtObjects.Pop();
             if (outerExceptionContext is not null)
                 _exceptionContexts.Pop();
             if (!returned)

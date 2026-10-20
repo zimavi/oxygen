@@ -352,13 +352,22 @@ public sealed partial class SemanticAnalyzer
             case DeleteStatement deleteStatement:
                 AnalyzeDelete(deleteStatement, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return false;
+            case ThrowStatement throwStatement when throwStatement.Value is null:
+                {
+                    // `throw;` rethrows the exception that the enclosing catch clause caught.
+                    if (_catchDepth == 0)
+                        throw Error("'throw;' rethrows the exception of a catch clause, so it must be inside one",
+                            throwStatement.Location);
+                    _reachable = false;
+                    return true;
+                }
             case ThrowStatement throwStatement:
                 {
-                    var thrownType = AnalyzeExpression(throwStatement.Value, scope, functions, moduleName, imports,
+                    var thrownType = AnalyzeExpression(throwStatement.Value!, scope, functions, moduleName, imports,
                         expressionTypes, resolvedCalls);
                     if (!IsExceptionType(thrownType))
                         throw Error($"Only exception class values can be thrown, got {thrownType}",
-                            throwStatement.Value.Location);
+                            throwStatement.Value!.Location);
                     _reachable = false;
                     return true;
                 }
@@ -401,8 +410,17 @@ public sealed partial class SemanticAnalyzer
 
                         // A catch can be entered from any point in the try body, so it starts from the state before the try.
                         RestoreFlow(beforeTry);
-                        var catchReturns = AnalyzeBlock(catchClause.Body, catchScope, function, functions, moduleName,
-                            imports, expressionTypes, resolvedCalls);
+                        bool catchReturns;
+                        _catchDepth++;
+                        try
+                        {
+                            catchReturns = AnalyzeBlock(catchClause.Body, catchScope, function, functions, moduleName,
+                                imports, expressionTypes, resolvedCalls);
+                        }
+                        finally
+                        {
+                            _catchDepth--;
+                        }
                         allCatchesReturn &= catchReturns;
                         afterCatches = JoinFlows(afterCatches, SnapshotFlow());
                     }
@@ -590,6 +608,9 @@ public sealed partial class SemanticAnalyzer
         cls.DeclaredTypeParameters
             .Zip(use.TypeArguments ?? [], (name, argument) => (name, argument))
             .ToDictionary(pair => pair.name, pair => pair.argument, StringComparer.Ordinal);
+
+    // The number of catch clauses whose body is being analyzed, which is where `throw;` is valid.
+    private int _catchDepth;
 
     // A const variable is immutable where an assignment reaches it through members and elements. Its value parts (struct and
     // value-class fields, array elements) are part of it, so none of them change. Its reference objects change only through
