@@ -249,11 +249,14 @@ public sealed partial class LlvmModuleGenerator
         result = builder.BuildInsertValue(result,
             LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)index, false), 0, "union.tag");
         if (construction.Arguments.Count == 1)
+        {
+            var slot = UnionPayloadSlot(unionType, model, construction.CaseName);
             result = builder.BuildInsertValue(result,
                 CoerceValue(builder,
                     EmitExpression(context, builder, construction.Arguments[0], values, storage, model, llvmFunctions),
-                    model.ExpressionTypes[construction.Arguments[0]], UnionPayloadType(unionType, model), model),
-                1, "union.payload");
+                    model.ExpressionTypes[construction.Arguments[0]], slot.Type, model),
+                slot.Field, "union.payload");
+        }
         return result;
     }
 

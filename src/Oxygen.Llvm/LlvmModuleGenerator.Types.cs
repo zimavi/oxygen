@@ -122,7 +122,7 @@ public sealed partial class LlvmModuleGenerator
         _ when type.Kind == SemanticTypeKind.Enum => ToLlvmType(
             SemanticType.FromPrimitive(model.Enums[type.EnumName!].UnderlyingType), model),
         _ when type.Kind == SemanticTypeKind.Union => _context.GetStructType(
-            [_context.Int32Type, ToLlvmType(UnionPayloadType(type, model), model)], false),
+            [_context.Int32Type, .. UnionPayloadTypes(type, model).Select(payload => ToLlvmType(payload, model))], false),
         _ => throw new InvalidOperationException($"Unsupported semantic type '{type}'.")
     };
     }
@@ -169,13 +169,27 @@ public sealed partial class LlvmModuleGenerator
             : normalized with { StructName = specialized, TypeArguments = null };
     }
 
-    private SemanticType UnionPayloadType(SemanticType type, SemanticModel model)
+    // A union is a tag followed by one payload slot per case that carries a payload, in declaration order. Each slot has the
+    // type of its case with the union's type arguments substituted, so Result<T, E> holds a T and an E in separate slots.
+    private IReadOnlyList<SemanticType> UnionPayloadTypes(SemanticType type, SemanticModel model)
     {
         var union = model.Unions[type.EnumName!];
-        var payload = union.Cases.FirstOrDefault(item => item.PayloadType is not null)?.PayloadType;
-        if (payload is null)
-            return SemanticType.FromPrimitive(PrimitiveType.I8);
-        return SubstituteGeneric(payload, union.DeclaredTypeParameters, type.TypeArguments);
+        return union.Cases
+            .Where(item => item.PayloadType is not null)
+            .Select(item => SubstituteGeneric(item.PayloadType!, union.DeclaredTypeParameters, type.TypeArguments))
+            .ToArray();
+    }
+
+    // The payload slot of a case that carries a payload: its LLVM field index (the tag is field zero) and its type.
+    private (uint Field, SemanticType Type) UnionPayloadSlot(SemanticType type, SemanticModel model, string caseName)
+    {
+        var union = model.Unions[type.EnumName!];
+        var carrying = union.Cases.Where(item => item.PayloadType is not null).ToList();
+        var index = carrying.FindIndex(item => item.Name == caseName);
+        if (index < 0)
+            throw new InvalidOperationException($"Internal compiler error: union case '{caseName}' has no payload slot.");
+        return ((uint)(index + 1),
+            SubstituteGeneric(carrying[index].PayloadType!, union.DeclaredTypeParameters, type.TypeArguments));
     }
 
     private SemanticType SubstituteGeneric(

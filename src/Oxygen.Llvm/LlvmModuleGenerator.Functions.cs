@@ -149,11 +149,9 @@ public sealed partial class LlvmModuleGenerator
                     CreateZeroValue(SemanticType.FromPrimitive(PrimitiveType.I64), model) }
                 : type.Kind == SemanticTypeKind.Struct
                     ? model.Structs[type.StructName!].Fields.Select(field => CreateZeroValue(field.Type, model)).ToArray()
-                    : new[]
-                    {
-                        CreateZeroValue(SemanticType.FromPrimitive(PrimitiveType.I32), model),
-                        CreateZeroValue(UnionPayloadType(type, model), model)
-                    };
+                    : new[] { CreateZeroValue(SemanticType.FromPrimitive(PrimitiveType.I32), model) }
+                        .Concat(UnionPayloadTypes(type, model).Select(payload => CreateZeroValue(payload, model)))
+                        .ToArray();
             var packed = type.Kind == SemanticTypeKind.Struct && model.Structs[type.StructName!].IsPacked;
             return LLVMValueRef.CreateConstStruct(fields, packed);
         }

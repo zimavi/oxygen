@@ -208,10 +208,13 @@ public sealed partial class SemanticAnalyzer
         source with
         {
             Name = name,
+            // A case without a payload keeps none; SubstituteAggregate would turn it into void.
             Cases = source.Cases.Select(item => item with
             {
-                PayloadType = NormalizeAggregate(SubstituteAggregate(item.PayloadType, substitutions, aggregateNames),
-                    aggregateNames)
+                PayloadType = item.PayloadType is null
+                    ? null
+                    : NormalizeAggregate(SubstituteAggregate(item.PayloadType, substitutions, aggregateNames),
+                        aggregateNames)
             }).ToArray(),
             TypeParameters = []
         };

@@ -23,11 +23,14 @@ public sealed partial class LlvmModuleGenerator
             var result = LLVMValueRef.CreateConstNull(ToLlvmType(unionType, model));
             result = builder.BuildInsertValue(result, LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)index, false), 0, "union.tag");
             if (expression.Arguments.Count == 1)
+            {
+                var slot = UnionPayloadSlot(unionType, model, parts[1]);
                 result = builder.BuildInsertValue(result,
                     CoerceValue(builder,
                         EmitExpression(context, builder, expression.Arguments[0], values, storage, model, llvmFunctions),
-                        model.ExpressionTypes[expression.Arguments[0]], UnionPayloadType(unionType, model), model),
-                    1, "union.payload");
+                        model.ExpressionTypes[expression.Arguments[0]], slot.Type, model),
+                    slot.Field, "union.payload");
+            }
             return result;
         }
         var function = model.ResolvedCalls[expression];

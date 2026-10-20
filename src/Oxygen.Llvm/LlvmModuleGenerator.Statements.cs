@@ -546,7 +546,8 @@ public sealed partial class LlvmModuleGenerator
                             ((IDictionary<string, LLVMValueRef>)values)[item.BindingName] = item.PatternType is not null
                                 ? EmitPatternBindingValue(builder, selector, selectorType,
                                     FromTypeSyntax(item.PatternType, model), model)
-                                : builder.BuildExtractValue(selector, 1, "union.payload");
+                                : builder.BuildExtractValue(selector,
+                                    UnionPayloadSlot(selectorType, model, item.CaseName!).Field, "union.payload");
                         var bodyTerminated = EmitStatement(context, builder, function, item.Body, values, storage,
                             model, llvmFunctions, emittedReturnType, loops);
                         if (!bodyTerminated)
