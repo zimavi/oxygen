@@ -17,6 +17,13 @@ i32 main() {
 does not initialize storage, and deallocation does not run type-specific
 destructors.
 
+`calloc<T>(count)` is the same, except that every byte of the result is zero.
+
+Allocation never returns null. A request whose byte count overflows, and a
+request the system cannot satisfy, print a message and stop the program with
+exit code 101. A zero-element allocation returns its own non-null pointer, which
+`free` releases like any other.
+
 `sizeof<T>()` and `sizeof(value)` are compile-time expressions that produce a
 `u64` byte count. `void` and unspecialized generic types are not sized.
 Ownership is manual; a pointer must be freed at most once and must not be used

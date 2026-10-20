@@ -25,6 +25,24 @@ public T* realloc<T>(T* pointer, u64 count) {
     return cast<T*>(reallocate(cast<void*>(pointer), arrayBytes(count, sizeof<T>())));
 }
 
+// Zeroed allocation: count elements of T, each byte set to zero. Overflow and out-of-memory stop the program.
+@extern("oxygen_calloc")
+extern void* allocate_zeroed(u64 count, u64 elementSize);
+
+public T* calloc<T>(u64 count) {
+    return cast<T*>(allocate_zeroed(count, sizeof<T>()));
+}
+
+// The C library's byte operations. The caller passes pointers to memory it owns, with at least `count` bytes.
+@extern("memcpy")
+public extern void* memcpy(void* destination, void* source, u64 count);
+
+@extern("memmove")
+public extern void* memmove(void* destination, void* source, u64 count);
+
+@extern("memset")
+public extern void* memset(void* destination, i32 value, u64 count);
+
 // An owning box for one value on the heap. The box frees its storage when it is deleted, and it owns the pointer that it was given
 // by the first constructor.
 public class Box<T> {
