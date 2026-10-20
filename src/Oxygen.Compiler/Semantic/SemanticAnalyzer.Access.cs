@@ -33,6 +33,46 @@ public sealed partial class SemanticAnalyzer
     // class derived from it; private needs the owner class itself.
     // A protected member is also limited by the receiver: through an expression of type R, the current class must be R
     // or a base of R, as in C#. A null receiver (a constructor) is not limited that way.
+    // Whether a field of a class is declared by that class, rather than inherited from a base class.
+    private static bool IsDeclaredBy(ClassFieldSymbol field, ClassSymbol cls) =>
+        cls.Declaration.Fields.Any(declared => ReferenceEquals(declared, field.Declaration))
+        || cls.DeclaredProperties.Any(property => property.Name == field.Name);
+
+    // The class that declares a field, found from a class or one of its base classes.
+    private ClassSymbol DeclaringClass(ClassFieldSymbol field, ClassSymbol cls)
+    {
+        for (var current = cls; ; current = _classesByName[current.BaseTypeName!])
+        {
+            if (IsDeclaredBy(field, current) || current.BaseTypeName is null || !_classesByName.ContainsKey(current.BaseTypeName))
+                return current;
+        }
+    }
+
+    // The base class that declares a private field which the current class inherits, or null. Such a field cannot be named here.
+    private ClassSymbol? PrivateInheritedFieldOwner(string name)
+    {
+        for (var current = _currentOwnerClass?.BaseTypeName is not null && _classesByName.ContainsKey(_currentOwnerClass.BaseTypeName)
+                ? _classesByName[_currentOwnerClass.BaseTypeName] : null;
+             current is not null;
+             current = current.BaseTypeName is not null && _classesByName.ContainsKey(current.BaseTypeName)
+                 ? _classesByName[current.BaseTypeName] : null)
+        {
+            var field = current.Fields.FirstOrDefault(candidate => candidate.Name == name);
+            if (field is { Visibility: Visibility.Private } && IsDeclaredBy(field, current))
+                return current;
+        }
+        return null;
+    }
+
+    // A class with a private destructor is destroyed only by its own members, so its objects are created only inside it.
+    private void RequireConstructibleHere(ClassSymbol cls, SourceLocation location)
+    {
+        if (cls.Destructor is { Visibility: Visibility.Private } && _currentOwnerClass?.Name != cls.Name)
+            throw Error(
+                $"Class '{cls.Name}' has a private destructor, so its objects can only be created inside the class",
+                location, cls.Name.Length);
+    }
+
     private bool IsMemberAccessible(Visibility visibility, string ownerClassName, string ownerModuleName, string moduleName,
         string? receiverClassName = null) =>
         visibility switch

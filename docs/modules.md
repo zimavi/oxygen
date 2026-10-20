@@ -99,3 +99,25 @@ manifest. When a native dependency has valid embedded or sidecar metadata,
 the CLI imports its public declarations and native symbols for semantic
 checking; the compiler never infers signatures by guessing from native
 exports.
+
+## Type names (planned)
+
+Type names are not module-scoped yet: every struct, enum, union, class and
+interface is one global name, so a user class named `Exception` clashes with the
+standard library's.
+
+Decided: type names become module-scoped and import-aware, like namespaces in C#.
+A module's types are visible inside that module. Importing a module brings its
+type names into the importing module, as if they were declared where the `import`
+appears. Two types with one name are an error when both are visible in the same
+module.
+
+Open before this changes the compiler:
+
+- Qualification. Whether a type can be written as `module.Type` when it is not
+  imported, and how an import alias (`import std.io as io`) applies to types.
+- Clashes with the standard library's names (`Exception`, `RuntimeException`,
+  `NullReferenceException`, `StackTrace`, `Option`, `Result`). A program that
+  declares one of these needs a rule that keeps its own name without an error.
+- Mangled symbols. The native names of types must include the module, so two
+  modules can declare the same name.

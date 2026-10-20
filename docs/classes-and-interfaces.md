@@ -63,6 +63,23 @@ continues to work when no parameter or local has the same name; use `this.field`
 to explicitly access the field when a name is shadowed. `this` is only valid in
 class instance bodies, not in free functions.
 
+## Visibility
+
+Class members are `public` unless they are declared `private`. The visibility of
+a field, a method, a constructor and a destructor is enforced:
+
+- A `private` field or method is visible only inside the class that declares it,
+  so a subclass cannot name a private field of its base class, either directly or
+  with `this.`. A private method cannot be called from outside its class, or from a
+  subclass through `base.`.
+- A method that satisfies an interface contract must be `public`, because
+  interface members are public.
+- A `private` constructor can be used only inside its class. A `private`
+  destructor means that objects of the class are created only inside it, so the
+  code that destroys them is the class's own code.
+
+`protected` and `internal` are not specified yet. Use `public` or `private`.
+
 ## Constructor chaining
 
 A constructor may begin with `: this(...)` to delegate to another constructor of

@@ -62,8 +62,13 @@ public sealed partial class SemanticAnalyzer
             scope = new Scope(globals, MarkVariableUsed,
                 SemanticType.Class(ownerClass.Name, ownerTypeArguments.Length == 0 ? null : ownerTypeArguments));
             foreach (var field in ownerClass.Fields)
+            {
+                // A private field belongs to the class that declares it, so a subclass cannot name it.
+                if (field.Visibility == Visibility.Private && !IsDeclaredBy(field, ownerClass))
+                    continue;
                 scope.Declare(field.Name, new VariableSymbol(SubstituteGenericType(field.Type, _genericTypes),
                     field.IsConst, field.Declaration, false));
+            }
         }
         _currentOwnerClass = _classesByName.GetValueOrDefault(className);
         _currentIsConstructor = constructor is not null;

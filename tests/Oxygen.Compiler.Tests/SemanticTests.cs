@@ -1874,6 +1874,51 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void PrivateFieldOfABaseClassCannotBeNamedBySubclass()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class A { private i32 x; } class B : A { i32 g() { return x; } } i32 main() { return 0; }"));
+
+        Assert.Contains("Field 'x' of class 'A' is private and cannot be used here", exception.Message);
+    }
+
+    [Fact]
+    public void PrivateFieldOfABaseClassCannotBeReadThroughThisInSubclass()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class A { private i32 x; } class B : A { i32 g() { return this.x; } } i32 main() { return 0; }"));
+
+        Assert.Contains("Field 'x' of class 'A' is private and cannot be used here", exception.Message);
+    }
+
+    [Fact]
+    public void BaseClassUsesItsOwnPrivateFieldThroughThis()
+    {
+        var model = Analyze(
+            "class A { private i32 x; i32 get() { return this.x; } } class B : A { } i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void PrivateDestructorBlocksCreationOutsideTheClass()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class A { private ~A() { } } i32 main() { A a = new A(); return 0; }"));
+
+        Assert.Contains("has a private destructor, so its objects can only be created inside the class", exception.Message);
+    }
+
+    [Fact]
+    public void PrivateDestructorAllowsCreationInsideTheClass()
+    {
+        var model = Analyze(
+            "class A { private ~A() { } i32 make() { A b = new A(); return 1; } } i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void PropertyCannotBeAddressed()
     {
         var exception = Assert.Throws<SemanticException>(() =>

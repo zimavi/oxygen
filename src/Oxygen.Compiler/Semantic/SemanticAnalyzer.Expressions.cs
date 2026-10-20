@@ -11,7 +11,16 @@ public sealed partial class SemanticAnalyzer
     // Reads a variable. A deleted variable cannot be read, and reading its value (not only as a receiver) makes it escape.
     private SemanticType ReadIdentifier(IdentifierExpression identifier, Scope scope)
     {
-        var symbol = scope.Lookup(identifier.Name, identifier.Location);
+        VariableSymbol symbol;
+        try
+        {
+            symbol = scope.Lookup(identifier.Name, identifier.Location);
+        }
+        catch (SemanticException) when (PrivateInheritedFieldOwner(identifier.Name) is { } owner)
+        {
+            throw Error($"Field '{identifier.Name}' of class '{owner.Name}' is private and cannot be used here",
+                identifier.Location, identifier.Name.Length);
+        }
         RecordGlobalReference(identifier, symbol);
         if (symbol.Declaration is VariableDeclarationStatement declaration)
         {
@@ -264,7 +273,11 @@ public sealed partial class SemanticAnalyzer
             var field = cls.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (field is not null)
             {
-                EnsureMemberAccessible(field.Visibility, "Field", field.Name, cls, moduleName, member.Location, cls.Name);
+                // A private field is checked against the class that declares it, so an inherited one is not visible to its subclass.
+                // Protected and public fields are checked against the receiver's class, as before.
+                var checkedClass = field.Visibility == Visibility.Private ? DeclaringClass(field, cls) : cls;
+                EnsureMemberAccessible(field.Visibility, "Field", field.Name, checkedClass, moduleName, member.Location,
+                    checkedClass.Name);
                 return SubstituteGenericType(field.Type, substitutions);
             }
             if (cls.Methods.Any(method => method.Name == member.MemberName))
@@ -306,6 +319,7 @@ public sealed partial class SemanticAnalyzer
         if (expression.Type.NamedType is null || !_classesByName.TryGetValue(expression.Type.NamedType, out var cls)
             || expression.Type.IsPointer || expression.Type.IsArray || expression.Type.IsString)
             throw Error("Only declared classes can be constructed with 'new'", expression.Location);
+        RequireConstructibleHere(cls, expression.Location);
         var arguments = expression.Arguments.Select(argument =>
             AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
         var constructedType = expression.Type.DeclaredTypeArguments.Count == 0
@@ -359,6 +373,7 @@ public sealed partial class SemanticAnalyzer
         }
         if (!_classesByName.TryGetValue(expression.TypeName, out var cls))
             throw Error($"Class '{expression.TypeName}' is not declared", expression.Location);
+        RequireConstructibleHere(cls, expression.Location);
         var arguments = expression.Arguments.Select(argument =>
             AnalyzeExpression(argument, scope, functions, moduleName, imports, types, calls)).ToArray();
         var substitutions = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
