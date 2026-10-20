@@ -173,6 +173,8 @@ void write(u8 value) { write_unsigned(cast<u64>(value)); }
 void write(u16 value) { write_unsigned(cast<u64>(value)); }
 void write(u32 value) { write_unsigned(cast<u64>(value)); }
 void write(u64 value) { write_unsigned(value); }
+void write(usize value) { write_unsigned(cast<u64>(value)); }
+void write(isize value) { write_signed(cast<i64>(value)); }
 void write(f32 value) { write_float(cast<f64>(value)); }
 void write(f64 value) { write_float(value); }
 

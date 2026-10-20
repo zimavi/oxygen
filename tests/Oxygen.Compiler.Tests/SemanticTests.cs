@@ -294,6 +294,20 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void VoidDoesNotSatisfyAConstraintThatPrimitivesDo()
+    {
+        var printable = "module std.io; public interface Printable { void write(); } " +
+            "public void show<T : Printable>() { }";
+
+        var exception = Assert.Throws<SemanticException>(() => new SemanticAnalyzer(Log.Logger).Analyze(
+        [
+            Parse(printable),
+            Parse("import std.io; i32 main() { show<void>(); return 0; }")
+        ]));
+        Assert.Contains("Type 'void' does not satisfy the constraint 'Printable'", exception.Message);
+    }
+
+    [Fact]
     public void KeepsPrimitiveWriteFunctionsOutOfOrdinaryCalls()
     {
         var exception = Assert.Throws<SemanticException>(() => new SemanticAnalyzer(Log.Logger).Analyze(

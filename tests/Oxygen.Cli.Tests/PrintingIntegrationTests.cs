@@ -101,4 +101,34 @@ public sealed class PrintingIntegrationTests : IDisposable
         Assert.Equal(0, run.ExitCode);
         Assert.Equal("!\n97 a\n'\"\n", run.Output.Replace("\r\n", "\n"));
     }
+
+    [SkippableFact]
+    public void PrintsUsizeAndIsizeValuesPassedThroughFunctionParameters()
+    {
+        NativeProgram.RequireNativeToolchain();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source,
+            """
+            import std.io;
+
+            void show(usize count, isize offset) {
+                io.println(count);
+                io.println(offset);
+            }
+
+            i32 main() {
+                show(cast<usize>(5), cast<isize>(-7));
+                return 0;
+            }
+            """);
+        var executable = Path.Combine(_directory, "main.exe");
+
+        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "-o", executable, "-r", NativeProgram.RuntimeLibrary]);
+        Assert.True(build.ExitCode == 0, build.Error);
+
+        var run = NativeProgram.RunProcess(executable, []);
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("5\n-7\n", run.Output.Replace("\r\n", "\n"));
+    }
 }

@@ -34,6 +34,8 @@ public static class OxygenNameMangler
             PrimitiveType.U16 => "u16",
             PrimitiveType.U32 => "u32",
             PrimitiveType.U64 => "u64",
+            PrimitiveType.USize => "us",
+            PrimitiveType.ISize => "is",
             PrimitiveType.F32 => "f32",
             PrimitiveType.F64 => "f64",
             PrimitiveType.Bool => "b",

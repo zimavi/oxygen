@@ -57,11 +57,13 @@ public sealed partial class SemanticAnalyzer
     }
 
     // Whether a concrete type can be used where `interfaceName` is required. Primitive types and string
-    // implement std.io.Printable by a built-in rule; classes implement the interfaces they declare,
-    // including those of their base classes; interface types satisfy their own interface.
+    // implement std.io.Printable by a built-in rule, except void, which has no value to write; classes implement
+    // the interfaces they declare, including those of their base classes; interface types satisfy their own interface.
     private bool Satisfies(SemanticType type, string interfaceName)
     {
         var iface = _interfacesByName[interfaceName];
+        if (type.IsVoid)
+            return false;
         if (type.Kind is SemanticTypeKind.Primitive or SemanticTypeKind.String)
             return iface.Name == "Printable" && iface.ModuleName == PrintableModule;
         if (type.IsInterface)

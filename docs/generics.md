@@ -108,8 +108,8 @@ main.oxy:4:5: error: Type 'Plain' does not satisfy the constraint 'Printable' of
 ```
 
 Primitive types and `string` implement `std.io.Printable` by a built-in rule,
-and classes implement the interfaces they declare, including interfaces
-inherited from base classes. Each instantiation is also checked with the
+except `void`, which has no value to write. Classes implement the interfaces
+they declare, including interfaces inherited from base classes. Each instantiation is also checked with the
 concrete type, so `value.write()` on an `i32` resolves to the `write` function
 for `i32`.
 
