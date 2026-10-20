@@ -30,8 +30,8 @@ A string has two read-only members and an element type:
 - Two strings compare with `==` and `!=`, by their bytes. Ordering operators are
   not defined on strings.
 
-The standard library exposes `stdlib.strings.to_c_string` and
-`stdlib.strings.from_c_string` for C interop. `to_c_string` copies the UTF-8
+The standard library exposes `std.strings.to_c_string` and
+`std.strings.from_c_string` for C interop. `to_c_string` copies the UTF-8
 bytes into a newly allocated, NUL-terminated buffer and returns an `i8*`.
 That buffer is owned by the runtime and there is intentionally no deallocator
 yet; callers must treat it as temporary until the ownership API is defined.
@@ -67,7 +67,7 @@ so a value of 128 or more is not a complete UTF-8 character on its own.
 
 ## I/O
 
-The `stdlib.io` module provides `write_stdout(string)`, `write_stderr(string)`,
+The `std.io` module provides `write_stdout(string)`, `write_stderr(string)`,
 and the generic `print<T : Printable>(T)` and `println<T : Printable>(T)`. The
 first two functions call the runtime's `oxygen_write_stdout` and
 `oxygen_write_stderr` primitives. They write the string's exact byte length,
@@ -76,7 +76,7 @@ through the runtime's `oxygen_write_stdout_byte` primitive. `println` appends a 
 
 `print` and `println` accept any type that implements `Printable`. Strings and
 the primitive types implement it by a built-in rule; each one is written by a
-`write` function in `stdlib.io`, so formatting is ordinary Oxygen code:
+`write` function in `std.io`, so formatting is ordinary Oxygen code:
 
 - Integers are written in decimal, with a leading `-` when negative.
 - `bool` is written as `true` or `false`.

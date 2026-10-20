@@ -3,7 +3,7 @@
 The standard library exposes generic allocation helpers:
 
 ```oxygen
-import stdlib.memory;
+import std.memory;
 
 i32 main() {
     i32* values = memory.alloc<i32>(4);

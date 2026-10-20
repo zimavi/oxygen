@@ -35,7 +35,7 @@ function is written through a trailing out-pointer parameter, which
 `oxygen_c_string_to_string` uses. Output writes exactly the supplied number of bytes, so embedded
 NUL bytes are supported.
 The Oxygen-to-C conversion allocates a NUL-terminated copy. Generic
-`stdlib.memory` allocation uses `oxygen_alloc` and `oxygen_free`; ownership of
+`std.memory` allocation uses `oxygen_alloc` and `oxygen_free`; ownership of
 those allocations belongs to the Oxygen caller.
 
 The public `std.exception` standard-library module contains the
@@ -113,7 +113,7 @@ require Clang and a compatible archive tool (`llvm-ar`/`ar` or `llvm-lib`).
 The output is a static archive, not a complete executable. The CLI native
 build passes this archive after the LLVM-generated object file and then links
 any optional `--stdlib` paths as dynamic dependencies. The source standard
-library includes `stdlib.io`, which provides `write_stdout`, `write_stderr`,
+library includes `std.io`, which provides `write_stdout`, `write_stderr`,
 and the generic `print`/`println` functions. Values of primitive types, strings,
 and classes implementing `Printable` can be printed. Formatting is written in
 Oxygen. Use `--debug` to generate debug symbols for

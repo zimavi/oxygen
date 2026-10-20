@@ -28,7 +28,7 @@ symbol is emitted with its declared C name rather than an Oxygen-mangled name.
 The declaration itself does not generate a function body.
 
 The initial implementation does not parse C headers. String marshaling is
-provided by `stdlib.strings`: `to_c_string(string)` returns a runtime-owned
+provided by `std.strings`: `to_c_string(string)` returns a runtime-owned
 NUL-terminated `i8*`, and `from_c_string(i8*)` returns an Oxygen string view
 whose length ends at the first NUL. The runtime allocation has no public
 deallocator yet, and null pointers are invalid inputs to the reverse
