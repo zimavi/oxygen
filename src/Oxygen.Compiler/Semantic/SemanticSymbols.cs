@@ -177,8 +177,10 @@ public sealed class SemanticModel
         IReadOnlySet<VariableDeclarationStatement>? deletedLocals = null,
         IReadOnlySet<DeleteStatement>? runtimeCheckedDeletes = null,
         IReadOnlyList<GlobalVariableSymbol>? globals = null,
-        IReadOnlyDictionary<IdentifierExpression, GlobalVariableSymbol>? globalReferences = null)
+        IReadOnlyDictionary<IdentifierExpression, GlobalVariableSymbol>? globalReferences = null,
+        IReadOnlySet<CallExpression>? baseCalls = null)
     {
+        BaseCalls = baseCalls ?? new HashSet<CallExpression>();
         Globals = globals ?? [];
         GlobalReferences = globalReferences ?? new Dictionary<IdentifierExpression, GlobalVariableSymbol>();
         Functions = functions;
@@ -204,6 +206,9 @@ public sealed class SemanticModel
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
+
+    // The calls written as base.name(...), which are direct calls to the base class's method.
+    public IReadOnlySet<CallExpression> BaseCalls { get; }
 
     // Every module-level variable, in declaration order.
     public IReadOnlyList<GlobalVariableSymbol> Globals { get; }

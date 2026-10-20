@@ -694,7 +694,8 @@ public sealed partial class Parser
 
         if (Check(TokenKind.Const) || Check(TokenKind.Var) || IsType(Current.Kind)
             || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier)
-            || IsGenericVariableDeclarationStart())
+            || IsGenericVariableDeclarationStart()
+            || IsNamedPointerOrArrayDeclarationStart())
         {
             return ParseVariableDeclaration();
         }
@@ -718,8 +719,19 @@ public sealed partial class Parser
         Consume(TokenKind.CloseParenthesis, "Expected ')' after switch value.");
         Consume(TokenKind.OpenBrace, "Expected '{' after switch value.");
         var cases = new List<SwitchCase>();
-        while (Match(TokenKind.Case))
+        // Cases and the default are kept in the order they are written, because fall-through follows that order.
+        while (Check(TokenKind.Case) || Check(TokenKind.Default))
         {
+            if (Match(TokenKind.Default))
+            {
+                var defaultToken = Previous;
+                if (cases.Any(item => item.IsDefault))
+                    throw Error("A switch can have only one default case.", defaultToken);
+                Consume(TokenKind.Colon, "Expected ':' after 'default'.");
+                cases.Add(new SwitchCase(null, null, true, null, ParseStatement(), defaultToken.Location));
+                continue;
+            }
+            Advance();
             var caseToken = Previous;
             if (Match(TokenKind.Is))
             {
@@ -748,12 +760,6 @@ public sealed partial class Parser
             var caseValue = ParseExpression();
             Consume(TokenKind.Colon, "Expected ':' after switch case.");
             cases.Add(new SwitchCase(null, caseValue, false, null, ParseStatement(), caseToken.Location));
-        }
-        if (Match(TokenKind.Default))
-        {
-            var defaultToken = Previous;
-            Consume(TokenKind.Colon, "Expected ':' after 'default'.");
-            cases.Add(new SwitchCase(null, null, true, null, ParseStatement(), defaultToken.Location));
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after switch.");
         return new SwitchStatement(value, cases, location);
@@ -972,8 +978,9 @@ public sealed partial class Parser
                 left = new CastExpression(targetType, left, left.Location);
                 continue;
             }
-            var isLeftShift = Current.Kind == TokenKind.LessThan && Peek(1).Kind == TokenKind.LessThan;
-            var isRightShift = Current.Kind == TokenKind.GreaterThan && Peek(1).Kind == TokenKind.GreaterThan;
+            // Two '<' or two '>' tokens form a shift only when they are written next to each other: `a < < b` is not a shift.
+            var isLeftShift = Current.Kind == TokenKind.LessThan && IsWrittenNextToCurrent(TokenKind.LessThan);
+            var isRightShift = Current.Kind == TokenKind.GreaterThan && IsWrittenNextToCurrent(TokenKind.GreaterThan);
             var precedence = isLeftShift || isRightShift ? 8 : GetPrecedence(Current.Kind);
             if (precedence < minimumPrecedence)
                 break;
@@ -1017,6 +1024,23 @@ public sealed partial class Parser
             else if (Match(TokenKind.Dot))
             {
                 var member = ConsumeIdentifierLike("Expected an identifier after '.'.");
+                // `this.name(...)` is a call to a method of the current instance. It has the name form `this.name`, which the
+                // analyzer resolves from the receiver's name.
+                if (expression is ThisExpression && Match(TokenKind.OpenParenthesis))
+                {
+                    var arguments = new List<Expression>();
+                    if (!Check(TokenKind.CloseParenthesis))
+                    {
+                        do
+                        {
+                            arguments.Add(ParseExpression());
+                        } while (Match(TokenKind.Comma));
+                    }
+
+                    Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+                    expression = new CallExpression($"this.{member.Lexeme}", arguments, expression.Location);
+                    continue;
+                }
                 expression = new MemberAccessExpression(expression, member.Lexeme, expression.Location);
             }
             else if (Match(TokenKind.PlusPlus))
@@ -1127,6 +1151,25 @@ public sealed partial class Parser
                 return new IdentifierExpression(name, token.Location);
             case TokenKind.This:
                 return new ThisExpression(token.Location);
+            case TokenKind.Base:
+                {
+                    // `base.name(...)` calls a method of the base class on the current instance, without virtual dispatch.
+                    // Other uses of `base` are not supported.
+                    Consume(TokenKind.Dot, "Expected '.' after 'base'.");
+                    var method = ConsumeIdentifierLike("Expected a method name after 'base.'.");
+                    Consume(TokenKind.OpenParenthesis, "Only calls are supported after 'base.', such as base.name(...).");
+                    var arguments = new List<Expression>();
+                    if (!Check(TokenKind.CloseParenthesis))
+                    {
+                        do
+                        {
+                            arguments.Add(ParseExpression());
+                        } while (Match(TokenKind.Comma));
+                    }
+
+                    Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+                    return new CallExpression($"base.{method.Lexeme}", arguments, token.Location);
+                }
             case TokenKind.IntegerLiteral:
                 return new IntegerLiteralExpression(token.Lexeme, token.Location);
             case TokenKind.FloatingPointLiteral:
@@ -1226,6 +1269,42 @@ public sealed partial class Parser
 
         Consume(TokenKind.GreaterThan, "Expected '>' after generic type parameters.");
         return parameters;
+    }
+
+    // `Name* name` and `Name[N] name` declare a variable of a named type. Neither is a valid statement otherwise, because a
+    // pointer or an element cannot be the target of a plain expression statement that begins this way.
+    // Whether the next token is of the given kind and starts in the column right after the current token.
+    private bool IsWrittenNextToCurrent(TokenKind kind)
+    {
+        var next = Peek(1);
+        return next.Kind == kind && next.Location.Line == Current.Location.Line
+            && next.Location.Column == Current.Location.Column + 1;
+    }
+
+    private bool IsNamedPointerOrArrayDeclarationStart()
+    {
+        if (!Check(TokenKind.Identifier))
+            return false;
+        var index = _position + 1;
+        if (index < _tokens.Count && _tokens[index].Kind == TokenKind.OpenBracket)
+        {
+            // Each dimension is `[N]` with an integer literal N.
+            while (index + 2 < _tokens.Count && _tokens[index].Kind == TokenKind.OpenBracket
+                   && _tokens[index + 1].Kind == TokenKind.IntegerLiteral && _tokens[index + 2].Kind == TokenKind.CloseBracket)
+                index += 3;
+        }
+        else if (index < _tokens.Count && _tokens[index].Kind == TokenKind.Star)
+        {
+            while (index < _tokens.Count && _tokens[index].Kind == TokenKind.Star)
+                index++;
+        }
+        else
+        {
+            return false;
+        }
+
+        return index + 1 < _tokens.Count && _tokens[index].Kind == TokenKind.Identifier
+            && _tokens[index + 1].Kind is TokenKind.Equals or TokenKind.Semicolon;
     }
 
     private bool IsGenericVariableDeclarationStart()

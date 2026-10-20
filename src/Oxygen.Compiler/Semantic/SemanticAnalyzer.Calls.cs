@@ -8,6 +8,31 @@ namespace Oxygen.Compiler.Semantic;
 // Calls: overload resolution and the call expression.
 public sealed partial class SemanticAnalyzer
 {
+    // The calls written as base.name(...). They are called directly, without virtual dispatch.
+    private readonly HashSet<CallExpression> _baseCalls = new(ReferenceEqualityComparer.Instance);
+
+    // The base class of the class whose member is being analysed. A base call is made on the same instance, as that class.
+    private SemanticType BaseReceiverType(SourceLocation location)
+    {
+        var owner = _currentOwnerClass ?? throw Error("'base' is only valid inside a class member", location, 4);
+        if (owner.BaseTypeName is null || !_classesByName.ContainsKey(owner.BaseTypeName))
+            throw Error($"Class '{owner.Name}' has no base class, so 'base' cannot be used", location, 4);
+        return SemanticType.Class(owner.BaseTypeName, null);
+    }
+
+    // The type of a variable named by a receiver, or null when no variable has that name.
+    private static SemanticType? LookupVariableType(Scope scope, string name, SourceLocation location)
+    {
+        try
+        {
+            return scope.Lookup(name, location).Type;
+        }
+        catch (SemanticException)
+        {
+            return null;
+        }
+    }
+
     // A manual iter() call is rejected. Its result is an object that no variable frees: a local takes it without setting
     // its drop flag, which is set only for `new`, so the object would leak. For-in calls iter() itself and is not affected.
     // This is a temporary guard, removed once ownership covers interfaces and call results.
@@ -79,12 +104,17 @@ public sealed partial class SemanticAnalyzer
             var separator = call.Name.LastIndexOf('.');
             var receiverName = call.Name[..separator];
             var methodName = call.Name[(separator + 1)..];
-            VariableSymbol? receiver = null;
-            try { receiver = scope.Lookup(receiverName, call.Location); }
-            catch (SemanticException) { }
-            if (receiver is not null)
+            // `this` names the current instance and `base` the same instance seen as its base class. Neither is a variable.
+            SemanticType? receiverType = receiverName switch
             {
-                var receiverType = receiver.Type;
+                "this" => scope.LookupThis(call.Location),
+                "base" => BaseReceiverType(call.Location),
+                _ => LookupVariableType(scope, receiverName, call.Location)
+            };
+            if (receiverName == "base")
+                _baseCalls.Add(call);
+            if (receiverType is not null)
+            {
                 _callReceiverTypes[call] = receiverType;
                 if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
                 {

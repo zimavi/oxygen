@@ -36,7 +36,8 @@ public sealed partial class LlvmModuleGenerator
         if (method)
         {
             var separator = expression.Name.LastIndexOf('.');
-            var receiver = expression.Name[..separator];
+            // `base` is the same instance as `this`, seen as its base class.
+            var receiver = expression.Name[..separator] == "base" ? "this" : expression.Name[..separator];
             var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
             if (!values.TryGetValue(receiver, out var receiverValue))
                 receiverValue = builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiver], receiver);
@@ -111,7 +112,8 @@ public sealed partial class LlvmModuleGenerator
         }
 
         var resultName = function.ReturnType.IsVoid ? string.Empty : "call";
-        if (method && (function.Declaration.IsVirtual || function.Declaration.IsOverride))
+        // A base call is direct, even when the method is virtual: the base class's own implementation runs.
+        if (method && (function.Declaration.IsVirtual || function.Declaration.IsOverride) && !model.BaseCalls.Contains(expression))
         {
             var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
             var receiverClass = model.Classes[receiverType.StructName!];

@@ -574,6 +574,56 @@ public sealed class ParserTests
     }
 
     [Fact]
+    public void ParsesNamedPointerAndArrayDeclarations()
+    {
+        var unit = Parse("class Point { i32 x; } i32 main() { Point* p = null; Point[3] items; return 0; }");
+
+        var pointer = Assert.IsType<VariableDeclarationStatement>(unit.Functions[0].Body.Statements[0]);
+        Assert.True(pointer.Type.IsPointer);
+        Assert.Equal("Point", pointer.Type.Pointee!.NamedType);
+        var array = Assert.IsType<VariableDeclarationStatement>(unit.Functions[0].Body.Statements[1]);
+        Assert.True(array.Type.IsArray);
+        Assert.Equal(3, array.Type.ArrayLength);
+        Assert.Equal("Point", array.Type.ElementType!.NamedType);
+    }
+
+    [Fact]
+    public void ParsesThisAndBaseCallsWithTheirReceiverNames()
+    {
+        var unit = Parse(
+            "class A { i32 f() { return 1; } } class B : A { i32 g() { return this.f() + base.f(); } } i32 main() { return 0; }");
+
+        var method = Assert.Single(unit.Classes[1].Methods);
+        var ret = Assert.IsType<ReturnStatement>(method.Body.Statements[0]);
+        var sum = Assert.IsType<BinaryExpression>(ret.Value);
+        Assert.Equal("this.f", Assert.IsType<CallExpression>(sum.Left).Name);
+        Assert.Equal("base.f", Assert.IsType<CallExpression>(sum.Right).Name);
+    }
+
+    [Fact]
+    public void SwitchKeepsDefaultInTheOrderItIsWritten()
+    {
+        var unit = Parse("i32 main() { i32 x = 1; switch (x) { default: return 0; case 1: return 1; } }");
+
+        var statement = Assert.IsType<SwitchStatement>(unit.Functions[0].Body.Statements[1]);
+        Assert.True(statement.Cases[0].IsDefault);
+        Assert.False(statement.Cases[1].IsDefault);
+    }
+
+    [Fact]
+    public void SecondDefaultCaseIsRejected()
+    {
+        Assert.ThrowsAny<System.Exception>(() => Parse(
+            "i32 main() { i32 x = 1; switch (x) { default: return 0; default: return 1; } }"));
+    }
+
+    [Fact]
+    public void SpacedLessThanPairIsNotAShift()
+    {
+        Assert.ThrowsAny<System.Exception>(() => Parse("i32 main() { i32 a = 1; i32 b = 2; i32 x = a < < b; return 0; }"));
+    }
+
+    [Fact]
     public void ParsesRethrowWithoutAValue()
     {
         var unit = Parse("i32 main() { try { } catch (Exception e) { throw; } return 0; }");

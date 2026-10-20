@@ -1803,6 +1803,15 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void BaseCallOutsideAClassIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32 x = base.f(); return x; }"));
+
+        Assert.Contains("'base' is only valid inside a class member", exception.Message);
+    }
+
+    [Fact]
     public void RethrowOutsideACatchClauseIsRejected()
     {
         var exception = Assert.Throws<SemanticException>(() =>
