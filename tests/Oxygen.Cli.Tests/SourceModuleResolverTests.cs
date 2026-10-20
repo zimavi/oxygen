@@ -42,14 +42,14 @@ public sealed class SourceModuleResolverTests : IDisposable
     }
 
     [Fact]
-    public void AProgramWithoutImportsLoadsOnlyStdException()
+    public void AProgramWithoutImportsLoadsOnlyStdExceptionAndTheStringsItImports()
     {
         var source = new SourceText(Path.Combine(_directory, "main.oxy"), "i32 main() { return 0; }");
 
         var resolved = Resolve([source], NativeProgram.RepositoryRoot);
 
         Assert.Empty(resolved.Diagnostics);
-        Assert.Equal(["exception.oxy", "main.oxy"], StandardFileNames(resolved).Order());
+        Assert.Equal(["exception.oxy", "main.oxy", "strings.oxy"], StandardFileNames(resolved).Order());
     }
 
     [Fact]

@@ -67,9 +67,12 @@ public sealed class SemanticTests
         var path = Path.Combine(directory!.FullName, "stdlib", "exception.oxy");
         var source = File.ReadAllText(path);
         var standardUnit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();
+        // std.exception imports std.strings for its C string conversion, so the strings module is analyzed with it.
+        var stringsSource = File.ReadAllText(Path.Combine(directory.FullName, "stdlib", "strings.oxy"));
+        var stringsUnit = new Parser(_tokenizer.Tokenize(stringsSource), Log.Logger).Parse();
         var mainUnit = Parse("i32 main() { return 0; }");
 
-        var model = new SemanticAnalyzer(Log.Logger).Analyze([standardUnit, mainUnit]);
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([standardUnit, stringsUnit, mainUnit]);
 
         Assert.Contains("Exception", model.Classes.Keys);
         Assert.Contains(model.Functions.Values, symbol =>

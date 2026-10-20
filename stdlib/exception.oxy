@@ -1,5 +1,7 @@
 module std.exception;
 
+import std.strings;
+
 // Public value types used by exception handlers and standard-library
 // formatters.  The runtime ABI stores the same information as a compact,
 // address-stable record; these types keep formatting policy in Oxygen.
@@ -17,17 +19,14 @@ public class Frame {
     }
 
     internal Frame(void* native_frame) {
-        this.function_name = std.exception.from_c_string(
+        this.function_name = from_c_string(
             std.exception.runtime_frame_function_name(native_frame));
-        this.file_name = std.exception.from_c_string(
+        this.file_name = from_c_string(
             std.exception.runtime_frame_file_name(native_frame));
         this.line = std.exception.runtime_frame_line(native_frame);
         this.column = std.exception.runtime_frame_column(native_frame);
     }
 }
-
-@extern("oxygen_c_string_to_string")
-public extern string from_c_string(i8* value);
 
 public class StackTrace {
     public u64 count;
