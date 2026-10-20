@@ -86,6 +86,20 @@ public sealed partial class LlvmModuleGenerator
     private bool IsReferenceType(SemanticType type, SemanticModel model) =>
         (type.IsClass && !IsValueClass(type, model)) || type.IsInterface;
 
+    // The class that a class extends, as the runtime names it, or null. The parser cannot tell a base class from an interface
+    // written after ':', so BaseTypeName can name an interface, and a generic base is named by its instance.
+    private string? RuntimeParentName(ClassSymbol cls, SemanticModel model)
+    {
+        if (cls.BaseTypeName is null)
+            return null;
+        var parent = NormalizeAggregateType(SemanticType.Class(cls.BaseTypeName), model).StructName;
+        return parent is not null && model.Classes.ContainsKey(parent) ? parent : null;
+    }
+
+    // The interfaces that a class implements, as the runtime names them: the instance's name for a generic interface.
+    private IEnumerable<string> RuntimeInterfaceNames(ClassSymbol cls, SemanticModel model) =>
+        cls.DeclaredInterfaceTypes.Select(type => NormalizeAggregateType(type, model).StructName!);
+
     private void InitializeRuntimeTypeInfo(
         LLVMBuilderRef builder,
         string typeName,
@@ -190,7 +204,7 @@ public sealed partial class LlvmModuleGenerator
                 builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "interface.data"),
                 0,
                 "interface.data");
-            var table = _interfaceTables[(source.StructName!, target.StructName!)];
+            var table = _interfaceTables[(NormalizeAggregateType(source, model).StructName!, NormalizeAggregateType(target, model).StructName!)];
             return builder.BuildInsertValue(result,
                 builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "interface.table"),
                 1, "interface.table");
@@ -298,7 +312,7 @@ public sealed partial class LlvmModuleGenerator
             result = builder.BuildInsertValue(result,
                 builder.BuildBitCast(operand, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "pattern.data"),
                 0, "pattern.data");
-            var table = _interfaceTables[(source.StructName!, target.StructName!)];
+            var table = _interfaceTables[(NormalizeAggregateType(source, model).StructName!, NormalizeAggregateType(target, model).StructName!)];
             return builder.BuildInsertValue(result,
                 builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "pattern.table"),
                 1, "pattern.table");
@@ -319,11 +333,14 @@ public sealed partial class LlvmModuleGenerator
             && IsClassDerivedFrom(source.BaseTypeName, targetName, model);
     }
 
-    private static bool ClassImplementsInterface(string className, string interfaceName, SemanticModel model)
+    private bool ClassImplementsInterface(string className, string interfaceName, SemanticModel model)
     {
         if (!model.Classes.TryGetValue(className, out var cls))
             return false;
-        if (cls.InterfaceNames.Contains(interfaceName, StringComparer.Ordinal))
+        // InterfaceNames has the base name of each interface, so a generic interface is matched by its instance's name here:
+        // the class declares Iterable<i32>, whose instance is Iterable__ox_i32.
+        if (cls.InterfaceNames.Contains(interfaceName, StringComparer.Ordinal)
+            || cls.DeclaredInterfaceTypes.Any(type => NormalizeAggregateType(type, model).StructName == interfaceName))
             return true;
         return cls.BaseTypeName is not null
             && model.Classes.ContainsKey(cls.BaseTypeName)

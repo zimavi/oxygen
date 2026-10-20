@@ -207,7 +207,7 @@ public sealed partial class LlvmModuleGenerator
                     LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
         foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
         {
-            InitializeRuntimeTypeInfo(builder, cls.Name, cls.BaseTypeName, 1, model);
+            InitializeRuntimeTypeInfo(builder, cls.Name, RuntimeParentName(cls, model), 1, model);
         }
         foreach (var interfaceSymbol in model.Interfaces.Values.Where(iface => !iface.IsGeneric))
         {
@@ -215,9 +215,10 @@ public sealed partial class LlvmModuleGenerator
         }
         foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
         {
-            if (cls.BaseTypeName is not null)
-                RegisterRuntimeType(builder, registerType, cls.Name, cls.BaseTypeName);
-            foreach (var interfaceName in cls.InterfaceNames)
+            var parent = RuntimeParentName(cls, model);
+            if (parent is not null)
+                RegisterRuntimeType(builder, registerType, cls.Name, parent);
+            foreach (var interfaceName in RuntimeInterfaceNames(cls, model))
                 RegisterRuntimeType(builder, registerType, cls.Name, interfaceName);
         }
 

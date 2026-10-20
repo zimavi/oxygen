@@ -228,7 +228,9 @@ public sealed partial class LlvmModuleGenerator
                 builder.BuildBitCast(value, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "interface.data"),
                 0,
                 "interface.data");
-            var table = _interfaceTables[(source.StructName!, target.StructName!)];
+            // The types may name a generic interface by its base name, so the table is looked up by the instance's name.
+            var table = _interfaceTables[(NormalizeAggregateType(source, model).StructName!,
+                NormalizeAggregateType(target, model).StructName!)];
             return builder.BuildInsertValue(result,
                 builder.BuildBitCast(table, LLVMTypeRef.CreatePointer(_context.Int8Type, 0), "interface.table"),
                 1, "interface.table");
