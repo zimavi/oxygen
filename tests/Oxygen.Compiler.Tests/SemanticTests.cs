@@ -2901,6 +2901,51 @@ public sealed class SemanticTests
         Assert.Equal(["x"], model.Classes["C"].Fields.Select(field => field.Name));
     }
 
+    [Fact]
+    public void AcceptsMethodCallsOnCallResultsAndNestedFields()
+    {
+        var result = AnalyzeWithDiagnostics(
+            """
+            class Inner {
+                i32 value;
+                Inner(i32 value) { this.value = value; }
+                i32 get() { return value; }
+            }
+            class Outer {
+                Inner inner;
+                Outer() { this.inner = new Inner(1); }
+            }
+            Inner make() { return new Inner(2); }
+            i32 main() {
+                Outer o = new Outer();
+                return make().get() + o.inner.get();
+            }
+            """);
+
+        Assert.NotNull(result.Model);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RejectsAMethodThatTheCallResultTypeDoesNotHave()
+    {
+        var result = AnalyzeWithDiagnostics(
+            """
+            class Inner {
+                i32 value;
+                Inner(i32 value) { this.value = value; }
+            }
+            Inner make() { return new Inner(2); }
+            i32 main() {
+                return make().missing();
+            }
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("Method 'missing' is not declared for a receiver of type Inner", diagnostic.Message);
+        Assert.Equal(DiagnosticCode.NotDeclared, diagnostic.Code);
+    }
+
     private SemanticModel Analyze(string source)
     {
         var unit = new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();

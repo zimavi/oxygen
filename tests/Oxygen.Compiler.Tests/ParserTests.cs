@@ -705,6 +705,38 @@ public sealed class ParserTests
         Assert.Throws<ParseException>(() => Parse("i32 main() { i32 a = ; return 0; }"));
     }
 
+    [Fact]
+    public void ParsesAMethodCallOnAnyExpressionAsACallWithAReceiver()
+    {
+        var unit = Parse("i32 main() { return make().get(); }");
+
+        var call = Assert.IsType<CallExpression>(((ReturnStatement)Assert.Single(unit.Functions[0].Body.Statements)).Value);
+        Assert.Equal("get", call.Name);
+        Assert.IsType<CallExpression>(call.Receiver);
+    }
+
+    [Fact]
+    public void ParsesANameChainWithTwoDotsBeforeACallAsAReceiverChain()
+    {
+        var unit = Parse("i32 main() { return h.inner.get(); }");
+
+        var call = Assert.IsType<CallExpression>(((ReturnStatement)Assert.Single(unit.Functions[0].Body.Statements)).Value);
+        Assert.Equal("get", call.Name);
+        var receiver = Assert.IsType<MemberAccessExpression>(call.Receiver);
+        Assert.Equal("inner", receiver.MemberName);
+        Assert.IsType<IdentifierExpression>(receiver.Target);
+    }
+
+    [Fact]
+    public void ParsesATwoPartNameBeforeACallInTheNameForm()
+    {
+        var unit = Parse("i32 main() { return h.get(); }");
+
+        var call = Assert.IsType<CallExpression>(((ReturnStatement)Assert.Single(unit.Functions[0].Body.Statements)).Value);
+        Assert.Equal("h.get", call.Name);
+        Assert.Null(call.Receiver);
+    }
+
     private ParseResult ParseWithDiagnostics(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).ParseWithDiagnostics("main.oxy");
 

@@ -382,11 +382,15 @@ public sealed record ConditionalExpression(
     Expression WhenFalse,
     SourceLocation Location) : Expression(Location);
 
+// A call. Without a receiver, Name is the function's name, possibly qualified by a module (`io.print`), or `this.m` or
+// `base.m` for a method of the current instance. With a receiver, `receiver.Name(...)` calls the method Name on the value
+// of the receiver expression, and Name is the method alone.
 public sealed record CallExpression(
     string Name,
     IReadOnlyList<Expression> Arguments,
     SourceLocation Location,
-    IReadOnlyList<TypeSyntax>? TypeArguments = null) : Expression(Location)
+    IReadOnlyList<TypeSyntax>? TypeArguments = null,
+    Expression? Receiver = null) : Expression(Location)
 {
     public IReadOnlyList<TypeSyntax> ExplicitTypeArguments => TypeArguments ?? [];
 }

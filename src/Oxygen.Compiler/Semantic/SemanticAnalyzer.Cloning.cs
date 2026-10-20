@@ -170,6 +170,7 @@ public sealed partial class SemanticAnalyzer
             },
             CallExpression item => item with
             {
+                Receiver = item.Receiver is null ? null : CloneExpression(item.Receiver, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls),
                 Arguments = item.Arguments.Select(argument =>
                     CloneExpression(argument, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)).ToArray(),
                 TypeArguments = item.TypeArguments?.Select(type => RewriteTypeSyntax(type, substitutions, aggregateNames)).ToArray()

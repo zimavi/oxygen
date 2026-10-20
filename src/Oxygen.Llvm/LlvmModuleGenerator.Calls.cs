@@ -35,11 +35,16 @@ public sealed partial class LlvmModuleGenerator
         var arguments = new List<LLVMValueRef>();
         if (method)
         {
-            var separator = expression.Name.LastIndexOf('.');
-            // `base` is the same instance as `this`, seen as its base class.
-            var receiver = expression.Name[..separator] == "base" ? "this" : expression.Name[..separator];
+            // A receiver expression is evaluated. A name-form receiver is `this`, `base` (the same instance as `this`, seen as
+            // its base class), or a variable; it is null for a receiver expression.
+            var receiver = expression.Receiver is null ? expression.Name[..expression.Name.LastIndexOf('.')] : null;
+            if (receiver == "base")
+                receiver = "this";
             var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
-            if (!values.TryGetValue(receiver, out var receiverValue))
+            LLVMValueRef receiverValue;
+            if (receiver is null)
+                receiverValue = EmitExpression(context, builder, expression.Receiver!, values, storage, model, llvmFunctions);
+            else if (!values.TryGetValue(receiver, out receiverValue))
                 receiverValue = builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiver], receiver);
             else if (receiver == "this"
                 && model.Classes[function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..]].IsValue)
@@ -147,11 +152,19 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var receiverName = expression.Name[..expression.Name.LastIndexOf('.')];
         var receiverType = NormalizeAggregateType(model.CallReceiverTypes[expression], model);
-        var receiverValue = values.TryGetValue(receiverName, out var direct)
-            ? direct
-            : builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiverName], receiverName);
+        LLVMValueRef receiverValue;
+        if (expression.Receiver is not null)
+        {
+            receiverValue = EmitExpression(context, builder, expression.Receiver, values, storage, model, llvmFunctions);
+        }
+        else
+        {
+            var receiverName = expression.Name[..expression.Name.LastIndexOf('.')];
+            receiverValue = values.TryGetValue(receiverName, out var direct)
+                ? direct
+                : builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiverName], receiverName);
+        }
         var arguments = new List<LLVMValueRef> { receiverValue };
         for (var index = 0; index < expression.Arguments.Count; index++)
         {

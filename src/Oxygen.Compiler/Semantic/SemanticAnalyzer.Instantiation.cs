@@ -382,6 +382,7 @@ public sealed partial class SemanticAnalyzer
             IsExpression item => item with { TargetType = Type(item.TargetType), Operand = Expression(item.Operand) },
             CallExpression item => item with
             {
+                Receiver = item.Receiver is null ? null : Expression(item.Receiver),
                 Arguments = item.Arguments.Select(Expression).ToArray(),
                 TypeArguments = item.TypeArguments?.Select(Type).ToArray()
             },

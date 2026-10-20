@@ -1016,6 +1016,32 @@ public sealed partial class Parser
         return ParsePostfixExpression();
     }
 
+    // The expression `a.b.c` for the names a, b and c, in order.
+    private static Expression NameChain(IEnumerable<string> names, SourceLocation location)
+    {
+        var parts = names.ToList();
+        Expression chain = new IdentifierExpression(parts[0], location);
+        foreach (var part in parts.Skip(1))
+            chain = new MemberAccessExpression(chain, part, location);
+        return chain;
+    }
+
+    // The arguments of a call, after its '(' and up to and including its ')'.
+    private List<Expression> ParseArguments()
+    {
+        var arguments = new List<Expression>();
+        if (!Check(TokenKind.CloseParenthesis))
+        {
+            do
+            {
+                arguments.Add(ParseExpression());
+            } while (Match(TokenKind.Comma));
+        }
+
+        Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+        return arguments;
+    }
+
     private Expression ParsePostfixExpression()
     {
         var expression = ParsePrimaryExpression();
@@ -1045,6 +1071,13 @@ public sealed partial class Parser
 
                     Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
                     expression = new CallExpression($"this.{member.Lexeme}", arguments, expression.Location);
+                    continue;
+                }
+                // Any other `expression.name(...)` calls the method on the value of expression, such as `make().name()`.
+                if (Match(TokenKind.OpenParenthesis))
+                {
+                    var arguments = ParseArguments();
+                    expression = new CallExpression(member.Lexeme, arguments, member.Location, null, expression);
                     continue;
                 }
                 expression = new MemberAccessExpression(expression, member.Lexeme, expression.Location);
@@ -1114,6 +1147,11 @@ public sealed partial class Parser
                     }
 
                     Consume(TokenKind.CloseParenthesis, "Expected ')' after arguments.");
+                    // `a.b.name(...)` with more than one dot calls a method on the value of `a.b`, unless the chain names a module
+                    // function, which the analyzer decides. Explicit type arguments keep the name form, for generic functions.
+                    if (qualifiedParts.Count > 2 && typeArguments is null)
+                        return new CallExpression(qualifiedParts[^1], arguments, token.Location, null,
+                            NameChain(qualifiedParts.Take(qualifiedParts.Count - 1), token.Location));
                     if (name.IndexOf('.') < 0 && name.Length > 0 && char.IsUpper(name[0]))
                         return new ClassConstructionExpression(name, arguments, token.Location, typeArguments);
                     return new CallExpression(name, arguments, token.Location, typeArguments);
@@ -1147,12 +1185,7 @@ public sealed partial class Parser
                     return new CallExpression(name, [], token.Location, typeArguments);
 
                 if (qualifiedParts.Count > 1)
-                {
-                    Expression member = new IdentifierExpression(qualifiedParts[0], token.Location);
-                    foreach (var part in qualifiedParts.Skip(1))
-                        member = new MemberAccessExpression(member, part, token.Location);
-                    return member;
-                }
+                    return NameChain(qualifiedParts, token.Location);
 
                 return new IdentifierExpression(name, token.Location);
             case TokenKind.This:

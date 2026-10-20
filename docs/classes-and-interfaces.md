@@ -146,6 +146,30 @@ class Cat : Animal {
 Calls through a class reference use the object's vtable and select the
 most-derived override.
 
+## Method calls
+
+A method is called on a receiver with `receiver.name(arguments)`. The receiver can be
+any expression that has a class, interface, struct, or primitive type:
+
+```oxygen
+item.get();             // a variable
+this.get();             // the current instance
+base.get();             // the base class's method, without virtual dispatch
+make().get();           // the value a function returns
+items[0].get();         // an indexed element
+holder.inner.get();     // a nested field
+```
+
+The receiver is evaluated once, before the arguments, and a null class
+receiver raises `NullReferenceException` as for any other use. A dotted name
+whose first name is a module, such as `io.print(value)` or
+`std.io.print(value)`, names a function, not a method.
+
+A method call on a receiver that is not a variable has the same overload rules
+as a method call on a variable. A call result that is a heap object is not
+owned by anything, so an object returned and used only as a receiver is not
+freed. See [memory.md](memory.md).
+
 ## Properties
 
 Classes and interfaces may declare C#-style properties.  Auto accessors use

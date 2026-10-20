@@ -96,7 +96,24 @@ public sealed partial class SemanticAnalyzer
                 : expectedType?.EnumName == union.Name ? expectedType.TypeArguments : null;
             return SemanticType.Union(union.Name, unionArguments);
         }
-        if (call.Name.Contains('.', StringComparison.Ordinal))
+        // `functionName` is the name the overloads are looked up by. It is the call name, except for a receiver chain that
+        // names a module, where it is the whole dotted name, as in `std.io.print(...)`.
+        var functionName = call.Name;
+        if (call.Receiver is not null)
+        {
+            var qualifier = QualifiedName(call.Receiver);
+            var head = qualifier?.Split('.')[0];
+            // A receiver whose first name is a variable, or any other expression, is a value that the method is called on.
+            if (head is null || LookupVariableType(scope, head, call.Location) is not null)
+            {
+                var receiverType = AnalyzeExpression(call.Receiver, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                return AnalyzeMethodCall(call, receiverType, call.Name, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)
+                    ?? throw ErrorWithCode(DiagnosticCode.NotDeclared,
+                        $"Method '{call.Name}' is not declared for a receiver of type {receiverType}", call.Location, call.Name.Length);
+            }
+            functionName = $"{qualifier}.{call.Name}";
+        }
+        else if (call.Name.Contains('.', StringComparison.Ordinal))
         {
             var separator = call.Name.LastIndexOf('.');
             var receiverName = call.Name[..separator];
@@ -112,103 +129,16 @@ public sealed partial class SemanticAnalyzer
                 _baseCalls.Add(call);
             if (receiverType is not null)
             {
-                _callReceiverTypes[call] = receiverType;
-                if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
-                {
-                    // A method's owner is the class named by the last segment of its module name.
-                    var namedMethods = GetClassMethods(receiverClass.Name, []).Where(method => method.Name == methodName).ToArray();
-                    var methodCandidates = namedMethods.Where(method => IsMemberAccessible(method.Visibility,
-                        MethodOwnerName(method), MethodOwnerModule(method), moduleName, receiverClass.Name)).ToArray();
-                    if (methodCandidates.Length == 0 && namedMethods.Length > 0)
-                        throw Error($"Method '{methodName}' of class '{receiverClass.Name}' cannot be used here", call.Location);
-                    var substitutions = receiverClass.DeclaredTypeParameters
-                        .Zip(receiverType.TypeArguments ?? [], (name, type) => (name, type))
-                        .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
-                    var methodArgumentTypes = call.Arguments.Select(argument =>
-                        AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
-                    // Same ranking as free functions: the closest candidates win, and the return type never selects one.
-                    var methodRanked = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
-                        .Select(method => (method, cost: CandidateCost(method, call, methodArgumentTypes, substitutions)))
-                        .Where(item => item.cost is not null)
-                        .Select(item => (item.method, cost: item.cost!.Value))
-                        .ToList();
-                    var methodMatches = methodRanked.Count == 0
-                        ? Array.Empty<FunctionSymbol>()
-                        : methodRanked
-                            .Where(item => item.cost.CompareTo(methodRanked.Min(other => other.cost)) == 0)
-                            .Select(item => item.method)
-                            .ToArray();
-                    if (methodMatches.Length == 1)
-                    {
-                        resolvedCalls[call] = methodMatches[0];
-                        _usedFunctions.Add(methodMatches[0]);
-                        return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
-                    }
-                    if (methodMatches.Length > 1)
-                        throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
-                    if (methodCandidates.Length > 0)
-                        throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
-                }
-                else if (receiverType.IsInterface && _interfacesByName.TryGetValue(receiverType.StructName!, out var receiverInterface))
-                {
-                    var methodCandidates = receiverInterface.Methods.Where(method => method.Name == methodName).ToArray();
-                    var substitutions = receiverInterface.DeclaredTypeParameters
-                        .Zip(receiverType.TypeArguments ?? [], (name, type) => (name, type))
-                        .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
-                    var methodArgumentTypes = call.Arguments.Select(argument =>
-                        AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
-                    var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
-                        .Where(method => method.Parameters.Select((parameter, index) =>
-                            CanAssign(SubstituteGenericType(parameter.Type, substitutions),
-                                call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
-                    if (methodMatches.Length == 1)
-                    {
-                        resolvedCalls[call] = methodMatches[0];
-                        _usedFunctions.Add(methodMatches[0]);
-                        return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
-                    }
-                    if (methodMatches.Length > 1)
-                        throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
-                    if (methodCandidates.Length > 0)
-                        throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
-                }
-                else if (!receiverType.IsClass && !receiverType.IsInterface)
-                {
-                    // A method call on a primitive, string, or struct receiver names a free function whose first
-                    // parameter has exactly the receiver's type: `value.write()` calls `write(value)`. The receiver
-                    // must match exactly, so an i32 receiver never selects an i64 overload through widening.
-                    var receiverArguments = call.Arguments.Select(argument =>
-                        AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
-                    var receiverCandidates = ResolveFunctions(methodName, moduleName, imports, functions);
-                    // Primitive and string receivers implement Printable through the private functions of std.io,
-                    // which ordinary calls cannot name. The receiver syntax reaches them directly.
-                    if (receiverType.Kind is SemanticTypeKind.Primitive or SemanticTypeKind.String
-                        && functions.TryGetValue($"{PrintableModule}.{methodName}", out var builtin))
-                        receiverCandidates = receiverCandidates.Concat(builtin).Distinct().ToList();
-                    var functionMatches = receiverCandidates
-                        .Where(function => function.Parameters.Count == receiverArguments.Length + 1
-                            && function.Parameters[0].Type == receiverType)
-                        .Where(function => function.Parameters.Skip(1).Select((parameter, index) =>
-                            CanAssign(parameter.Type, call.Arguments[index], receiverArguments[index])).All(match => match))
-                        .ToArray();
-                    if (functionMatches.Length == 1)
-                    {
-                        resolvedCalls[call] = functionMatches[0];
-                        _usedFunctions.Add(functionMatches[0]);
-                        _receiverArgumentCalls.Add(call);
-                        return functionMatches[0].ReturnType;
-                    }
-                    if (functionMatches.Length > 1)
-                        throw Error($"Method call '{methodName}' is ambiguous for a receiver of type {receiverType}",
-                            call.Location);
-                    throw Error($"No function '{methodName}' accepts a receiver of type {receiverType}", call.Location);
-                }
+                var methodResult = AnalyzeMethodCall(call, receiverType, methodName, scope, functions, moduleName, imports,
+                    expressionTypes, resolvedCalls);
+                if (methodResult is not null)
+                    return methodResult;
             }
         }
-        var overloads = ResolveFunctions(call.Name, moduleName, imports, functions);
+        var overloads = ResolveFunctions(functionName, moduleName, imports, functions);
         if (overloads.Count == 0)
         {
-            throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Function '{call.Name}' is not declared", call.Location, call.Name.Length);
+            throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Function '{functionName}' is not declared", call.Location, functionName.Length);
         }
 
         var argumentTypes = call.Arguments
@@ -225,13 +155,13 @@ public sealed partial class SemanticAnalyzer
         {
             var generic = overloads.Where(candidate => candidate.IsGeneric).ToList();
             if (generic.Count == 0)
-                throw Error($"Function '{call.Name}' does not accept explicit type arguments", call.Location);
+                throw Error($"Function '{functionName}' does not accept explicit type arguments", call.Location);
             if (generic.Count > 1)
-                throw Error($"Function '{call.Name}' has ambiguous generic overloads", call.Location);
+                throw Error($"Function '{functionName}' has ambiguous generic overloads", call.Location);
             var genericFunction = generic[0];
             if (call.ExplicitTypeArguments.Count != genericFunction.DeclaredGenericParameters.Count)
                 throw ErrorWithCode(DiagnosticCode.ArgumentCount, 
-                    $"Function '{call.Name}' expects {genericFunction.DeclaredGenericParameters.Count} type argument(s), got {call.ExplicitTypeArguments.Count}",
+                    $"Function '{functionName}' expects {genericFunction.DeclaredGenericParameters.Count} type argument(s), got {call.ExplicitTypeArguments.Count}",
                     call.Location);
             var substitutions = genericFunction.DeclaredGenericParameters
                 .Select((name, index) => (name, type: ResolveType(call.ExplicitTypeArguments[index])))
@@ -269,12 +199,12 @@ public sealed partial class SemanticAnalyzer
             if (overloads.Count == 1)
             {
                 throw ErrorWithCode(DiagnosticCode.ArgumentCount, 
-                    $"Function '{call.Name}' expects {overloads[0].Parameters.Count} argument(s), got {call.Arguments.Count}",
+                    $"Function '{functionName}' expects {overloads[0].Parameters.Count} argument(s), got {call.Arguments.Count}",
                     call.Location);
             }
 
             throw ErrorWithCode(DiagnosticCode.ArgumentCount, 
-                $"Function '{call.Name}' has no overload accepting {call.Arguments.Count} argument(s)",
+                $"Function '{functionName}' has no overload accepting {call.Arguments.Count} argument(s)",
                 call.Location);
         }
 
@@ -291,9 +221,9 @@ public sealed partial class SemanticAnalyzer
                 .Select(item => item.function)
                 .ToList();
         if (matches.Select(match => match.ModuleName).Distinct(StringComparer.Ordinal).Count() > 1)
-            throw Error($"Function '{call.Name}' is ambiguous; use a module prefix", call.Location, call.Name.Length);
+            throw Error($"Function '{functionName}' is ambiguous; use a module prefix", call.Location, functionName.Length);
         if (matches.Count > 1)
-            throw Error($"Function '{call.Name}' is ambiguous: no overload is closer than the others", call.Location, call.Name.Length);
+            throw Error($"Function '{functionName}' is ambiguous: no overload is closer than the others", call.Location, functionName.Length);
         if (matches.Count == 0)
         {
             if (candidates.Count == 1)
@@ -302,11 +232,11 @@ public sealed partial class SemanticAnalyzer
                     .Select((parameter, index) => (parameter, index))
                     .First(pair => pair.parameter.Type != argumentTypes[pair.index]);
                 throw Error(
-                    $"Argument {mismatchIndex.index + 1} of '{call.Name}' has type {argumentTypes[mismatchIndex.index]}; expected {mismatchIndex.parameter.Type}",
+                    $"Argument {mismatchIndex.index + 1} of '{functionName}' has type {argumentTypes[mismatchIndex.index]}; expected {mismatchIndex.parameter.Type}",
                     call.Arguments[mismatchIndex.index].Location);
             }
 
-            throw Error($"No overload of '{call.Name}' matches the argument types", call.Location);
+            throw Error($"No overload of '{functionName}' matches the argument types", call.Location);
         }
 
         var function = matches[0];
@@ -320,11 +250,126 @@ public sealed partial class SemanticAnalyzer
         _usedFunctions.Add(function);
         if (function.ReturnType.IsVoid && !allowVoid)
         {
-            throw Error($"Void function '{call.Name}' cannot be used as an expression", call.Location);
+            throw Error($"Void function '{functionName}' cannot be used as an expression", call.Location);
         }
 
         return function.ReturnType;
     }
+
+    // Resolves a method call on a receiver of the given type. Returns null when the type has no method of that name,
+    // so the caller can report the name or try another meaning of it.
+    private SemanticType? AnalyzeMethodCall(
+        CallExpression call,
+        SemanticType receiverType,
+        string methodName,
+        Scope scope,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        _callReceiverTypes[call] = receiverType;
+        if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
+        {
+            // A method's owner is the class named by the last segment of its module name.
+            var namedMethods = GetClassMethods(receiverClass.Name, []).Where(method => method.Name == methodName).ToArray();
+            var methodCandidates = namedMethods.Where(method => IsMemberAccessible(method.Visibility,
+                MethodOwnerName(method), MethodOwnerModule(method), moduleName, receiverClass.Name)).ToArray();
+            if (methodCandidates.Length == 0 && namedMethods.Length > 0)
+                throw Error($"Method '{methodName}' of class '{receiverClass.Name}' cannot be used here", call.Location);
+            var substitutions = receiverClass.DeclaredTypeParameters
+                .Zip(receiverType.TypeArguments ?? [], (name, type) => (name, type))
+                .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
+            var methodArgumentTypes = call.Arguments.Select(argument =>
+                AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
+            // Same ranking as free functions: the closest candidates win, and the return type never selects one.
+            var methodRanked = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
+                .Select(method => (method, cost: CandidateCost(method, call, methodArgumentTypes, substitutions)))
+                .Where(item => item.cost is not null)
+                .Select(item => (item.method, cost: item.cost!.Value))
+                .ToList();
+            var methodMatches = methodRanked.Count == 0
+                ? Array.Empty<FunctionSymbol>()
+                : methodRanked
+                    .Where(item => item.cost.CompareTo(methodRanked.Min(other => other.cost)) == 0)
+                    .Select(item => item.method)
+                    .ToArray();
+            if (methodMatches.Length == 1)
+            {
+                resolvedCalls[call] = methodMatches[0];
+                _usedFunctions.Add(methodMatches[0]);
+                return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
+            }
+            if (methodMatches.Length > 1)
+                throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
+            if (methodCandidates.Length > 0)
+                throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
+        }
+        else if (receiverType.IsInterface && _interfacesByName.TryGetValue(receiverType.StructName!, out var receiverInterface))
+        {
+            var methodCandidates = receiverInterface.Methods.Where(method => method.Name == methodName).ToArray();
+            var substitutions = receiverInterface.DeclaredTypeParameters
+                .Zip(receiverType.TypeArguments ?? [], (name, type) => (name, type))
+                .ToDictionary(item => item.name, item => item.type, StringComparer.Ordinal);
+            var methodArgumentTypes = call.Arguments.Select(argument =>
+                AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
+            var methodMatches = methodCandidates.Where(method => method.Parameters.Count == methodArgumentTypes.Length)
+                .Where(method => method.Parameters.Select((parameter, index) =>
+                    CanAssign(SubstituteGenericType(parameter.Type, substitutions),
+                        call.Arguments[index], methodArgumentTypes[index])).All(match => match)).ToArray();
+            if (methodMatches.Length == 1)
+            {
+                resolvedCalls[call] = methodMatches[0];
+                _usedFunctions.Add(methodMatches[0]);
+                return SubstituteGenericType(methodMatches[0].ReturnType, substitutions);
+            }
+            if (methodMatches.Length > 1)
+                throw Error($"Method call '{methodName}' is ambiguous: no overload is closer than the others", call.Location);
+            if (methodCandidates.Length > 0)
+                throw Error($"No overload of '{methodName}' matches the argument types", call.Location);
+        }
+        else if (!receiverType.IsClass && !receiverType.IsInterface)
+        {
+            // A method call on a primitive, string, or struct receiver names a free function whose first
+            // parameter has exactly the receiver's type: `value.write()` calls `write(value)`. The receiver
+            // must match exactly, so an i32 receiver never selects an i64 overload through widening.
+            var receiverArguments = call.Arguments.Select(argument =>
+                AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)).ToArray();
+            var receiverCandidates = ResolveFunctions(methodName, moduleName, imports, functions);
+            // Primitive and string receivers implement Printable through the private functions of std.io,
+            // which ordinary calls cannot name. The receiver syntax reaches them directly.
+            if (receiverType.Kind is SemanticTypeKind.Primitive or SemanticTypeKind.String
+                && functions.TryGetValue($"{PrintableModule}.{methodName}", out var builtin))
+                receiverCandidates = receiverCandidates.Concat(builtin).Distinct().ToList();
+            var functionMatches = receiverCandidates
+                .Where(function => function.Parameters.Count == receiverArguments.Length + 1
+                    && function.Parameters[0].Type == receiverType)
+                .Where(function => function.Parameters.Skip(1).Select((parameter, index) =>
+                    CanAssign(parameter.Type, call.Arguments[index], receiverArguments[index])).All(match => match))
+                .ToArray();
+            if (functionMatches.Length == 1)
+            {
+                resolvedCalls[call] = functionMatches[0];
+                _usedFunctions.Add(functionMatches[0]);
+                _receiverArgumentCalls.Add(call);
+                return functionMatches[0].ReturnType;
+            }
+            if (functionMatches.Length > 1)
+                throw Error($"Method call '{methodName}' is ambiguous for a receiver of type {receiverType}",
+                    call.Location);
+            throw Error($"No function '{methodName}' accepts a receiver of type {receiverType}", call.Location);
+        }
+        return null;
+    }
+
+    // The dotted name of a receiver that is a chain of names, such as `a.b`, or null for any other expression.
+    private static string? QualifiedName(Expression expression) => expression switch
+    {
+        IdentifierExpression identifier => identifier.Name,
+        MemberAccessExpression member when QualifiedName(member.Target) is { } target => $"{target}.{member.MemberName}",
+        _ => null
+    };
 
     // The cost of the whole call for one candidate: its worst argument, so a candidate is only as close as its furthest
     // argument. Returns null when some argument has no implicit conversion to its parameter.
