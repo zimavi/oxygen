@@ -30,6 +30,10 @@ public sealed partial class Parser
     private readonly ILogger _logger;
     private int _position;
 
+    // Set by ParseWithDiagnostics, which records errors and keeps parsing. Parse() leaves them null and throws instead.
+    private DiagnosticBag? _diagnostics;
+    private string? _sourceName;
+
     public Parser(IReadOnlyList<Token> tokens, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(tokens);
@@ -99,6 +103,8 @@ public sealed partial class Parser
     public ParseResult ParseWithDiagnostics(string? sourceName = null)
     {
         var diagnostics = new DiagnosticBag();
+        _diagnostics = diagnostics;
+        _sourceName = sourceName;
         var module = (Name: (string?)null, Visibility: Visibility.Private);
         var imports = new List<ImportDeclaration>();
         var structs = new List<StructDeclaration>();
@@ -113,12 +119,7 @@ public sealed partial class Parser
         }
         catch (ParseException exception)
         {
-            diagnostics.Add(
-                DiagnosticPhase.Parsing,
-                exception.Message,
-                exception.Token.Location,
-                Math.Max(1, exception.Token.Lexeme.Length),
-                sourceName, exception.Code);
+            Report(exception);
             Synchronize();
         }
 
@@ -147,12 +148,7 @@ public sealed partial class Parser
             }
             catch (ParseException exception)
             {
-                diagnostics.Add(
-                    DiagnosticPhase.Parsing,
-                    exception.Message,
-                    exception.Token.Location,
-                    Math.Max(1, exception.Token.Lexeme.Length),
-                    sourceName, exception.Code);
+                Report(exception);
                 Synchronize();
             }
         }
@@ -647,7 +643,16 @@ public sealed partial class Parser
         var statements = new List<Statement>();
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
-            statements.Add(ParseStatement());
+            // An error ends one statement, not the function, so the rest of the body is still checked.
+            try
+            {
+                statements.Add(ParseStatement());
+            }
+            catch (ParseException exception) when (_diagnostics is not null)
+            {
+                Report(exception);
+                SynchronizeStatement();
+            }
         }
 
         Consume(TokenKind.CloseBrace, "Expected '}' to close the block.");
@@ -1215,6 +1220,10 @@ public sealed partial class Parser
                 Consume(TokenKind.CloseParenthesis, "Expected ')' after expression.");
                 return expression;
             default:
+                // The token is not part of the expression, so it is given back. Statement recovery then starts at it,
+                // rather than skipping it along with the statement that holds it.
+                if (token.Kind != TokenKind.EndOfFile)
+                    _position--;
                 throw Error(DiagnosticCode.ExpectedToken, $"Expected an expression, but found {Describe(token)}.", token);
         }
     }

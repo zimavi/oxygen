@@ -1,5 +1,6 @@
 using System.Linq;
 using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
 using Oxygen.Compiler.Parsing;
 using Serilog;
@@ -665,6 +666,47 @@ public sealed class ParserTests
             Parse("class Child : Base { Child() : other() { } }"));
         Assert.Contains("Expected 'this' or 'base'", exception.Message);
     }
+
+    [Fact]
+    public void ReportsEveryBadStatementInABodyAndKeepsParsingTheRest()
+    {
+        var result = ParseWithDiagnostics("i32 main() { i32 a = ; i32 b = 2 +; return 0; }");
+
+        Assert.Equal(2, result.Diagnostics.Count);
+        Assert.All(result.Diagnostics, diagnostic => Assert.Equal(DiagnosticPhase.Parsing, diagnostic.Phase));
+        var function = Assert.Single(result.Unit.Functions);
+        Assert.Single(function.Body.Statements);
+    }
+
+    [Fact]
+    public void RecoveryInsideAnInnerBlockDoesNotTakeItsBraceAsTheEndOfTheBody()
+    {
+        var result = ParseWithDiagnostics("i32 main() { if (1 == 1) { return 1 } i32 x = ; return 0; }");
+
+        Assert.Equal(2, result.Diagnostics.Count);
+        var function = Assert.Single(result.Unit.Functions);
+        Assert.Equal(2, function.Body.Statements.Count);
+    }
+
+    [Theory]
+    [InlineData("i32 main() { while (1 { } return 0; }")]
+    [InlineData("i32 main() { return 0;")]
+    [InlineData("i32 main() { i32 a = ) ; } }")]
+    public void RecoveryFromMalformedBodiesAlwaysTerminates(string source)
+    {
+        var result = ParseWithDiagnostics(source);
+
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ParseStillThrowsForABadStatementInABody()
+    {
+        Assert.Throws<ParseException>(() => Parse("i32 main() { i32 a = ; return 0; }"));
+    }
+
+    private ParseResult ParseWithDiagnostics(string source) =>
+        new Parser(_tokenizer.Tokenize(source), Log.Logger).ParseWithDiagnostics("main.oxy");
 
     private CompilationUnit Parse(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse();

@@ -63,4 +63,36 @@ public sealed partial class Parser
             Advance();
         }
     }
+
+    // Skips the rest of a statement that failed to parse. It stops after the statement's ';', or before the '}' that closes
+    // the enclosing block. Braces inside the statement are skipped as a unit, so an inner block's '}' does not end it.
+    private void SynchronizeStatement()
+    {
+        var depth = 0;
+        while (!Check(TokenKind.EndOfFile))
+        {
+            if (depth == 0 && Check(TokenKind.CloseBrace))
+                return;
+
+            if (depth == 0 && Match(TokenKind.Semicolon))
+                return;
+
+            if (Check(TokenKind.OpenBrace))
+                depth++;
+            else if (Check(TokenKind.CloseBrace))
+                depth--;
+
+            Advance();
+        }
+    }
+
+    // Records a syntax error in the diagnostics of ParseWithDiagnostics.
+    private void Report(ParseException exception) =>
+        _diagnostics!.Add(
+            DiagnosticPhase.Parsing,
+            exception.Message,
+            exception.Token.Location,
+            Math.Max(1, exception.Token.Lexeme.Length),
+            _sourceName,
+            exception.Code);
 }
