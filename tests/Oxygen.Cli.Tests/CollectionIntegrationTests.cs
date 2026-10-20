@@ -168,6 +168,86 @@ public sealed class CollectionIntegrationTests : IDisposable
         Assert.Contains("Unhandled RuntimeException: unwrap called on None", run.Error.Replace("\r\n", "\n"));
     }
 
+    [SkippableFact]
+    public void ListGrowsWhenFullAndReadsByIndexAndPop()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.collection;
+
+            i32 main() {
+                List<i32> items = new List<i32>();
+                i32 n = 0;
+                while (n < 10) {
+                    items.append(n * 10);
+                    n = n + 1;
+                }
+                io.println(items.length);
+                io.println(items.capacity);
+                io.println(collection.unwrap_or(items.get(9), -1));
+                io.println(collection.unwrap_or(items.get(10), -1));
+                io.println(collection.unwrap_or(items.pop(), -1));
+                io.println(items.length);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        // Capacity doubles from 4 to 8 to 16 as the tenth value is added.
+        Assert.Equal("10\n16\n90\n-1\n90\n9\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void ForInVisitsEveryValueOfAListInOrder()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.collection;
+
+            i32 main() {
+                List<i32> items = new List<i32>();
+                items.append(3);
+                items.append(4);
+                items.append(5);
+                for (var value in items) {
+                    io.println(value);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("3\n4\n5\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void PopOfAnEmptyListAndGetPastTheEndAreNone()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.collection;
+
+            i32 main() {
+                List<string> names = new List<string>();
+                io.println(collection.is_none(names.pop()));
+                io.println(collection.is_none(names.get(0)));
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("true\ntrue\n", run.Output.Replace("\r\n", "\n"));
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }

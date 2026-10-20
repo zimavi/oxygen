@@ -23,3 +23,10 @@ The LLVM representation uses a tag plus a type-aware payload slot, so
 primitive, pointer, class, and other currently supported payload types use
 their native LLVM representation. `std.collection` provides the canonical
 generic tagged union `Option<T>` (`Some(T)` and `None`).
+
+`std.collection` also provides `List<T>`, a growable list. `append` doubles the
+storage when it is full, and `get(index)` and `pop()` return an `Option<T>`,
+since an index past the end and an empty list are expected outcomes. Its
+`iter()` returns the class `ListIterator<T>`, which `for` accepts. `List<T>`
+does not implement `Iterable<T>`, because an interface method's return type
+must match exactly and `iter()` must return the class itself.

@@ -1,6 +1,7 @@
 module std.collection;
 
 import std.exception;
+import std.memory;
 
 // The canonical optional value used by collection APIs.  Option is a tagged
 // union; callers should inspect it with a switch before using a Some payload.
@@ -73,4 +74,69 @@ interface Iterator<T> {
 
 interface Iterable<T> {
     Iterator<T> iter();
+}
+
+// A growable list. append adds a value at the end and doubles the storage when it is full. get and pop return an Option,
+// because an index past the end and an empty list are expected outcomes. The list owns its storage, which it frees when it
+// is destroyed.
+public class List<T> {
+    private T* data;
+    public u64 length { get; private set; }
+    public u64 capacity { get; private set; }
+
+    public void append(T value) {
+        if (length == capacity) {
+            this.grow();
+        }
+        data[length] = value;
+        length = length + 1;
+    }
+
+    public Option<T> pop() {
+        if (length == 0) {
+            return Option<T>.None;
+        }
+        length = length - 1;
+        return Option<T>.Some(data[length]);
+    }
+
+    public Option<T> get(u64 index) {
+        if (index >= length) {
+            return Option<T>.None;
+        }
+        return Option<T>.Some(data[index]);
+    }
+
+    public ListIterator<T> iter() {
+        return new ListIterator<T>(this);
+    }
+
+    private void grow() {
+        u64 next = 4;
+        if (capacity != 0) {
+            next = capacity * 2;
+        }
+        data = memory.realloc<T>(data, next);
+        capacity = next;
+    }
+
+    public ~List() {
+        memory.free(data);
+    }
+}
+
+// Walks a list from its first value. A position past the end gives None.
+class ListIterator<T> : Iterator<T> {
+    private List<T> items;
+    private u64 position = 0;
+
+    public ListIterator(List<T> items) {
+        this.items = items;
+    }
+
+    public Option<T> next() {
+        Option<T> item = items.get(position);
+        position = position + 1;
+        return item;
+    }
 }
