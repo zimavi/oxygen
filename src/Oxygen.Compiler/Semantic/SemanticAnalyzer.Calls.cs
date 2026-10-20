@@ -8,6 +8,10 @@ namespace Oxygen.Compiler.Semantic;
 // Calls: overload resolution and the call expression.
 public sealed partial class SemanticAnalyzer
 {
+    // The calls that a `Name(...)` expression stands for when Name is a function rather than a class.
+    private readonly Dictionary<ClassConstructionExpression, CallExpression> _constructionCalls =
+        new(ReferenceEqualityComparer.Instance);
+
     // The calls written as base.name(...). They are called directly, without virtual dispatch.
     private readonly HashSet<CallExpression> _baseCalls = new(ReferenceEqualityComparer.Instance);
 

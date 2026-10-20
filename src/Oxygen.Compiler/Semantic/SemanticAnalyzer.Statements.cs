@@ -532,6 +532,8 @@ public sealed partial class SemanticAnalyzer
 
         var variable = new VariableSymbol(type, declaration.IsConst, declaration, false);
         scope.Declare(declaration.Name, variable);
+        if (declaration.Initializer is not null && IsStackObject(declaration.Initializer, scope))
+            _stackObjectLocals.Add(declaration);
         _declaredVariables.Add(variable);
         if (type.IsPointer && declaration.Initializer is NullLiteralExpression)
             _definitelyNullVariables.Add(variable);
@@ -585,6 +587,7 @@ public sealed partial class SemanticAnalyzer
         }
 
         ValidateWritableTarget(assignment.Target, scope, expressionTypes);
+        RequireStackObjectStaysInFunction(assignment, scope);
         TrackPointerAssignment(assignment, assignment.Value, valueType, scope);
     }
 
@@ -779,6 +782,7 @@ public sealed partial class SemanticAnalyzer
 
         var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
             expectedType: function.ReturnType);
+        RequireStackObjectNotReturned(returnStatement.Value, scope);
         if (IsOwnedClass(valueType) && returnStatement.Value is IdentifierExpression identifier
             && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
             _escapingClassLocals.Add(declaration);

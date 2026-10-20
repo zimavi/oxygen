@@ -46,6 +46,9 @@ public sealed partial class LlvmModuleGenerator
                 context, builder, literal, values, storage, model, llvmFunctions),
             UnionConstructionExpression construction => EmitUnionConstruction(
                 context, builder, construction, values, storage, model, llvmFunctions),
+            // `Name(...)` that names a function is a call of that function.
+            ClassConstructionExpression construction when model.ConstructionCalls.ContainsKey(construction) =>
+                EmitExpression(context, builder, model.ConstructionCalls[construction], values, storage, model, llvmFunctions),
             ClassConstructionExpression construction => EmitClassConstructionExpression(
                 context, builder, construction, values, storage, model, llvmFunctions),
             NewExpression creation => EmitNewExpression(

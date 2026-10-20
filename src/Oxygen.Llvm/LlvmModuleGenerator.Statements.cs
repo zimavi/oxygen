@@ -139,7 +139,8 @@ public sealed partial class LlvmModuleGenerator
                 }
                 // A stack object (or a value class) is destroyed at scope end. An object from `new` is not: its owner
                 // releases it with `delete`.
-                if (declaredType.IsClass && (IsValueClass(declaredType, model) || declaration.Initializer is ClassConstructionExpression
+                if (declaredType.IsClass && (IsValueClass(declaredType, model)
+                    || declaration.Initializer is ClassConstructionExpression stackObject && !model.ConstructionCalls.ContainsKey(stackObject)
                     || model.AutomaticallyFreedLocals.Contains(declaration)))
                 {
                     _ownedScopes.Peek().Add(new OwnedLocal(declaration, declaration.Name, declaredType));

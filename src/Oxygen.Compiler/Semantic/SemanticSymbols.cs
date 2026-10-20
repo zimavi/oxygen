@@ -178,8 +178,10 @@ public sealed class SemanticModel
         IReadOnlySet<DeleteStatement>? runtimeCheckedDeletes = null,
         IReadOnlyList<GlobalVariableSymbol>? globals = null,
         IReadOnlyDictionary<IdentifierExpression, GlobalVariableSymbol>? globalReferences = null,
-        IReadOnlySet<CallExpression>? baseCalls = null)
+        IReadOnlySet<CallExpression>? baseCalls = null,
+        IReadOnlyDictionary<ClassConstructionExpression, CallExpression>? constructionCalls = null)
     {
+        ConstructionCalls = constructionCalls ?? new Dictionary<ClassConstructionExpression, CallExpression>();
         BaseCalls = baseCalls ?? new HashSet<CallExpression>();
         Globals = globals ?? [];
         GlobalReferences = globalReferences ?? new Dictionary<IdentifierExpression, GlobalVariableSymbol>();
@@ -206,6 +208,9 @@ public sealed class SemanticModel
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
+
+    // The `Name(...)` expressions that call a function named Name, mapped to that call.
+    public IReadOnlyDictionary<ClassConstructionExpression, CallExpression> ConstructionCalls { get; }
 
     // The calls written as base.name(...), which are direct calls to the base class's method.
     public IReadOnlySet<CallExpression> BaseCalls { get; }

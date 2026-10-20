@@ -155,3 +155,49 @@ public sealed partial class SemanticAnalyzer
     }
 
 }
+
+// Stack objects. `T(...)` of a reference class builds its object in the current function, which destroys it when the function
+// returns. Such an object must not outlive that function, so it cannot be returned, stored in a field or assigned to a variable
+// of an outer scope. Use `new T(...)` for an object that must outlive its function.
+public sealed partial class SemanticAnalyzer
+{
+    // The locals whose initializer is a stack object.
+    private readonly HashSet<VariableDeclarationStatement> _stackObjectLocals = new(ReferenceEqualityComparer.Instance);
+
+    // Whether an expression is a stack object: `T(...)` of a reference class, or a local that holds one.
+    private bool IsStackObject(Expression expression, Scope scope) => expression switch
+    {
+        ClassConstructionExpression construction =>
+            _classesByName.TryGetValue(construction.TypeName, out var cls) && !cls.IsValue,
+        IdentifierExpression identifier =>
+            scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration
+            && _stackObjectLocals.Contains(declaration),
+        _ => false
+    };
+
+    private void RequireStackObjectNotReturned(Expression value, Scope scope)
+    {
+        if (IsStackObject(value, scope))
+            throw Error("A stack object cannot be returned, because it is destroyed when its function returns. " +
+                "Create it with new to return it", value.Location);
+    }
+
+    private void RequireStackObjectStaysInFunction(AssignmentStatement assignment, Scope scope)
+    {
+        if (!IsStackObject(assignment.Value, scope))
+            return;
+        if (assignment.Target is MemberAccessExpression)
+            throw Error("A stack object cannot be stored in a field, because the field outlives its function. " +
+                "Create it with new to store it", assignment.Value.Location);
+        if (assignment.Target is IdentifierExpression target)
+        {
+            // A variable of an outer scope outlives the block that holds the stack object.
+            var sourceDepth = assignment.Value is IdentifierExpression source
+                ? scope.LookupDepth(source.Name, source.Location)
+                : 0;
+            if (scope.LookupDepth(target.Name, target.Location) > sourceDepth)
+                throw Error("A stack object cannot be assigned to a variable of an outer scope, because it outlives its block. " +
+                    "Create it with new to keep it", assignment.Value.Location);
+        }
+    }
+}

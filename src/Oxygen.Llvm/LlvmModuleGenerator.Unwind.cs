@@ -161,7 +161,7 @@ public sealed partial class LlvmModuleGenerator
             ? model.ExpressionTypes[declaration.Initializer]
             : FromTypeSyntax(declaration.Type, model);
         return declaredType.IsClass && (IsValueClass(declaredType, model)
-            || declaration.Initializer is ClassConstructionExpression
+            || declaration.Initializer is ClassConstructionExpression stackObject && !model.ConstructionCalls.ContainsKey(stackObject)
             || model.AutomaticallyFreedLocals.Contains(declaration));
     }
 }

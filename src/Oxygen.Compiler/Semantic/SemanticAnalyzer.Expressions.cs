@@ -348,6 +348,15 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ImportDeclaration> imports, IDictionary<Expression, SemanticType> types,
         IDictionary<CallExpression, FunctionSymbol> calls)
     {
+        // `Name(...)` builds an object when Name is a class. When no class has that name but a function does, it is a call of
+        // that function, whatever the capitalization. The call is recorded against the expression and emitted in its place.
+        if (!_classesByName.ContainsKey(expression.TypeName)
+            && ResolveFunctions(expression.TypeName, moduleName, imports, functions).Any())
+        {
+            var call = new CallExpression(expression.TypeName, expression.Arguments, expression.Location, expression.TypeArguments);
+            _constructionCalls[expression] = call;
+            return AnalyzeCall(call, scope, functions, moduleName, imports, types, calls, null, false);
+        }
         if (!_classesByName.TryGetValue(expression.TypeName, out var cls))
             throw Error($"Class '{expression.TypeName}' is not declared", expression.Location);
         var arguments = expression.Arguments.Select(argument =>

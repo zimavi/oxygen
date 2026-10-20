@@ -1820,6 +1820,60 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ReturningAStackObjectIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { i32 v; } Box make() { return Box(); } i32 main() { return 0; }"));
+
+        Assert.Contains("A stack object cannot be returned", exception.Message);
+    }
+
+    [Fact]
+    public void ReturningAStackLocalIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { i32 v; } Box make() { Box b = Box(); return b; } i32 main() { return 0; }"));
+
+        Assert.Contains("A stack object cannot be returned", exception.Message);
+    }
+
+    [Fact]
+    public void StoringAStackObjectInAFieldIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { i32 v; } class Holder { Box b; } " +
+                "i32 main() { Holder h = new Holder(); Box local = Box(); h.b = local; return 0; }"));
+
+        Assert.Contains("A stack object cannot be stored in a field", exception.Message);
+    }
+
+    [Fact]
+    public void AssigningAStackObjectToAnOuterVariableIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("class Box { i32 v; } i32 main() { Box outer = new Box(); " +
+                "if (true) { Box inner = Box(); outer = inner; } return 0; }"));
+
+        Assert.Contains("A stack object cannot be assigned to a variable of an outer scope", exception.Message);
+    }
+
+    [Fact]
+    public void ReturningANewObjectIsAccepted()
+    {
+        var model = Analyze("class Box { i32 v; } Box make() { return new Box(); } i32 main() { return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void CapitalizedCallOfAFunctionIsACall()
+    {
+        var model = Analyze("i32 Make(i32 x) { return x + 1; } i32 main() { return Make(3); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
     public void PropertyCannotBeAddressed()
     {
         var exception = Assert.Throws<SemanticException>(() =>

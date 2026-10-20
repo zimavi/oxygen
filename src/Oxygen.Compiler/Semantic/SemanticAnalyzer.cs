@@ -139,6 +139,7 @@ public sealed partial class SemanticAnalyzer
         _usedFunctions.Clear();
         _declaredVariables.Clear();
         _escapingClassLocals.Clear();
+        _stackObjectLocals.Clear();
         _deletedLocals.Clear();
         _maybeDeletedLocals.Clear();
         _deletedAnywhere.Clear();
@@ -161,6 +162,7 @@ public sealed partial class SemanticAnalyzer
         _globalReferences.Clear();
         _globals.Clear();
         _baseCalls.Clear();
+        _constructionCalls.Clear();
         _functionContexts.Clear();
         _classContexts.Clear();
         _analyzedSpecializations.Clear();
@@ -692,7 +694,8 @@ public sealed partial class SemanticAnalyzer
             new HashSet<DeleteStatement>(_runtimeCheckedDeletes, ReferenceEqualityComparer.Instance),
             _globals.ToList(),
             new Dictionary<IdentifierExpression, GlobalVariableSymbol>(_globalReferences, ReferenceEqualityComparer.Instance),
-            new HashSet<CallExpression>(_baseCalls, ReferenceEqualityComparer.Instance));
+            new HashSet<CallExpression>(_baseCalls, ReferenceEqualityComparer.Instance),
+            new Dictionary<ClassConstructionExpression, CallExpression>(_constructionCalls, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

@@ -31,3 +31,18 @@ Use `@value class Type` when class values must be passed to functions and
 returned from functions by value. Value-class copies are shallow field-wise
 copies. Value classes are currently restricted to classes without inheritance,
 interfaces, or virtual/override methods.
+
+## Stack objects
+
+`T(...)` builds an object of a reference class on the stack of the current
+function, and `new T(...)` builds it on the heap. A stack object is destroyed when
+its function returns or its block ends, so it must not outlive that scope. The
+compiler rejects a stack object that is:
+
+- returned, directly or through a local that holds it;
+- stored in a field;
+- assigned to a variable of an outer scope.
+
+Use `new T(...)` for an object that must outlive its scope. `T(...)` names a
+class when a class has that name. When no class has the name but a function does,
+`T(...)` is a call of that function, whatever the capitalization.
