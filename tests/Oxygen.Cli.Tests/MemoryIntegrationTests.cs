@@ -30,7 +30,7 @@ public sealed class MemoryIntegrationTests : IDisposable
             }
             """);
 
-        Assert.NotEqual(0, run.ExitCode);
+        Assert.Equal(101, run.ExitCode);
         Assert.Contains("is too large", run.Error);
     }
 

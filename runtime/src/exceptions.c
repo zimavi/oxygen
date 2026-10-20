@@ -38,7 +38,7 @@ void __oxygen_runtime_trace_push(const char *function_name, const char *file_nam
         {
             fprintf(stderr, "Oxygen ran out of memory for the stack trace\n");
             fflush(stderr);
-            abort();
+            oxygen_runtime_abort();
         }
         oxygen_trace_frames = frames;
         oxygen_trace_capacity = capacity;
@@ -70,14 +70,14 @@ static void oxygen_capture_trace(void *object)
 {
     oxygen_exception_trace_record *record = calloc(1, sizeof(*record));
     if (record == NULL)
-        abort();
+        oxygen_runtime_abort();
     record->object = object;
     record->trace.count = oxygen_trace_depth;
     if (oxygen_trace_depth != 0)
     {
         record->frames = malloc(sizeof(*record->frames) * oxygen_trace_depth);
         if (record->frames == NULL)
-            abort();
+            oxygen_runtime_abort();
         memcpy(record->frames, oxygen_trace_frames,
             sizeof(*record->frames) * oxygen_trace_depth);
         record->trace.frames = record->frames;
@@ -132,7 +132,7 @@ void *__oxygen_runtime_exception_trace_frame(void *object, uint64_t index)
         fprintf(stderr, "Oxygen stack trace frame %llu is out of bounds for %llu frames\n",
             (unsigned long long)index, (unsigned long long)count);
         fflush(stderr);
-        abort();
+        oxygen_runtime_abort();
     }
     return (void *)&trace->frames[index];
 }
@@ -203,7 +203,7 @@ void __oxygen_runtime_continue_throw(void *object)
 #if !defined(_WIN32)
     void **payload = (void **)__cxa_allocate_exception(sizeof(void *));
     if (payload == NULL)
-        abort();
+        oxygen_runtime_abort();
     *payload = object;
     __cxa_throw(payload, &_ZTIv, NULL);
 #else
@@ -266,7 +266,7 @@ void __oxygen_runtime_rethrow(void)
     {
         fprintf(stderr, "Unhandled Exception\n");
         fflush(stderr);
-        abort();
+        oxygen_runtime_abort();
     }
 
     oxygen_in_flight_seh_object = oxygen_current_seh_object;

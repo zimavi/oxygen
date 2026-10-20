@@ -135,7 +135,7 @@ public sealed class ExceptionTraceIntegrationTests : IDisposable
             }
             """);
 
-        Assert.NotEqual(0, run.ExitCode);
+        Assert.Equal(101, run.ExitCode);
         Assert.Contains("Oxygen stack trace frame 9 is out of bounds for 1 frames", run.Error.Replace("\r\n", "\n"));
     }
 

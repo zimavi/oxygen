@@ -6,7 +6,7 @@
 static void oxygen_out_of_memory(void)
 {
     fprintf(stderr, "Oxygen out of memory\n");
-    abort();
+    oxygen_runtime_abort();
 }
 
 uint64_t oxygen_array_size(uint64_t count, uint64_t element_size)
@@ -15,7 +15,7 @@ uint64_t oxygen_array_size(uint64_t count, uint64_t element_size)
     {
         fprintf(stderr, "Oxygen array of %llu elements of %llu bytes is too large\n",
             (unsigned long long)count, (unsigned long long)element_size);
-        abort();
+        oxygen_runtime_abort();
     }
     return count * element_size;
 }

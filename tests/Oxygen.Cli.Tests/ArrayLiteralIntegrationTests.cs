@@ -79,7 +79,7 @@ public sealed class ArrayLiteralIntegrationTests : IDisposable
             }
             """);
 
-        Assert.NotEqual(0, run.ExitCode);
+        Assert.Equal(101, run.ExitCode);
         Assert.Contains("Oxygen array index 9 is out of bounds for length 3", run.Error + run.Output);
     }
 

@@ -66,6 +66,8 @@ typedef struct oxygen_runtime_type_info
 } oxygen_runtime_type_info;
 
 void __oxygen_runtime_initialize(void);
+/* Ends the program after a runtime failure with exit code 101. The caller writes the message first. */
+OXYGEN_RUNTIME_API _Noreturn void oxygen_runtime_abort(void);
 void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length);
 void __oxygen_runtime_string_bounds_failure(uint64_t index, uint64_t length);
 void __oxygen_runtime_enum_cast_failure(uint64_t value);

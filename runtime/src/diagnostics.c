@@ -2,12 +2,22 @@
 #include <stdlib.h>
 #include "oxygen_runtime.h"
 
+/* Ends the program after a runtime failure. Every failure that the runtime detects goes through here, so each one exits with the same
+ * code, 101. The message has already been written to stderr by the caller. abort() is not used: it exits with a different code on each
+ * platform, and it can open a dialog on Windows. */
+_Noreturn void oxygen_runtime_abort(void)
+{
+    fflush(stdout);
+    fflush(stderr);
+    _Exit(101);
+}
+
 void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length)
 {
     fprintf(stderr, "Oxygen array index %llu is out of bounds for length %llu\n",
         (unsigned long long)index, (unsigned long long)length);
     fflush(stderr);
-    abort();
+    oxygen_runtime_abort();
 }
 
 void __oxygen_runtime_string_bounds_failure(uint64_t index, uint64_t length)
@@ -15,7 +25,7 @@ void __oxygen_runtime_string_bounds_failure(uint64_t index, uint64_t length)
     fprintf(stderr, "Oxygen string index %llu is out of bounds for length %llu\n",
         (unsigned long long)index, (unsigned long long)length);
     fflush(stderr);
-    abort();
+    oxygen_runtime_abort();
 }
 
 void __oxygen_runtime_enum_cast_failure(uint64_t value)
@@ -23,7 +33,7 @@ void __oxygen_runtime_enum_cast_failure(uint64_t value)
     fprintf(stderr, "Oxygen value %llu is not a valid enum member\n",
         (unsigned long long)value);
     fflush(stderr);
-    abort();
+    oxygen_runtime_abort();
 }
 
 void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand)
@@ -45,7 +55,7 @@ void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand)
         break;
     }
     fflush(stderr);
-    abort();
+    oxygen_runtime_abort();
 }
 
 void __oxygen_runtime_invalid_cast(
@@ -56,5 +66,5 @@ void __oxygen_runtime_invalid_cast(
         source_type == NULL || source_type->name == NULL ? "unknown" : source_type->name,
         target_type == NULL || target_type->name == NULL ? "unknown" : target_type->name);
     fflush(stderr);
-    abort();
+    oxygen_runtime_abort();
 }

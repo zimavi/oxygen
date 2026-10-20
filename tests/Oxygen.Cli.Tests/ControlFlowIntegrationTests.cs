@@ -45,7 +45,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
 
         var run = BuildAndRun("i32 main() { i32 d = 0; return 10 / d; }");
 
-        Assert.NotEqual(0, run.ExitCode);
+        Assert.Equal(101, run.ExitCode);
         Assert.Contains("integer division by zero", run.Error);
     }
 
@@ -56,7 +56,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
 
         var run = BuildAndRun("i32 main() { i32 m = -2147483647 - 1; i32 d = -1; return m / d; }");
 
-        Assert.NotEqual(0, run.ExitCode);
+        Assert.Equal(101, run.ExitCode);
         Assert.Contains("signed integer division overflowed", run.Error);
     }
 
@@ -67,7 +67,7 @@ public sealed class ControlFlowIntegrationTests : IDisposable
 
         var run = BuildAndRun("i32 main() { i32 s = 40; return 1 << s; }");
 
-        Assert.NotEqual(0, run.ExitCode);
+        Assert.Equal(101, run.ExitCode);
         Assert.Contains("shift count 40 is out of range", run.Error);
     }
 
