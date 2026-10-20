@@ -1,5 +1,7 @@
 module std.collection;
 
+import std.exception;
+
 // The canonical optional value used by collection APIs.  Option is a tagged
 // union; callers should inspect it with a switch before using a Some payload.
 public union Option<T> {
@@ -23,6 +25,15 @@ public bool is_none<T>(Option<T> value) {
     return !is_some(value);
 }
 
+// Returns the value of a Some. A None throws a RuntimeException: taking the value of an absent option is a failure, not an
+// expected outcome, so the caller can catch it but does not have to check for it.
+public T unwrap<T>(Option<T> value) {
+    switch (value) {
+        case Some(item): return item;
+        case None: throw new RuntimeException("unwrap called on None");
+    }
+}
+
 public T unwrap_or<T>(Option<T> value, T fallback) {
     switch (value) {
         case Some(item): return item;
@@ -39,6 +50,14 @@ public bool is_ok<T, E>(Result<T, E> value) {
 
 public bool is_err<T, E>(Result<T, E> value) {
     return !is_ok(value);
+}
+
+// Returns the value of an Ok. An Err throws a RuntimeException, for the same reason as unwrap on an Option.
+public T unwrap<T, E>(Result<T, E> value) {
+    switch (value) {
+        case Ok(item): return item;
+        case Err(error): throw new RuntimeException("unwrap called on Err");
+    }
 }
 
 public T unwrap_or<T, E>(Result<T, E> value, T fallback) {

@@ -94,6 +94,80 @@ public sealed class CollectionIntegrationTests : IDisposable
         Assert.Equal("42\nfailed\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    [SkippableFact]
+    public void UnwrapReturnsTheValueOfASomeOrOkCase()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.collection;
+
+            i32 main() {
+                io.println(collection.unwrap(Option.Some(4)));
+                io.println(collection.unwrap(Result<i32, string>.Ok(7)));
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("4\n7\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void UnwrapOfAnAbsentValueThrowsARuntimeExceptionThatACatchHandles()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.collection;
+            import std.exception;
+
+            i32 main() {
+                Option<i32> none = Option.None();
+                Result<i32, string> bad = Result<i32, string>.Err("no");
+                try {
+                    io.println(collection.unwrap(none));
+                } catch (RuntimeException error) {
+                    io.println(error.message);
+                }
+                try {
+                    io.println(collection.unwrap(bad));
+                } catch (RuntimeException error) {
+                    io.println(error.message);
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("unwrap called on None\nunwrap called on Err\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void UnwrapOfANoneThatNothingCatchesEndsTheProgramWithItsMessage()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.collection;
+
+            i32 main() {
+                Option<i32> none = Option.None();
+                io.println(collection.unwrap(none));
+                return 0;
+            }
+            """);
+
+        Assert.NotEqual(0, run.ExitCode);
+        Assert.Contains("Unhandled RuntimeException: unwrap called on None", run.Error.Replace("\r\n", "\n"));
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }

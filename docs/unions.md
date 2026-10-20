@@ -34,7 +34,11 @@ reports other payload types. Generic instances take any payload type that their
 type arguments give.
 
 `std.collection` provides helpers for its two generic unions. For `Option<T>`:
-`is_some`, `is_none` and `unwrap_or`. For `Result<T, E>`: `is_ok`, `is_err` and
-`unwrap_or`. Each takes the union as its first argument, as in
-`collection.is_some(value)`. `unwrap` is not provided yet, because it needs a way
-to stop with a value of type `T` on the failure path.
+`is_some`, `is_none`, `unwrap` and `unwrap_or`. For `Result<T, E>`: `is_ok`,
+`is_err`, `unwrap` and `unwrap_or`. Each takes the union as its first argument,
+as in `collection.is_some(value)`.
+
+`unwrap` throws a `std.exception.RuntimeException` when the value is absent: a
+`None`, or an `Err`. Taking the value of an absent option is a failure rather
+than an expected outcome, so it is an exception that a `catch` can handle. Code
+that expects absence should use `is_some`, `is_ok` or `unwrap_or`.
