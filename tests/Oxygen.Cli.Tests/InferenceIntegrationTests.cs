@@ -64,7 +64,7 @@ public sealed class InferenceIntegrationTests : IDisposable
                 }
             }
 
-            Animal pick<T>(T first, T second) {
+            T pick<T>(T first, T second) {
                 return first;
             }
 

@@ -138,6 +138,11 @@ public sealed partial class SemanticAnalyzer
         // The null reference of a class or interface, which is a zero value of that type.
         if (value is NullLiteralExpression && IsReferenceType(target))
             return ConversionCost.Exact;
+        // A type parameter converts implicitly to each interface of its constraints, as a class does to an interface it implements.
+        if (actual.IsGenericParameter && target.IsInterface
+            && _typeParameterConstraints.TryGetValue(actual.GenericParameterName!, out var constraints)
+            && constraints.Contains(target.StructName!, StringComparer.Ordinal))
+            return new ConversionCost(1, 0, 0, 1);
         if (IsReferenceCast(actual, target, out var implicitConversion) && implicitConversion)
             return new ConversionCost(1, 0, 0, HierarchyDistance(actual.StructName!, target.StructName!));
         if (!target.IsNumeric || !actual.IsNumeric)

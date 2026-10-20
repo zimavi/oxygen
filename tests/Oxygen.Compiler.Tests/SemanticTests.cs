@@ -398,7 +398,7 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void ReportsErrorsThatOnlyOccurForAConcreteInstantiation()
+    public void ReportsOperatorsNoTypeArgumentSupportsAtTheGenericDeclaration()
     {
         var result = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics(
             [
@@ -409,10 +409,10 @@ public sealed class SemanticTests
             ],
             ["util.oxy", "main.oxy"]);
 
-        // The generic declarations are valid; only `negate<bool>` is not, and the error points at
-        // the generic's body in util.oxy rather than at the use in main.oxy.
+        // A generic body is checked once, with its type parameter opaque, so `-value` is rejected in util.oxy
+        // at the declaration, before any instantiation.
         var error = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
-        Assert.Contains("in instantiation 'util.negate<", error.Message);
+        Assert.Contains("requires a numeric operand", error.Message);
         Assert.Equal("util.oxy", error.SourceName);
     }
 
@@ -1028,11 +1028,83 @@ public sealed class SemanticTests
     public void InfersGenericReturnTypeFromExpectedType()
     {
         var model = Analyze(
-            "T make<T>() { return 0; } i32 main() { i32 result = make(); return result; }");
+            "union Option<T> { Some(T); None; } Option<T> none<T>() { return Option<T>.None; } " +
+            "i32 main() { Option<i32> result = none(); return 0; }");
 
+        // The call is specialized to the expected Option<i32>; a wrong binding would have failed the assignment.
         Assert.Contains(model.ResolvedCalls.Values, function =>
-            function.Name == "make"
-            && function.ReturnType == SemanticType.FromPrimitive(PrimitiveType.I32));
+            function.Name == "none" && function.IsSpecialized && function.ReturnType.IsUnion);
+    }
+
+    [Fact]
+    public void GenericBodyCallsMethodsAndPropertiesOfItsConstraint()
+    {
+        var model = Analyze(
+            """
+            interface Shape { i32 Area(); i32 Sides { get; } }
+            class Square : Shape {
+                public i32 Sides { get; }
+                public i32 Area() { return 4; }
+            }
+            i32 total<T : Shape>(T value) {
+                Shape shape = value;
+                return value.Area() + value.Sides + shape.Area();
+            }
+            i32 main() { return total(new Square()); }
+            """);
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsCallsThatTheConstraintDoesNotDeclareEvenWithoutInstantiation()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "interface Shape { i32 Area(); } i32 total<T : Shape>(T value) { return value.Nope(); } i32 main() { return 0; }"));
+
+        Assert.Contains("accepts a receiver of type T", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsConstraintNamingAnUndeclaredInterface()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 total<T : Missing>(T value) { return 0; } i32 main() { return 0; }"));
+
+        Assert.Contains("Interface 'Missing' is not declared", exception.Message);
+    }
+
+    [Fact]
+    public void GenericBodyUsesMembersOfEveryBoundOfATypeParameter()
+    {
+        var model = Analyze(
+            "interface A { i32 a(); } interface B { i32 b(); } " +
+            "class C : A, B { public i32 a() { return 1; } public i32 b() { return 2; } } " +
+            "i32 f<T : A & B>(T value) { return value.a() + value.b(); } i32 main() { return f(new C()); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void RejectsAMemberDeclaredByTwoBoundsOfOneTypeParameter()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "interface A { i32 same(); } interface B { i32 same(); } " +
+            "i32 f<T : A & B>(T value) { return value.same(); } i32 main() { return 0; }"));
+
+        Assert.Contains("declared by more than one constraint", exception.Message);
+    }
+
+    [Fact]
+    public void GenericClassMethodUsesItsConstraint()
+    {
+        var model = Analyze(
+            "interface Shape { i32 Area(); } " +
+            "class Square : Shape { public i32 Area() { return 4; } } " +
+            "class Box<T : Shape> { T item; Box(T item) { this.item = item; } i32 Twice() { return item.Area() * 2; } } " +
+            "i32 main() { Box<Square> box = new Box<Square>(new Square()); return box.Twice(); }");
+
+        Assert.NotNull(model);
     }
 
     [Fact]
@@ -3354,7 +3426,7 @@ public sealed class SemanticTests
         var result = AnalyzeWithDiagnostics(
             "class Animal { i32 legs; Animal(i32 legs) { this.legs = legs; } } " +
             "class Dog : Animal { Dog() : base(4) { } } class Cat : Animal { Cat() : base(4) { } } " +
-            "Animal pick<T>(T first, T second) { return first; } " +
+            "T pick<T>(T first, T second) { return first; } " +
             "i32 main() { Animal a = pick(new Dog(), new Cat()); return a.legs; }");
 
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
@@ -3366,7 +3438,7 @@ public sealed class SemanticTests
         var result = AnalyzeWithDiagnostics(
             "interface Shape { i32 sides(); } " +
             "class Circle : Shape { i32 sides() { return 0; } } class Square : Shape { i32 sides() { return 4; } } " +
-            "Shape pick<T>(T first, T second) { return first; } " +
+            "T pick<T>(T first, T second) { return first; } " +
             "i32 main() { Shape s = pick(new Circle(), new Square()); return s.sides(); }");
 
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);

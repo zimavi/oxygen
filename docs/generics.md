@@ -74,7 +74,33 @@ void show<T : Printable>(T value) {
 }
 ```
 
-Each instantiation is checked against the constraint. A type that does not
+A generic body is checked once, when it is declared, with each type parameter
+left opaque. Inside the body a type parameter has only the members of its
+constraints:
+
+- A method of a constraint interface can be called on a value of the type
+  parameter, and a property of a constraint interface can be read from it.
+- A value of the type parameter converts implicitly to each of its constraint
+  interfaces, as a class converts to an interface it implements.
+- Any other member, and any operator the type parameter does not define, is an
+  error, even if no instantiation would reach it.
+
+```oxygen
+interface Shape {
+    i32 area();
+}
+
+i32 total<T : Shape>(T value) {
+    Shape shape = value;        // T converts to its constraint
+    return value.area() + shape.area();
+}
+
+i32 broken<T : Shape>(T value) {
+    return value.perimeter();   // error at the declaration: T has no 'perimeter'
+}
+```
+
+Each instantiation is checked against the constraint too. A type that does not
 implement the interface is an error at the point of instantiation:
 
 ```text
@@ -83,9 +109,9 @@ main.oxy:4:5: error: Type 'Plain' does not satisfy the constraint 'Printable' of
 
 Primitive types and `string` implement `std.io.Printable` by a built-in rule,
 and classes implement the interfaces they declare, including interfaces
-inherited from base classes. Inside an instantiation the body is checked with
-the concrete type, so `value.write()` on an `i32` resolves to the `write`
-function for `i32`.
+inherited from base classes. Each instantiation is also checked with the
+concrete type, so `value.write()` on an `i32` resolves to the `write` function
+for `i32`.
 
 A method call on a primitive, string, or struct receiver names a free function
 whose first parameter has exactly the receiver's type. The receiver is not
@@ -105,7 +131,7 @@ declarations reach the backend.
 Declarations collected (generic and non-generic)
     |
     v
-Non-generic bodies type-checked
+Bodies type-checked, generic ones with opaque type parameters
     |
     v
 Instantiation worklist, until no new instantiation appears:
@@ -121,9 +147,10 @@ Instantiations lowered to concrete named declarations
 LLVM IR generation
 ```
 
-A generic declaration's body is type-checked once per instantiation, with its
-type parameters bound to concrete types. This matters because a body may use a
-generic type that appears nowhere in a signature:
+A generic declaration's body is checked once with its type parameters opaque
+(see [Constraints](#constraints)), and then once per instantiation, with its
+type parameters bound to concrete types. The instantiation check matters because
+a body may use a generic type that appears nowhere in a signature:
 
 ```oxygen
 class List<T> {
@@ -162,17 +189,19 @@ documented in `modules.md`.
 
 ## Diagnostics
 
-A generic declaration is checked once on its own, so errors that do not depend
-on the type arguments are reported against the generic declaration itself.
+A generic declaration is checked once on its own, with its type parameters
+opaque, so an error that no type argument could avoid is reported against the
+generic declaration itself. An operator that the type parameter does not support
+is one such error, whatever the type arguments are:
+
+```text
+util.oxy:1:51: error: The 'Minus' operator requires a numeric operand
+```
 
 An error that only arises for particular type arguments is reported when that
 instantiation is checked. The message names the instantiation and the location
 points into the generic declaration, which may be in a different file from the
-code that requested it:
-
-```text
-util.oxy:1:51: error: The 'Minus' operator requires a numeric operand (in instantiation 'util.negate<bool>')
-```
+code that requested it.
 
 Unused-declaration warnings are reported for the generic declaration only, not
 repeated for each instantiation.

@@ -8,6 +8,37 @@ namespace Oxygen.Compiler.Semantic;
 // Generics: substitution, inference and specialization of generic functions and classes.
 public sealed partial class SemanticAnalyzer
 {
+    // The constraint interfaces of each type parameter. Each constraint must name a declared interface.
+    private IReadOnlyDictionary<string, IReadOnlyList<string>> ConstraintsFor(IReadOnlyList<TypeParameterSyntax> parameters)
+    {
+        var constraints = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        foreach (var parameter in parameters)
+        {
+            foreach (var constraint in parameter.Constraints)
+                if (!_interfacesByName.ContainsKey(constraint))
+                    throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Interface '{constraint}' is not declared", parameter.Location, constraint.Length);
+            constraints[parameter.Name] = parameter.Constraints;
+        }
+        return constraints;
+    }
+
+    // The constraint interface of a type parameter that declares a member, or null when no constraint does. Two constraints
+    // that declare the same member would make a call ambiguous, so that is an error.
+    private InterfaceSymbol? ConstraintDeclaring(
+        SemanticType parameter,
+        string memberName,
+        SourceLocation location,
+        Func<InterfaceSymbol, bool> declares)
+    {
+        if (!_typeParameterConstraints.TryGetValue(parameter.GenericParameterName!, out var constraints))
+            return null;
+        var declaring = constraints.Select(name => _interfacesByName[name]).Where(declares).ToList();
+        if (declaring.Count > 1)
+            throw Error($"Member '{memberName}' is declared by more than one constraint of type parameter '{parameter}'",
+                location, memberName.Length);
+        return declaring.FirstOrDefault();
+    }
+
     private static FunctionSymbol SubstituteFunctionTypes(
         FunctionSymbol function,
         IReadOnlyDictionary<string, SemanticType> substitutions) =>

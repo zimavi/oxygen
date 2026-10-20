@@ -270,6 +270,11 @@ public sealed partial class SemanticAnalyzer
         _receiverUse = member.Target is IdentifierExpression;
         var targetType = AnalyzeExpression(member.Target, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
         _receiverUse = previousReceiver;
+        // A type parameter has the properties of its constraint interfaces, read through the interface that declares them.
+        if (targetType.IsGenericParameter
+            && ConstraintDeclaring(targetType, member.MemberName, member.Location,
+                constraint => constraint.DeclaredProperties.Any(property => property.Name == member.MemberName)) is { } declaringInterface)
+            targetType = SemanticType.Interface(declaringInterface.Name);
         // An array and a string have a read-only length, of type usize.
         if ((targetType.IsArray || targetType.Kind == SemanticTypeKind.String) && member.MemberName == "length")
             return SemanticType.FromPrimitive(PrimitiveType.USize);

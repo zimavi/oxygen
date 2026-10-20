@@ -348,6 +348,11 @@ public sealed partial class SemanticAnalyzer
         bool allowVoid = true)
     {
         _callReceiverTypes[call] = receiverType;
+        // A type parameter has the methods of its constraint interfaces, so a call on it is resolved as a call on that interface.
+        if (receiverType.IsGenericParameter
+            && ConstraintDeclaring(receiverType, methodName, call.Location,
+                constraint => constraint.Methods.Any(method => method.Name == methodName)) is { } declaringInterface)
+            receiverType = SemanticType.Interface(declaringInterface.Name);
         if (receiverType.IsClass && _classesByName.TryGetValue(receiverType.StructName!, out var receiverClass))
         {
             // A method's owner is the class named by the last segment of its module name.

@@ -110,6 +110,10 @@ public sealed partial class SemanticAnalyzer
     private IReadOnlyDictionary<string, SemanticType> _genericTypes =
         new Dictionary<string, SemanticType>(StringComparer.Ordinal);
 
+    // The constraint interfaces of the type parameters in scope while a generic body is analyzed, by parameter name.
+    private IReadOnlyDictionary<string, IReadOnlyList<string>> _typeParameterConstraints =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
     public SemanticAnalyzer(ILogger? logger = null)
     {
         _logger = logger ?? new LoggerConfiguration()
@@ -562,17 +566,29 @@ public sealed partial class SemanticAnalyzer
             var owner = _classesByName.Values.FirstOrDefault(cls =>
                 cls.Methods.Concat(cls.StaticMethods).Any(method => ReferenceEquals(method, symbol)));
             var previousGenericTypes = _genericTypes;
-            if (owner is not null)
-                _genericTypes = owner.DeclaredTypeParameters.ToDictionary(
-                    parameter => parameter,
-                    SemanticType.GenericParameter,
-                    StringComparer.Ordinal);
+            var previousConstraints = _typeParameterConstraints;
             try
             {
                 _sourceName = functionSources.GetValueOrDefault(symbol);
                 var module = functionModules[symbol];
-                if (!symbol.IsGeneric)
-                    AnalyzeFunction(symbol, functionsByName, module.Name, module.Imports, expressionTypes, resolvedCalls);
+                // A generic body is analyzed once, with its type parameters opaque: its members are those of its constraints.
+                if (owner is not null)
+                {
+                    _genericTypes = owner.DeclaredTypeParameters.ToDictionary(
+                        parameter => parameter,
+                        SemanticType.GenericParameter,
+                        StringComparer.Ordinal);
+                    _typeParameterConstraints = ConstraintsFor(owner.Declaration.DeclaredTypeParameters);
+                }
+                else if (symbol.IsGeneric)
+                {
+                    _genericTypes = symbol.Declaration.DeclaredTypeParameters.ToDictionary(
+                        parameter => parameter.Name,
+                        parameter => SemanticType.GenericParameter(parameter.Name),
+                        StringComparer.Ordinal);
+                    _typeParameterConstraints = ConstraintsFor(symbol.Declaration.DeclaredTypeParameters);
+                }
+                AnalyzeFunction(symbol, functionsByName, module.Name, module.Imports, expressionTypes, resolvedCalls);
             }
             catch (SemanticException exception) when (diagnostics is not null)
             {
@@ -589,6 +605,7 @@ public sealed partial class SemanticAnalyzer
             finally
             {
                 _genericTypes = previousGenericTypes;
+                _typeParameterConstraints = previousConstraints;
             }
         }
         for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
@@ -607,12 +624,14 @@ public sealed partial class SemanticAnalyzer
                 foreach (var constructor in classSymbol.Constructors)
                 {
                     var previousGenericTypes = _genericTypes;
+                    var previousConstraints = _typeParameterConstraints;
                     _genericTypes = classSymbol.DeclaredTypeParameters.ToDictionary(
                         parameter => parameter,
                         SemanticType.GenericParameter,
                         StringComparer.Ordinal);
                     try
                     {
+                        _typeParameterConstraints = ConstraintsFor(classSymbol.Declaration.DeclaredTypeParameters);
                         AnalyzeFunction(
                             CreateConstructorFunctionSymbol(moduleName, constructor),
                             functionsByName,
@@ -638,6 +657,7 @@ public sealed partial class SemanticAnalyzer
                     finally
                     {
                         _genericTypes = previousGenericTypes;
+                        _typeParameterConstraints = previousConstraints;
                     }
                 }
                 ValidateConstructorChains(classSymbol, diagnostics, sourceNames is not null && unitIndex < sourceNames.Count
