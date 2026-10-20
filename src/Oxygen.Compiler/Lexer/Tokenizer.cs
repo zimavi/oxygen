@@ -227,20 +227,20 @@ public sealed class Tokenizer
             }
         }
 
-        // An exponent makes a floating-point literal, as in 1e5 or 2.5E-3. An `e` that is not followed by digits is not one.
+        // An exponent makes a floating-point literal, as in 1e5 or 2.5E-3. An `e` with no digits after it is an error,
+        // not an identifier suffix, so the message names the missing digits.
         if (Peek(source, position) is 'e' or 'E')
         {
             var signed = Peek(source, position + 1) is '+' or '-';
-            if (char.IsDigit(Peek(source, signed ? position + 2 : position + 1)))
-            {
-                kind = TokenKind.FloatingPointLiteral;
+            if (!char.IsDigit(Peek(source, signed ? position + 2 : position + 1)))
+                throw LexicalException.WithCode(DiagnosticCode.ExponentDigits, "An exponent needs digits after 'e'", new SourceLocation(line, column));
+            kind = TokenKind.FloatingPointLiteral;
+            Advance(source[position], ref position, ref line, ref column);
+            if (signed)
                 Advance(source[position], ref position, ref line, ref column);
-                if (signed)
-                    Advance(source[position], ref position, ref line, ref column);
-                while (position < source.Length && char.IsDigit(source[position]))
-                {
-                    Advance(source[position], ref position, ref line, ref column);
-                }
+            while (position < source.Length && char.IsDigit(source[position]))
+            {
+                Advance(source[position], ref position, ref line, ref column);
             }
         }
 

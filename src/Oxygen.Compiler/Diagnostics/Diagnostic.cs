@@ -116,6 +116,8 @@ internal static class DiagnosticAdvice
             "Numeric literals must end before an identifier or another unsupported character begins, and a suffix must be a type suffix.",
         DiagnosticCode.RadixDigits =>
             "A hexadecimal or binary literal is a prefix followed by digits of that base.",
+        DiagnosticCode.ExponentDigits =>
+            "An exponent is an e, an optional sign, and at least one digit, so the value 1e5 means 1 times 10 to the power 5.",
         DiagnosticCode.UnterminatedString =>
             "The compiler reached the end of the line or file before finding the closing double quote.",
         DiagnosticCode.UnterminatedComment =>
@@ -150,6 +152,8 @@ internal static class DiagnosticAdvice
             "Separate the number from the following identifier with whitespace or an operator, and use a type suffix such as u8.",
         DiagnosticCode.RadixDigits =>
             "Write digits after the prefix: 0x1F for hexadecimal, or 0b101 for binary.",
+        DiagnosticCode.ExponentDigits =>
+            "Write digits after the e, such as 1e5, or remove the e.",
         DiagnosticCode.UnterminatedString =>
             "Add a closing \" before the end of the line, and escape embedded quotes when needed.",
         DiagnosticCode.UnterminatedComment =>

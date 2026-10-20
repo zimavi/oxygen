@@ -10,6 +10,7 @@ public static class DiagnosticCode
     public const string RadixDigits = "OX0004";
     public const string UnterminatedString = "OX0005";
     public const string UnterminatedComment = "OX0006";
+    public const string ExponentDigits = "OX0007";
 
     public const string ExpectedToken = "OX0100";
 

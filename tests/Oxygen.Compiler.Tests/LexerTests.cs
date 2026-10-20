@@ -1,5 +1,6 @@
 using System.Linq;
 using Oxygen.Compiler;
+using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
 using Serilog;
 using Xunit;
@@ -239,5 +240,17 @@ public sealed class LexerTests
     public void RadixLiteralWithoutDigitsIsRejected()
     {
         Assert.Throws<LexicalException>(() => _lexer.Tokenize("0x").ToList());
+    }
+
+    [Theory]
+    [InlineData("1e")]
+    [InlineData("1e+")]
+    [InlineData("2.5E-")]
+    public void ExponentWithoutDigitsIsRejectedWithItsOwnCode(string source)
+    {
+        var exception = Assert.Throws<LexicalException>(() => _lexer.Tokenize(source).ToList());
+
+        Assert.Equal("An exponent needs digits after 'e'", exception.Message);
+        Assert.Equal(DiagnosticCode.ExponentDigits, exception.Code);
     }
 }
