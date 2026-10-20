@@ -12,6 +12,42 @@ public union Result<T, E> {
     Err(E);
 }
 
+public bool is_some<T>(Option<T> value) {
+    switch (value) {
+        case Some(item): return true;
+        case None: return false;
+    }
+}
+
+public bool is_none<T>(Option<T> value) {
+    return !is_some(value);
+}
+
+public T unwrap_or<T>(Option<T> value, T fallback) {
+    switch (value) {
+        case Some(item): return item;
+        case None: return fallback;
+    }
+}
+
+public bool is_ok<T, E>(Result<T, E> value) {
+    switch (value) {
+        case Ok(item): return true;
+        case Err(error): return false;
+    }
+}
+
+public bool is_err<T, E>(Result<T, E> value) {
+    return !is_ok(value);
+}
+
+public T unwrap_or<T, E>(Result<T, E> value, T fallback) {
+    switch (value) {
+        case Ok(item): return item;
+        case Err(error): return fallback;
+    }
+}
+
 interface Iterator<T> {
 	Option<T> next();
 }
