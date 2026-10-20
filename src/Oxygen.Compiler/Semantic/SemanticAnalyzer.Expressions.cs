@@ -527,7 +527,14 @@ public sealed partial class SemanticAnalyzer
             }
             if (left.IsPointer && right.IsPointer
                 && expression.Operator is TokenKind.EqualsEquals or TokenKind.BangEquals)
+            {
+                // Pointers compare when they point to the same type, or when either is an opaque void pointer.
+                if (!SemanticTypeComparer.Instance.Equals(left.Pointee, right.Pointee)
+                    && !left.IsOpaquePointer && !right.IsOpaquePointer)
+                    throw Error($"Cannot compare {left} with {right}: the pointers point to different types",
+                        expression.Location);
                 return SemanticType.FromPrimitive(PrimitiveType.Bool);
+            }
             throw Error($"Operator '{expression.Operator}' is not valid for pointer operands", expression.Location);
         }
 

@@ -1840,6 +1840,15 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void PointersToDifferentTypesCannotBeCompared()
+    {
+        var exception = Assert.Throws<SemanticException>(() =>
+            Analyze("i32 main() { i32* p = null; i64* q = null; bool same = p == q; return 0; }"));
+
+        Assert.Contains("the pointers point to different types", exception.Message);
+    }
+
+    [Fact]
     public void EnumValuesOfOneEnumCompareForEquality()
     {
         var model = Analyze(
