@@ -1,4 +1,4 @@
-#include "oxygen_runtime.h"
+#include "oxygen_context.h"
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -21,24 +21,13 @@ static LONG CALLBACK oxygen_hardware_fault_handler(EXCEPTION_POINTERS *exception
 }
 #endif
 
-/* The process setup (the exit handler, the console, the hardware fault handler) belongs to the process, not to one program. A runtime that
- * is loaded as a shared library can start more than one program, so the setup runs once, however many programs start. A second start
- * would otherwise install the fault handler twice, and every fault would be reported twice. */
-static volatile long oxygen_process_setup_done;
-
-static int oxygen_claim_process_setup(void)
-{
-#if defined(_WIN32)
-    return InterlockedCompareExchange(&oxygen_process_setup_done, 1, 0) == 0;
-#else
-    return __sync_bool_compare_and_swap(&oxygen_process_setup_done, 0, 1);
-#endif
-}
-
+/* A program starts here, on the thread that runs it. The runtime is a shared library that can serve several programs, so the start keeps
+ * no state of its own: it creates the program's context, and the exit handler, the console settings and the fault handler are each
+ * program's own registrations. Their effects are idempotent, and the first fault handler to run stops the process, so a second start
+ * does not change what a fault does. */
 OXYGEN_RUNTIME_API void __oxygen_runtime_initialize(void)
 {
-    if (!oxygen_claim_process_setup())
-        return;
+    oxygen_context_begin();
     oxygen_io_initialize();
 #if defined(_WIN32)
     /* Oxygen strings are bytes. They are written unchanged: no newline becomes a carriage return and a line feed. */

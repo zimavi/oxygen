@@ -80,6 +80,13 @@ public sealed class RuntimeLibraryTests : IDisposable
         AssertCasePasses("trace-stack-grows-past-its-initial-capacity");
     }
 
+    // The runtime keeps no state of its own, so two programs on two threads of one process have separate traces.
+    [SkippableFact]
+    public void EachThreadSeesOnlyItsOwnTrace()
+    {
+        AssertCasePasses("each-thread-sees-only-its-own-trace");
+    }
+
     [SkippableFact]
     public void StandardOutputWritesEmbeddedZeroBytes()
     {
@@ -112,7 +119,7 @@ public sealed class RuntimeLibraryTests : IDisposable
         var executable = Path.Combine(_directory, "runtime_tests.exe");
         // The ELF runtime uses the Itanium exception functions, which the C++ runtime provides, and libm. The compiler links them
         // the same way for a program.
-        var elfLibraries = OperatingSystem.IsWindows() ? Array.Empty<string>() : new[] { "-lm", "-lstdc++" };
+        var elfLibraries = OperatingSystem.IsWindows() ? Array.Empty<string>() : new[] { "-lm", "-lstdc++", "-pthread" };
         var build = NativeProgram.RunProcess("clang",
             ["-I", Path.Combine(NativeProgram.RepositoryRoot, "runtime", "include"),
                 Path.Combine(NativeProgram.RepositoryRoot, "runtime", "tests", "runtime_tests.c"),

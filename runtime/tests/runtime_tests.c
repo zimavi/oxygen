@@ -6,6 +6,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 #include "oxygen_runtime.h"
 
 #define CHECK(condition)                                                              \
@@ -126,6 +132,66 @@ static int abort_delivers_buffered_stdout(void)
     oxygen_runtime_abort();
 }
 
+/* Two threads run two programs on one runtime. Each pushes its own number of trace frames and waits until the other has pushed its frames,
+ * so both depths are set when each thread checks its own. Shared state would show the sum of the two. */
+static atomic_int threads_pushed;
+static int thread_results[2];
+
+typedef struct worker
+{
+    int slot;
+    uint64_t frames;
+} worker;
+
+static void run_worker_frames(worker *work)
+{
+    __oxygen_runtime_initialize();
+    for (uint64_t index = 0; index < work->frames; index++)
+        __oxygen_runtime_trace_push("frame", "file.oxy", (uint32_t)index, 1);
+    atomic_fetch_add(&threads_pushed, 1);
+    while (atomic_load(&threads_pushed) < 2)
+        ;
+    thread_results[work->slot] = __oxygen_runtime_trace_depth() == work->frames;
+}
+
+#if defined(_WIN32)
+static DWORD WINAPI worker_main(LPVOID argument)
+{
+    run_worker_frames((worker *)argument);
+    return 0;
+}
+#else
+static void *worker_main(void *argument)
+{
+    run_worker_frames((worker *)argument);
+    return NULL;
+}
+#endif
+
+static int each_thread_sees_only_its_own_trace(void)
+{
+    worker first = {0, 3};
+    worker second = {1, 7};
+#if defined(_WIN32)
+    HANDLE threads[2];
+    threads[0] = CreateThread(NULL, 0, worker_main, &first, 0, NULL);
+    threads[1] = CreateThread(NULL, 0, worker_main, &second, 0, NULL);
+    CHECK(threads[0] != NULL && threads[1] != NULL);
+    WaitForMultipleObjects(2, threads, TRUE, INFINITE);
+    CloseHandle(threads[0]);
+    CloseHandle(threads[1]);
+#else
+    pthread_t threads[2];
+    CHECK(pthread_create(&threads[0], NULL, worker_main, &first) == 0);
+    CHECK(pthread_create(&threads[1], NULL, worker_main, &second) == 0);
+    CHECK(pthread_join(threads[0], NULL) == 0);
+    CHECK(pthread_join(threads[1], NULL) == 0);
+#endif
+    CHECK(thread_results[0] == 1);
+    CHECK(thread_results[1] == 1);
+    return 0;
+}
+
 typedef struct test_case
 {
     const char *name;
@@ -145,6 +211,7 @@ static const test_case cases[] = {
     {"trace-stack-grows-past-its-initial-capacity", trace_stack_grows_past_its_initial_capacity},
     {"write-stdout-writes-embedded-zero-bytes", write_stdout_writes_embedded_zero_bytes},
     {"abort-delivers-buffered-stdout", abort_delivers_buffered_stdout},
+    {"each-thread-sees-only-its-own-trace", each_thread_sees_only_its_own_trace},
 };
 
 int main(int argc, char **argv)

@@ -110,10 +110,18 @@ SONAME `liboxygenrt.so`. A program linked with `--runtime .../liboxygenrt.so`
 needs that directory on the library path when it runs. The Linux build and tests
 were run on Ubuntu 24.04 under WSL.
 
-Process setup (the exit handler, the console code page and the hardware fault
-handler) runs once per process, so a second program started in the same process
-does not install the handlers again. The runtime keeps no other file-scope state:
-trace frames, exception records and the in-flight exception are thread-local.
+The runtime is a shared library that can serve several programs at once, so it
+keeps no state of its own. Each program's state (its trace stack, the traces of
+the exceptions it handles, and the exception objects in flight) lives in a
+context (`runtime/src/oxygen_context.h`). The thread that starts a program
+creates the context at its first runtime call, and the context is freed when the
+process exits. Two programs on two threads never see each other's trace or
+exception. `runtime_tests` checks this with two threads, and it fails when the
+context is a process-wide variable.
+
+The start of each program also registers its exit flush, the console code page
+and the Windows hardware fault handler. Those are process resources, not runtime
+state, and repeating them is harmless: the first fault handler stops the process.
 
 Pass a triple to build another target: `-Target` for `build.ps1`, or the triple as
 an argument for `build.sh`. The compiler's `--target` selects the archive that
