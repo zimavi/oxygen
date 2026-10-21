@@ -26,8 +26,8 @@ jobs:
         shell: pwsh
         run: |
           ./runtime/build.ps1
-          if (-not (Test-Path runtime/build/windows/liboxygenrt.a)) {
-            throw "runtime/build/windows/liboxygenrt.a was not produced."
+          if (-not (Test-Path runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a)) {
+            throw "runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a was not produced."
           }
 
       - name: Build solution
