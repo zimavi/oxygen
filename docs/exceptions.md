@@ -86,10 +86,10 @@ code is generated. Compiler diagnostics are structured reports for invalid
 source, malformed native metadata, unsupported backend inputs, and native
 tool failures; see [Compiler diagnostics](diagnostics.md).
 
-On Windows targets produced by LLVM/Clang, exception propagation uses native
-SEH funclets (`catchswitch`, `catchpad`, and `cleanuppad`). The runtime bridges
+For the `x86_64-pc-windows-msvc` target, exception propagation uses native SEH
+funclets (`catchswitch`, `catchpad`, and `cleanuppad`). The runtime bridges
 Oxygen object pointers through a private SEH exception code while preserving the
-version 1 Oxygen exception ABI. POSIX/Itanium targets continue to use the
-existing landing-pad implementation. MinGW/Itanium Windows targets are not
-covered by the native SEH lowering and must not be treated as equivalent to
-MSVC-compatible Windows COFF targets.
+version 1 Oxygen exception ABI. The `x86_64-unknown-linux-gnu` target uses the
+existing landing-pad implementation. The exception model follows from the target
+triple, which `--target` sets. Other triples, including MinGW Windows, are not
+supported targets.

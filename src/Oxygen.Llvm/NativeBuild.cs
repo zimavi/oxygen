@@ -17,6 +17,8 @@ public sealed record NativeBuildOptions
     public string? MetadataPath { get; init; }
     public string CompilerPath { get; init; } = "clang";
     public string OptimizationLevel { get; init; } = "O2";
+    // The target triple passed to clang for both compiling and linking. Null leaves clang to the host.
+    public string? Target { get; init; }
     public int Jobs { get; init; } = 1;
     public bool GenerateDebugSymbols { get; init; }
     public string? WorkingDirectory { get; init; }
@@ -211,6 +213,8 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
                 "Jobs must be greater than zero.");
 
         var arguments = new List<string> { $"-{options.OptimizationLevel}" };
+        if (!string.IsNullOrWhiteSpace(options.Target))
+            arguments.Add($"--target={options.Target}");
         if (options.GenerateDebugSymbols)
             arguments.Add("-g");
         if (options.Jobs > 1)

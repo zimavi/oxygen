@@ -10,6 +10,14 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
+    // The target of the module. It is the host's target unless one is given.
+    private readonly OxygenTarget _target;
+
+    public LlvmModuleGenerator(OxygenTarget? target = null)
+    {
+        _target = target ?? OxygenTarget.Host;
+    }
+
     private LLVMValueRef _arrayBoundsFailure;
     private LLVMValueRef _stringBoundsFailure;
     private LLVMValueRef _enumCastFailure;
@@ -73,11 +81,11 @@ public sealed partial class LlvmModuleGenerator
         var context = LLVMContextRef.Create();
         _context = context;
         var module = context.CreateModuleWithName(moduleName);
-        // Set explicitly: LLVM's default layout gives i64 a 4-byte ABI alignment, which the x86-64 ABIs that the runtime
-        // is built for do not. Struct sizes, offsets and sizeof all follow from this layout.
-        module.DataLayout = OperatingSystem.IsWindows()
-            ? "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-            : "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128";
+        // The triple selects the object format and the calling conventions, and the data layout is set explicitly: LLVM's default
+        // layout gives i64 a 4-byte ABI alignment, which the x86-64 ABIs that the runtime is built for do not. Struct sizes,
+        // offsets and sizeof all follow from this layout.
+        module.Target = _target.Triple;
+        module.DataLayout = _target.DataLayout;
         _module = module;
         _exceptionPointer = default;
         var builder = context.CreateBuilder();
@@ -107,7 +115,7 @@ public sealed partial class LlvmModuleGenerator
             // Null-reference checks can raise NullReferenceException from any class member access, and std.exception is always
             // loaded, so every module needs the exception runtime.
             _usesExceptions = true;
-            _usesWindowsSeh = _usesExceptions && IsWindowsNativeSehTarget();
+            _usesWindowsSeh = _usesExceptions && _target.UsesSeh;
 
             _classTypes.Clear();
             _dropFlags.Clear();
@@ -270,6 +278,7 @@ public sealed partial class LlvmModuleGenerator
             var metadata = new NativeModuleMetadata
             {
                 ModuleName = moduleName,
+                TargetTriple = _target.Triple,
                 EntryPoint = "main",
                 Functions = symbols.Select(symbol => new NativeFunctionMetadata
                 {
@@ -315,11 +324,6 @@ public sealed partial class LlvmModuleGenerator
             return context.CreateEnumAttribute(
                 LLVM.GetEnumAttributeKindForName((sbyte*)pointer, (nuint)name.Length), 0);
     }
-
-    private static bool IsWindowsNativeSehTarget() =>
-        OperatingSystem.IsWindows()
-        && !RuntimeInformation.RuntimeIdentifier.Contains("mingw", StringComparison.OrdinalIgnoreCase)
-        && !RuntimeInformation.OSDescription.Contains("mingw", StringComparison.OrdinalIgnoreCase);
 
     private static string ConstructorKey(ClassSymbol cls, ConstructorSymbol ctor) =>
             cls.QualifiedName + "(" + string.Join(",", ctor.Parameters.Select(p => OxygenNameMangler.EncodeType(p.Type))) + ")";

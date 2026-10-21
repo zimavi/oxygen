@@ -95,6 +95,7 @@ Useful CLI options include:
 - `--warnings-as-errors` — treat semantic warnings as errors
 - `--optimization`, `-O` — optimization level passed to native code generation
 - `--jobs`, `-j` — backend worker count / ThinLTO parallelism
+- `--target` — target triple, `x86_64-pc-windows-msvc` or `x86_64-unknown-linux-gnu`; defaults to the host. The runtime archive must be built for the same target
 
 Source imports are resolved from the directories containing the supplied source
 files. The compiler also automatically discovers a `stdlib/` directory in an

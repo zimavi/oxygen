@@ -72,6 +72,11 @@ var standardLibraryOption = new Option<FileInfo[]>("--stdlib")
     Description = "Optional dynamic standard-library dependency",
     Arity = ArgumentArity.ZeroOrMore
 };
+var targetOption = new Option<string?>("--target")
+{
+    Description = "Target triple: x86_64-pc-windows-msvc or x86_64-unknown-linux-gnu. Defaults to the host platform. " +
+        "The runtime library passed with --runtime must be built for the same target"
+};
 var buildCommand = new Command("build", "Build the project")
 {
     sourcesArgument,
@@ -85,7 +90,8 @@ var buildCommand = new Command("build", "Build the project")
     optimizationOption,
     jobsOption,
     runtimeOption,
-    standardLibraryOption
+    standardLibraryOption,
+    targetOption
 };
 // Exit codes: 0 on success, 1 when the program could not be compiled (errors in the source, unreadable
 // inputs, or a failing native toolchain), 2 when the compiler itself failed on valid source.
@@ -113,6 +119,24 @@ int RunBuild(System.CommandLine.ParseResult result)
 
     var formatter = new DiagnosticFormatter();
     var useColor = !Console.IsErrorRedirected;
+    // An unsupported target is reported before the sources are analyzed, since no code can be generated for it.
+    OxygenTarget target;
+    try
+    {
+        var triple = result.GetValue(targetOption);
+        target = triple is null ? OxygenTarget.Host : OxygenTarget.Parse(triple);
+    }
+    catch (Exception exception) when (exception is ArgumentException or PlatformNotSupportedException)
+    {
+        var targetDiagnostics = new DiagnosticBag();
+        targetDiagnostics.Add(
+            DiagnosticPhase.Toolchain,
+            DiagnosticSeverity.Error,
+            exception.Message,
+            new SourceLocation(1, 1));
+        DisplayDiagnostics(targetDiagnostics.Diagnostics, rootSources, formatter, useColor);
+        return ExitCodes.CompilationFailed;
+    }
     if (inputDiagnostics.HasErrors)
     {
         DisplayDiagnostics(inputDiagnostics.Diagnostics, rootSources, formatter, useColor);
@@ -177,7 +201,7 @@ int RunBuild(System.CommandLine.ParseResult result)
     GeneratedLlvmModule generated;
     try
     {
-        generated = new LlvmModuleGenerator().Generate("program", semanticResult.Model!);
+        generated = new LlvmModuleGenerator(target).Generate("program", semanticResult.Model!);
     }
     catch (LlvmVerificationException exception)
     {
@@ -232,6 +256,7 @@ int RunBuild(System.CommandLine.ParseResult result)
             {
                 CompilerPath = result.GetValue(clangOption) ?? "clang",
                 OptimizationLevel = NormalizeOptimizationLevel(result.GetValue(optimizationOption) ?? "O2"),
+                Target = target.Triple,
                 Jobs = result.GetValue(jobsOption),
                 GenerateDebugSymbols = result.GetValue(debugOption),
                 OutputPath = result.GetValue(outputOption)?.FullName ?? "program",

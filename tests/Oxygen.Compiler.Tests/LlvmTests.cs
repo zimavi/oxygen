@@ -1070,6 +1070,46 @@ public sealed class LlvmTests
         "class RuntimeException : Exception { public RuntimeException(string message) : base(message) {} } " +
         "class NullReferenceException : RuntimeException { public NullReferenceException(string message) : base(message) {} } ";
 
+    [Fact]
+    public void TheTargetSetsTheModuleTripleAndDataLayout()
+    {
+        var model = Analyze("i32 main() { return 0; }");
+
+        using var windows = new LlvmModuleGenerator(OxygenTarget.WindowsMsvcX64).Generate("program", model);
+        using var linux = new LlvmModuleGenerator(OxygenTarget.LinuxGnuX64).Generate("program", model);
+
+        var windowsIr = windows.ToString();
+        Assert.Contains("target triple = \"x86_64-pc-windows-msvc\"", windowsIr);
+        Assert.Contains("target datalayout = \"e-m:w-", windowsIr);
+        var linuxIr = linux.ToString();
+        Assert.Contains("target triple = \"x86_64-unknown-linux-gnu\"", linuxIr);
+        Assert.Contains("target datalayout = \"e-m:e-", linuxIr);
+    }
+
+    [Fact]
+    public void TheTriplePicksTheExceptionLowering()
+    {
+        // A try statement is lowered with the exception model of the target, whatever platform the compiler runs on.
+        var model = Analyze("i32 main() { try { return 1; } catch { return 0; } }");
+
+        using var windows = new LlvmModuleGenerator(OxygenTarget.WindowsMsvcX64).Generate("program", model);
+        using var linux = new LlvmModuleGenerator(OxygenTarget.LinuxGnuX64).Generate("program", model);
+
+        Assert.Contains("catchswitch", windows.ToString());
+        Assert.DoesNotContain("catchswitch", linux.ToString());
+        Assert.Contains("landingpad", linux.ToString());
+    }
+
+    [Fact]
+    public void ParseAcceptsOnlyTheSupportedTriples()
+    {
+        Assert.Same(OxygenTarget.WindowsMsvcX64, OxygenTarget.Parse("x86_64-pc-windows-msvc"));
+        Assert.Same(OxygenTarget.LinuxGnuX64, OxygenTarget.Parse("x86_64-unknown-linux-gnu"));
+
+        var exception = Assert.Throws<ArgumentException>(() => OxygenTarget.Parse("x86_64-w64-windows-gnu"));
+        Assert.Contains("Supported targets are: x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu", exception.Message);
+    }
+
     private static SemanticModel Analyze(string source)
     {
         var tokenizer = new Tokenizer(Log.Logger);
