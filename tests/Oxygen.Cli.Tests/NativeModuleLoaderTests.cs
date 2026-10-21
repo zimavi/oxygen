@@ -1,4 +1,5 @@
 using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Lexer;
 using Oxygen.Compiler.Semantic;
 using Oxygen.Llvm;
 using Xunit;
@@ -115,16 +116,21 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.Null(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
     }
 
-    // Types and sources are read and checked, but the loader does not use them yet, so it reports them rather than dropping them.
+    // Types and generics are read and checked, but the loader does not use them yet, so it reports them rather than dropping them.
     [Fact]
-    public void TypesAndSourcesAreNotImportedYetAndTheLibrarySaysSo()
+    public void TypesAndGenericsAreNotImportedYetAndTheLibrarySaysSo()
     {
         var library = Path.Combine(_directory, "lib.a");
         File.WriteAllBytes(library, [1, 2, 3, 4]);
+        var at = new SourceLocation(1, 1);
+        var box = new StructDeclaration("Box", [], Visibility.Public, at,
+            TypeParameters: [new TypeParameterSyntax("T", at)]);
+        var generic = NativeGenericMetadata.Create(
+            new CompilationUnit("lib", Visibility.Public, [], [], at) { Structs = [box] }, "lib.oxy");
         var metadata = Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple, [Function("add", "i32")]) with
         {
             Types = [new NativeTypeMetadata { Kind = NativeTypeKind.Struct, ModuleName = "lib", Name = "Point" }],
-            Sources = [NativeSourceMetadata.Create("lib", "lib.oxy", "i32 add() { return 1; }")]
+            Generics = [generic]
         };
         NativeModuleMetadataSerializer.Embed(library, metadata);
 
@@ -133,7 +139,7 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.NotNull(loaded);
         Assert.Equal("add", Assert.Single(loaded.Module.Functions).Name);
         Assert.Contains(loaded.Warnings, warning => warning.Contains("declares 1 type(s)"));
-        Assert.Contains(loaded.Warnings, warning => warning.Contains("Oxygen source"));
+        Assert.Contains(loaded.Warnings, warning => warning.Contains("generic syntax of 1 unit(s)"));
     }
 
     private static NativeModuleMetadata Metadata(string moduleName, string triple, NativeFunctionMetadata[] functions) => new()

@@ -2,7 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Lexer;
+using Oxygen.Compiler.Parsing;
 using Oxygen.Llvm;
+using Serilog;
 using Xunit;
 
 namespace Oxygen.Compiler.Tests;
@@ -14,7 +18,7 @@ public sealed class NativeModuleMetadataFormatTests
     private const string Triple = "x86_64-pc-windows-msvc";
 
     [Fact]
-    public void TypesAndSourcesRoundTripWithTheirOrderNormalized()
+    public void TypesAndGenericsRoundTripWithTheirOrderNormalized()
     {
         var metadata = Module(
             Class("Zeta", size: 8, alignment: 8),
@@ -23,7 +27,7 @@ public sealed class NativeModuleMetadataFormatTests
                 methods: [Method("_b", "length"), Method("_a", "scale")]))
             with
             {
-                Sources = [NativeSourceMetadata.Create("lib", "lib.oxy", "i32 answer() { return 42; }")]
+                Generics = [Generic("lib", "lib.oxy", "struct Box<T> { T item; } i32 plain() { return 0; }")]
             };
 
         var text = NativeModuleMetadataSerializer.Serialize(metadata);
@@ -34,27 +38,99 @@ public sealed class NativeModuleMetadataFormatTests
         var point = read.Types[0];
         Assert.Equal(["y", "x"], point.Fields.Select(field => field.Name));
         Assert.Equal(["_a", "_b"], point.Methods.Select(method => method.NativeName));
-        Assert.Equal("i32 answer() { return 42; }", read.Sources.Single().Text);
+        var generic = Assert.Single(read.Generics);
+        Assert.Equal("lib.oxy", generic.SourceName);
+        var unit = SyntaxTreeCodec.Read(generic.Syntax).Unit;
+        Assert.Equal(["Box"], unit.Structs.Select(structure => structure.Name));
+        Assert.Empty(unit.Functions);
     }
 
     [Fact]
-    public void AVersionTwoDocumentIsReadWithoutTypesOrSources()
+    public void AVersionTwoDocumentIsReadWithoutTypesOrGenerics()
     {
         var metadata = NativeModuleMetadataSerializer.Deserialize(
             """{"formatVersion":2,"moduleName":"lib","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}""");
 
         Assert.Empty(metadata.Types);
-        Assert.Empty(metadata.Sources);
+        Assert.Empty(metadata.Generics);
     }
 
     [Fact]
-    public void AVersionTwoDocumentCannotCarryTypesOrSources()
+    public void AVersionTwoDocumentCannotCarryTypesOrGenerics()
     {
         var metadata = Module(Struct("Point")) with { FormatVersion = NativeModuleMetadata.PreviousFormatVersion };
 
         var exception = Assert.Throws<InvalidDataException>(() => NativeModuleMetadataSerializer.Serialize(metadata));
 
-        Assert.Contains("cannot contain types or sources", exception.Message);
+        Assert.Contains("cannot contain types or generics", exception.Message);
+    }
+
+    [Fact]
+    public void DamagedGenericSyntaxIsRejectedWithItsSource()
+    {
+        var metadata = Module() with
+        {
+            Generics = [new NativeGenericMetadata { ModuleName = "lib", SourceName = "lib.oxy", Syntax = [1, 2, 3] }]
+        };
+
+        var exception = Assert.Throws<InvalidDataException>(() => NativeModuleMetadataSerializer.Serialize(metadata));
+
+        Assert.Contains("'lib.oxy' is damaged", exception.Message);
+    }
+
+    [Fact]
+    public void GenericSyntaxWithANonGenericDeclarationIsRejected()
+    {
+        // The whole parsed unit is not generic, so it is not a generic unit.
+        var unit = Parse("module lib; i32 plain() { return 0; } struct Box<T> { T item; }");
+        var metadata = Module() with
+        {
+            Generics = [new NativeGenericMetadata
+            {
+                ModuleName = "lib",
+                SourceName = "lib.oxy",
+                Syntax = SyntaxTreeCodec.Write(unit, "lib.oxy")
+            }]
+        };
+
+        var exception = Assert.Throws<InvalidDataException>(() => NativeModuleMetadataSerializer.Serialize(metadata));
+
+        Assert.Contains("contains a declaration that is not generic", exception.Message);
+    }
+
+    [Fact]
+    public void GenericSyntaxMustNameTheModuleItBelongsTo()
+    {
+        // The entry says module lib, and the tree it carries declares module other.
+        var unit = Parse("struct Box<T> { T item; }") with { ModuleName = "other" };
+        var metadata = Module() with
+        {
+            Generics = [new NativeGenericMetadata
+            {
+                ModuleName = "lib",
+                SourceName = "lib.oxy",
+                Syntax = SyntaxTreeCodec.Write(unit, "lib.oxy")
+            }]
+        };
+
+        var exception = Assert.Throws<InvalidDataException>(() => NativeModuleMetadataSerializer.Serialize(metadata));
+
+        Assert.Contains("does not match the module and source", exception.Message);
+    }
+
+    private static CompilationUnit Parse(string source)
+    {
+        var tokens = new Tokenizer(Log.Logger).Tokenize(source);
+        var result = new Parser(tokens, Log.Logger).ParseWithDiagnostics("lib.oxy");
+        Assert.Empty(result.Diagnostics);
+        return result.Unit;
+    }
+
+    // The generic entry for a module that a source declares, as a library build writes it.
+    private static NativeGenericMetadata Generic(string moduleName, string sourceName, string source)
+    {
+        var unit = Parse(source) with { ModuleName = moduleName };
+        return NativeGenericMetadata.Create(unit, sourceName);
     }
 
     [Fact]
@@ -144,20 +220,6 @@ public sealed class NativeModuleMetadataFormatTests
         var exception = Assert.Throws<InvalidDataException>(() => NativeModuleMetadataSerializer.Serialize(metadata));
 
         Assert.Contains("more than once", exception.Message);
-    }
-
-    [Fact]
-    public void ASourceChangedAfterItWasHashedIsRejected()
-    {
-        var metadata = Module() with
-        {
-            Sources = [NativeSourceMetadata.Create("lib", "lib.oxy", "i32 answer() { return 42; }")]
-        };
-        var text = NativeModuleMetadataSerializer.Serialize(metadata).Replace("return 42", "return 43");
-
-        var exception = Assert.Throws<InvalidDataException>(() => NativeModuleMetadataSerializer.Deserialize(text));
-
-        Assert.Contains("does not match its hash", exception.Message);
     }
 
     private static NativeModuleMetadata Module(params NativeTypeMetadata[] types) => new()

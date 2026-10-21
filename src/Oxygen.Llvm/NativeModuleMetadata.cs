@@ -1,13 +1,14 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Oxygen.Compiler.Ast;
 
 namespace Oxygen.Llvm;
 
 public sealed record NativeModuleMetadata
 {
     // Version 2 names symbols with version 1 of the mangling scheme (_Ox_v1_, see docs/mangling.md). Version 1 metadata names
-    // symbols that this compiler does not produce, so it is rejected. Version 3 adds the types and the sources of the module.
+    // symbols that this compiler does not produce, so it is rejected. Version 3 adds the types and the generics of the module.
     // Version 2 documents have neither, so they are read as having none.
     public const int CurrentFormatVersion = 3;
     public const int PreviousFormatVersion = 2;
@@ -22,8 +23,8 @@ public sealed record NativeModuleMetadata
     public IReadOnlyList<NativeDependencyMetadata> Dependencies { get; init; } = [];
     // Version 3: the types that an importing program can use. Only the declarations are here; their code is in the module.
     public IReadOnlyList<NativeTypeMetadata> Types { get; init; } = [];
-    // Version 3: the Oxygen source of the module, which an importing program needs to instantiate generic types and functions.
-    public IReadOnlyList<NativeSourceMetadata> Sources { get; init; } = [];
+    // Version 3: the generic declarations of the module, in the binary syntax form, which an importing program instantiates.
+    public IReadOnlyList<NativeGenericMetadata> Generics { get; init; } = [];
 }
 
 public sealed record NativeFunctionMetadata
@@ -96,22 +97,29 @@ public sealed record NativeMethodMetadata
     public IReadOnlyList<string> ParameterTypes { get; init; } = [];
 }
 
-// The Oxygen source of a module, with its SHA-256 hash, so that a reader can tell a source that was changed after the library was built.
-public sealed record NativeSourceMetadata
+// The generic declarations of a module: a unit in the binary form of SyntaxTreeCodec, which holds only generic declarations,
+// its imports and its module header. The form has no source text, comments or formatting.
+public sealed record NativeGenericMetadata
 {
     public required string ModuleName { get; init; }
-    public required string Path { get; init; }
-    public required string Text { get; init; }
-    // The hash of the UTF-8 bytes of Text, as lowercase hexadecimal.
-    public required string Sha256 { get; init; }
+    // The name of the source the declarations were parsed from, which a diagnostic for them shows.
+    public required string SourceName { get; init; }
+    public required byte[] Syntax { get; init; }
 
-    public static NativeSourceMetadata Create(string moduleName, string path, string text) => new()
+    // The generic declarations of a parsed unit, with the unit's module name. The unit must have a module header.
+    public static NativeGenericMetadata Create(CompilationUnit unit, string sourceName)
     {
-        ModuleName = moduleName,
-        Path = path,
-        Text = text,
-        Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()
-    };
+        ArgumentNullException.ThrowIfNull(unit);
+        if (unit.ModuleName is null)
+            throw new ArgumentException("A generic unit must declare its module.", nameof(unit));
+        var generic = GenericSyntax.Extract(unit);
+        return new NativeGenericMetadata
+        {
+            ModuleName = unit.ModuleName,
+            SourceName = sourceName,
+            Syntax = SyntaxTreeCodec.Write(generic, sourceName)
+        };
+    }
 }
 
 [JsonSourceGenerationOptions(
@@ -125,7 +133,7 @@ public sealed record NativeSourceMetadata
 [JsonSerializable(typeof(NativeFieldMetadata))]
 [JsonSerializable(typeof(NativeEnumCaseMetadata))]
 [JsonSerializable(typeof(NativeMethodMetadata))]
-[JsonSerializable(typeof(NativeSourceMetadata))]
+[JsonSerializable(typeof(NativeGenericMetadata))]
 [JsonSerializable(typeof(string))]
 internal partial class NativeModuleMetadataJsonContext : JsonSerializerContext;
 
@@ -158,9 +166,9 @@ public static class NativeModuleMetadataSerializer
                     Methods = type.Methods.OrderBy(method => method.NativeName, StringComparer.Ordinal).ToArray()
                 })
                 .ToArray(),
-            Sources = metadata.Sources
-                .OrderBy(source => source.ModuleName, StringComparer.Ordinal)
-                .ThenBy(source => source.Path, StringComparer.Ordinal)
+            Generics = metadata.Generics
+                .OrderBy(generic => generic.ModuleName, StringComparer.Ordinal)
+                .ThenBy(generic => generic.SourceName, StringComparer.Ordinal)
                 .ToArray()
         };
         return JsonSerializer.Serialize(
@@ -176,13 +184,13 @@ public static class NativeModuleMetadataSerializer
                 NativeModuleMetadataJsonContext.Default.NativeModuleMetadata)
             ?? throw new InvalidDataException("The native metadata document is empty.");
         // An array that the document does not have is read as null, not as the empty default, so the arrays are made empty here.
-        // Version 2 documents have no types or sources at all.
+        // Version 2 documents have no types or generics at all.
         var metadata = read with
         {
             Functions = read.Functions ?? [],
             Dependencies = read.Dependencies ?? [],
             Types = read.Types ?? [],
-            Sources = read.Sources ?? []
+            Generics = read.Generics ?? []
         };
         Validate(metadata);
         return metadata;
@@ -253,8 +261,8 @@ public static class NativeModuleMetadataSerializer
                 $"Unsupported native metadata format version {metadata.FormatVersion}; " +
                 $"this compiler supports versions {NativeModuleMetadata.PreviousFormatVersion} and {NativeModuleMetadata.CurrentFormatVersion}.");
         if (metadata.FormatVersion == NativeModuleMetadata.PreviousFormatVersion &&
-            (metadata.Types.Count > 0 || metadata.Sources.Count > 0))
-            throw new InvalidDataException("Native metadata of format version 2 cannot contain types or sources.");
+            (metadata.Types.Count > 0 || metadata.Generics.Count > 0))
+            throw new InvalidDataException("Native metadata of format version 2 cannot contain types or generics.");
         if (string.IsNullOrWhiteSpace(metadata.ModuleName))
             throw new InvalidDataException("Native metadata must specify a module name.");
         if (string.IsNullOrWhiteSpace(metadata.EntryPoint))
@@ -280,7 +288,7 @@ public static class NativeModuleMetadataSerializer
         }
 
         ValidateTypes(metadata.Types);
-        ValidateSources(metadata.Sources);
+        ValidateGenerics(metadata.Generics);
     }
 
     private static void ValidateTypes(IReadOnlyList<NativeTypeMetadata> types)
@@ -357,19 +365,34 @@ public static class NativeModuleMetadataSerializer
             throw new InvalidDataException($"The type {where} contains an incomplete method.");
     }
 
-    // A source's hash is checked against its text, so a source that was changed after the library was built is detected.
-    private static void ValidateSources(IReadOnlyList<NativeSourceMetadata> sources)
+    // Each entry must decode, must hold only generic declarations, and must name the module and the source that the entry names.
+    // A damaged entry is reported with the source it came from.
+    private static void ValidateGenerics(IReadOnlyList<NativeGenericMetadata> generics)
     {
         var files = new HashSet<(string, string)>();
-        foreach (var source in sources)
+        foreach (var generic in generics)
         {
-            if (string.IsNullOrWhiteSpace(source.ModuleName) || string.IsNullOrWhiteSpace(source.Path))
-                throw new InvalidDataException("Native metadata contains a source without a module or a path.");
-            if (!files.Add((source.ModuleName, source.Path)))
-                throw new InvalidDataException($"Native metadata contains the source '{source.Path}' more than once.");
-            if (NativeSourceMetadata.Create(source.ModuleName, source.Path, source.Text).Sha256 != source.Sha256)
+            if (string.IsNullOrWhiteSpace(generic.ModuleName) || string.IsNullOrWhiteSpace(generic.SourceName) || generic.Syntax is null)
+                throw new InvalidDataException("Native metadata contains generic syntax without a module, a source name or a tree.");
+            if (!files.Add((generic.ModuleName, generic.SourceName)))
+                throw new InvalidDataException($"Native metadata contains the generic syntax of '{generic.SourceName}' more than once.");
+
+            DecodedUnit decoded;
+            try
+            {
+                decoded = SyntaxTreeCodec.Read(generic.Syntax);
+            }
+            catch (InvalidDataException exception)
+            {
                 throw new InvalidDataException(
-                    $"The source '{source.Path}' does not match its hash. It was changed after the library was built, or the metadata is damaged.");
+                    $"The generic syntax of '{generic.SourceName}' is damaged: {exception.Message}", exception);
+            }
+            if (decoded.Unit.ModuleName != generic.ModuleName || decoded.SourceName != generic.SourceName)
+                throw new InvalidDataException(
+                    $"The generic syntax of '{generic.SourceName}' does not match the module and source that name it.");
+            if (!GenericSyntax.IsGenericOnly(decoded.Unit))
+                throw new InvalidDataException(
+                    $"The generic syntax of '{generic.SourceName}' contains a declaration that is not generic.");
         }
     }
 }
