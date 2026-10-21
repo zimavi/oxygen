@@ -101,6 +101,17 @@ symbols, to a directory named after the target triple:
 - `runtime/build/x86_64-unknown-linux-gnu/liboxygenrt.a` (Itanium landing pads)
 - `runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a` (Windows SEH)
 
+The Windows target also gets a shared runtime, `oxygenrt.dll` with its import
+library `oxygenrt.lib`, in the same directory. The DLL exports every entry point
+of `oxygen_runtime.h` (`OXYGEN_RUNTIME_API` marks them). A program linked with
+`--runtime .../oxygenrt.lib` needs `oxygenrt.dll` next to it when it runs. The
+ELF shared runtime is not built yet.
+
+Process setup (the exit handler, the console code page and the hardware fault
+handler) runs once per process, so a second program started in the same process
+does not install the handlers again. The runtime keeps no other file-scope state:
+trace frames, exception records and the in-flight exception are thread-local.
+
 Pass a triple to build another target: `-Target` for `build.ps1`, or the triple as
 an argument for `build.sh`. The compiler's `--target` selects the archive that
 matches it. A cross build needs the target's C headers, which the host may not

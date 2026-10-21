@@ -69,19 +69,19 @@ typedef struct oxygen_runtime_type_info
     uint32_t supertype_count;
 } oxygen_runtime_type_info;
 
-void __oxygen_runtime_initialize(void);
+OXYGEN_RUNTIME_API void __oxygen_runtime_initialize(void);
 /* Ends the program after a runtime failure with exit code 101. The caller writes the message first. */
 OXYGEN_RUNTIME_API _Noreturn void oxygen_runtime_abort(void);
-void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length);
-void __oxygen_runtime_string_bounds_failure(uint64_t index, uint64_t length);
-void __oxygen_runtime_enum_cast_failure(uint64_t value);
+OXYGEN_RUNTIME_API void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length);
+OXYGEN_RUNTIME_API void __oxygen_runtime_string_bounds_failure(uint64_t index, uint64_t length);
+OXYGEN_RUNTIME_API void __oxygen_runtime_enum_cast_failure(uint64_t value);
 /* kind: 1 = integer division by zero, 2 = signed division overflow (INT_MIN / -1), 3 = shift count out of range.
    operand is the shift count for kind 3 and 0 otherwise. */
-void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand);
-uint8_t __oxygen_runtime_is_instance(
+OXYGEN_RUNTIME_API void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand);
+OXYGEN_RUNTIME_API uint8_t __oxygen_runtime_is_instance(
     const void *object,
     const oxygen_runtime_type_info *expected_type);
-void __oxygen_runtime_invalid_cast(
+OXYGEN_RUNTIME_API void __oxygen_runtime_invalid_cast(
     const oxygen_runtime_type_info *source_type,
     const oxygen_runtime_type_info *target_type);
 OXYGEN_RUNTIME_API void __oxygen_runtime_trace_push(
@@ -123,21 +123,21 @@ OXYGEN_RUNTIME_API uint8_t __oxygen_runtime_exception_matches(
     const oxygen_runtime_type_info *expected_type);
 #endif
 
-uint64_t oxygen_array_size(uint64_t count, uint64_t element_size);
-void *oxygen_alloc(uint64_t size);
-void *oxygen_realloc(void *pointer, uint64_t size);
-void *oxygen_calloc(uint64_t count, uint64_t element_size);
-void oxygen_free(void *pointer);
+OXYGEN_RUNTIME_API uint64_t oxygen_array_size(uint64_t count, uint64_t element_size);
+OXYGEN_RUNTIME_API void *oxygen_alloc(uint64_t size);
+OXYGEN_RUNTIME_API void *oxygen_realloc(void *pointer, uint64_t size);
+OXYGEN_RUNTIME_API void *oxygen_calloc(uint64_t count, uint64_t element_size);
+OXYGEN_RUNTIME_API void oxygen_free(void *pointer);
 
-void oxygen_io_initialize(void);
-FILE *oxygen_runtime_error_stream(void);
-void oxygen_write_stdout(const oxygen_string *value);
-void oxygen_write_stderr(const oxygen_string *value);
-void oxygen_write_stdout_byte(uint8_t value);
+OXYGEN_RUNTIME_API void oxygen_io_initialize(void);
+OXYGEN_RUNTIME_API FILE *oxygen_runtime_error_stream(void);
+OXYGEN_RUNTIME_API void oxygen_write_stdout(const oxygen_string *value);
+OXYGEN_RUNTIME_API void oxygen_write_stderr(const oxygen_string *value);
+OXYGEN_RUNTIME_API void oxygen_write_stdout_byte(uint8_t value);
 
 /* A new NUL-terminated copy that the caller owns and frees with oxygen_free, or NULL when the string has an embedded NUL. */
-const char *oxygen_string_to_c_string(const oxygen_string *value);
-void oxygen_c_string_to_string(const char *value, oxygen_string *result);
+OXYGEN_RUNTIME_API const char *oxygen_string_to_c_string(const oxygen_string *value);
+OXYGEN_RUNTIME_API void oxygen_c_string_to_string(const char *value, oxygen_string *result);
 
 #ifdef __cplusplus
 }
