@@ -261,7 +261,7 @@ public sealed class NativeModuleMetadataFormatTests
         ModuleName = "lib",
         Name = name,
         UnderlyingType = underlying,
-        Cases = (cases ?? ["Read"]).Select(caseName => new NativeEnumCaseMetadata { Name = caseName }).ToArray()
+        Cases = (cases ?? ["Read"]).Select(caseName => new NativeEnumCaseMetadata { Name = caseName, Value = "0" }).ToArray()
     };
 
     private static NativeFieldMetadata Field(string name, string type, int offset) => new()

@@ -304,7 +304,8 @@ public sealed partial class LlvmModuleGenerator
                 ModuleName = moduleName,
                 TargetTriple = _target.Triple,
                 EntryPoint = "main",
-                Functions = symbols.Select(symbol => new NativeFunctionMetadata
+                // Methods and property accessors are described under their types, so they are not listed as functions here.
+                Functions = symbols.Where(symbol => !methodOwners.ContainsKey(symbol)).Select(symbol => new NativeFunctionMetadata
                 {
                     ModuleName = symbol.ModuleName,
                     SourceName = symbol.Name,
@@ -317,6 +318,7 @@ public sealed partial class LlvmModuleGenerator
                     ExternalName = symbol.CInterop?.ExternalName,
                     CallingConvention = symbol.CInterop?.CallingConvention ?? "c"
                 }).ToArray(),
+                Types = TypeMetadataOf(model, moduleName, methodOwners),
                 Generics = generics ?? []
             };
             return new GeneratedLlvmModule(context, module, builder, metadata);

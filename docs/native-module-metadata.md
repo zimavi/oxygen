@@ -11,13 +11,24 @@ array. Format version `1` used the earlier symbol scheme, so readers reject it.
 
 ## Types and generics (version 3)
 
-`types` describes the classes, structs and enums of the module, with what an
-importing program needs to lay them out and to call their methods: the kind,
-the module and the name, the size and alignment of a class or struct (the size is
-a multiple of the alignment, and the alignment is a power of two), the fields in
-declaration order with their byte offsets, the methods with their native names,
-and the cases and underlying type of an enum. A `@value` mark is allowed only on
-a class. Union and interface types are not described yet.
+`types` describes the structs, classes and enums that the module declares, and
+that are not generic, with what an importing program needs to lay them out and
+to call their methods: the kind, the module, the name and the visibility, the
+size and alignment of a struct or class (the size is a multiple of the alignment,
+and the alignment is a power of two), the fields in declaration order with their
+byte offsets, the methods with their native names, and the cases, underlying
+type and flags of an enum. A `@value` mark is allowed only on a class. Union and
+interface types are not described yet.
+
+The layouts are the ones the generated code uses: a reference class starts with
+its vtable pointer and one slot per virtual method, and a `@value` class has no
+vtable. The offsets and sizes come from the LLVM target data of the build. A
+generic instantiation (a name with the `__ox_` suffix, see
+[generics](generics.md)) is not a type of the module.
+
+A method and a property accessor are listed under their class, so they are not
+in `functions`. An enum case's value is written in decimal text, since a 64-bit
+value can be outside the range of a JSON number.
 
 `generics` carries the generic declarations of the module, not its source text.
 Each entry is a unit in the binary syntax form (`SyntaxTreeCodec`, format version

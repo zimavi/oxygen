@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -60,6 +62,7 @@ public sealed record NativeTypeMetadata
     public required NativeTypeKind Kind { get; init; }
     public required string ModuleName { get; init; }
     public required string Name { get; init; }
+    public string Visibility { get; init; } = "private";
     // The size and alignment in bytes of a class or struct. The size is a multiple of the alignment, and the alignment is a power of two.
     public int Size { get; init; }
     public int Alignment { get; init; } = 1;
@@ -84,7 +87,9 @@ public sealed record NativeFieldMetadata
 public sealed record NativeEnumCaseMetadata
 {
     public required string Name { get; init; }
-    public long Value { get; init; }
+    // The value in decimal, with an optional minus sign. Text holds any integer of the enum's underlying type, including 64-bit values
+    // that a JSON number could not represent exactly.
+    public required string Value { get; init; }
 }
 
 public sealed record NativeMethodMetadata
@@ -353,6 +358,9 @@ public static class NativeModuleMetadataSerializer
                 throw new InvalidDataException($"The enum {where} contains a case without a name.");
             if (!caseNames.Add(enumCase.Name))
                 throw new InvalidDataException($"The enum {where} declares the case '{enumCase.Name}' more than once.");
+            if (!BigInteger.TryParse(enumCase.Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _))
+                throw new InvalidDataException(
+                    $"The case '{enumCase.Name}' of enum {where} has the value '{enumCase.Value}', which is not an integer.");
         }
     }
 
