@@ -226,6 +226,19 @@ public sealed class LibraryBuildTests : IDisposable
         Assert.Contains("section \".oxmeta\"", betaIr);
     }
 
+    [Fact]
+    public void AClassMethodOfALibraryIsDefinedByTheLibrary()
+    {
+        const string shapes = "module shapes; class Box { public i32 value; public i32 get() { return value; } } " +
+            "public i32 read(Box b) { return b.get(); }";
+        var model = Analyze(shapes, "module other; public i32 unused() { return 0; }");
+
+        using var library = new LlvmModuleGenerator().Generate("shapes", model, library: true);
+        var ir = library.ToString();
+
+        Assert.Contains("define i32 @_Ox_v1_m6shapes_c3Box_f3get_p0_", ir);
+    }
+
     private static SemanticModel Analyze(string source, string dependency)
     {
         var tokens = new Tokenizer(Log.Logger);

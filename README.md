@@ -94,6 +94,7 @@ Useful CLI options include:
 - `--emit-ir` — write textual LLVM IR instead of building a native executable
 - `--runtime`, `-r` — static Oxygen runtime archive to link
 - `--stdlib` — optional dynamic standard-library dependencies
+- `--no-std` — do not load the standard library. The sources are built alone, so `import std.*` is an error unless the module is in the sources, and `RuntimeException` and `NullReferenceException` are not available. This is how the standard library itself is built (`build stdlib/*.oxy --library --dynamic --no-std`). A null class reference in such a program stops it with exit code 101
 - `--clang`, `-c` — LLVM compiler driver used for object generation and linking
 - `--unoptimized`, `-u` — build without optimization, the same as `--optimization O0`. It does not add debug information, and it cannot be combined with `--optimization`
 - `--manual-memory`, `-mm` — manual memory mode for every function (C++ style)

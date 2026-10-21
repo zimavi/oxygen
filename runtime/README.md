@@ -119,6 +119,11 @@ process exits. Two programs on two threads never see each other's trace or
 exception. `runtime_tests` checks this with two threads, and it fails when the
 context is a process-wide variable.
 
+A null class reference in a program built with `--no-std` has no
+`NullReferenceException` to throw, so the compiler calls
+`__oxygen_runtime_null_reference_failure` instead. It writes a message to standard
+error and exits with code 101, the same as the other runtime failures.
+
 The start of each program also registers its exit flush, the console code page
 and the Windows hardware fault handler. Those are process resources, not runtime
 state, and repeating them is harmless: the first fault handler stops the process.

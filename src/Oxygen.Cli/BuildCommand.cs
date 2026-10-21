@@ -29,6 +29,12 @@ internal static class BuildCommand
         Description = "Build a static library instead of an executable. A library has no main function, and it is not linked, " +
             "so --runtime and --stdlib do not apply"
     };
+    public static readonly Option<bool> NoStd = new("--no-std")
+    {
+        Description = "Do not load the standard library. Nothing implicit is loaded from it, an import of a std module must be one of the " +
+            "sources, and a null class reference stops the program with exit code 101, since there is no NullReferenceException to throw. " +
+            "Use it to build the standard library itself, or a library that does not need it"
+    };
     public static readonly Option<bool> Dynamic = new("--dynamic")
     {
         Description = "With --library, build a shared library instead of a static one: a .dll with an import library on Windows, " +
@@ -101,6 +107,7 @@ internal static class BuildCommand
             EmitIr,
             Library,
             Dynamic,
+            NoStd,
             Clang,
             Unoptimized,
             WarningsAsErrors,
@@ -179,7 +186,7 @@ internal static class BuildCommand
             return ExitCodes.SourceError;
         }
 
-        var resolved = ResolveModules(input.Sources);
+        var resolved = ResolveModules(input.Sources, !result.GetValue(NoStd));
         if (resolved.Diagnostics.Count > 0)
         {
             Display(resolved.Diagnostics,
@@ -548,11 +555,11 @@ internal static class BuildCommand
     }
 
     private static (IReadOnlyList<SourceText> Sources, IReadOnlyList<CompilationUnit> Units, IReadOnlyList<Diagnostic> Diagnostics)
-        ResolveModules(IReadOnlyList<SourceText> rootSources)
+        ResolveModules(IReadOnlyList<SourceText> rootSources, bool loadStandardLibrary)
     {
         var tokenizer = new Tokenizer(Log.Logger.ForContext("SourceContext", "Lexer"));
         var resolved = new SourceModuleResolver(tokenizer, Log.Logger.ForContext("SourceContext", "Resolver"))
-            .Resolve(rootSources);
+            .Resolve(rootSources, loadStandardLibrary);
         return (resolved.Sources, resolved.Units, resolved.Diagnostics);
     }
 

@@ -113,5 +113,5 @@ public sealed class SourceModuleResolverTests : IDisposable
         resolved.Sources.Select(source => Path.GetFileName(source.Name)).ToList();
 
     private static ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots, string? oxygenPath) =>
-        new SourceModuleResolver(new Tokenizer(Log.Logger), Log.Logger).Resolve(roots, oxygenPath);
+        new SourceModuleResolver(new Tokenizer(Log.Logger), Log.Logger).Resolve(roots, oxygenPath, loadStandardLibrary: true);
 }

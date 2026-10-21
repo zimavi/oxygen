@@ -8,13 +8,19 @@ namespace Oxygen.Llvm;
 // generic declarations are defined where they are used. The instances are linkonce_odr, so two objects that both define one keep one.
 public sealed partial class LlvmModuleGenerator
 {
-    // Whether the object defines the function. A program defines everything it generates, as before.
+    // Whether the object defines the function. A program defines everything it generates, as before. A method belongs to the module of
+    // its class, which the method's own module name does not always give (the analyzer leaves a method's module at its default).
     private static bool DefinesInThisObject(
         FunctionSymbol symbol,
         bool library,
         string moduleName,
         IReadOnlyDictionary<FunctionSymbol, OxygenNameMangler.MethodOwner> methodOwners) =>
-        !library || symbol.ModuleName == moduleName || IsInstance(symbol, methodOwners);
+        !library || OwningModuleOf(symbol, methodOwners) == moduleName || IsInstance(symbol, methodOwners);
+
+    private static string OwningModuleOf(
+        FunctionSymbol symbol,
+        IReadOnlyDictionary<FunctionSymbol, OxygenNameMangler.MethodOwner> methodOwners) =>
+        methodOwners.TryGetValue(symbol, out var owner) ? owner.ModuleName : symbol.ModuleName;
 
     // Whether the object defines the class's constructors and destructor.
     private static bool DefinesClassInThisObject(ClassSymbol cls, string moduleName) =>
