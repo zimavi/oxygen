@@ -126,3 +126,24 @@ lexer, parser, AST, semantic analysis, LLVM IR generation, runtime, and native b
 
 If you are contributing new functionality, inspect the relevant source, tests, and docs first,
 then keep changes focused and add tests alongside behavior changes.
+
+## Versioning
+
+The version is in `VERSION` at the repository root, and it is written nowhere else.
+`Directory.Build.props` reads it into the assembly version, and `oxygenc --version`
+reports it. The project follows [Semantic Versioning](https://semver.org). It starts at
+`0.1.0`, and while the major version is 0 nothing is released.
+
+A commit that changes behavior changes `VERSION` in the same commit, by the bump for its
+conventional commit type:
+
+- `feat`: minor bump, `0.1.0` to `0.2.0`.
+- `fix` and `perf`: patch bump, `0.1.0` to `0.1.1`.
+- A breaking change (a `!` after the type, or a `BREAKING CHANGE:` footer): minor bump
+  while the major version is 0, since semver lets `0.y.z` change in any minor release.
+- `refactor`, `test`, `docs`, `build`, `ci` and `chore`: no bump. A refactor that changes
+  behavior is a `feat` or `fix` instead.
+
+The first release sets the major version to 1. That is a decision for the release, not for
+a single commit. Nightly builds add a prerelease suffix such as `0.1.0-nightly.20261021`
+and do not change `VERSION`.

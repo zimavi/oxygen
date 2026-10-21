@@ -8,4 +8,10 @@
     <LibLLVMVersion>22.1.8</LibLLVMVersion>
   </PropertyGroup>
 
+  <!-- The version of the compiler, its libraries and its release archives. The VERSION file at the repository root is the one place
+       it is written; the scripts and the release workflow read the same file. -->
+  <PropertyGroup>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
+  </PropertyGroup>
+
 </Project>
