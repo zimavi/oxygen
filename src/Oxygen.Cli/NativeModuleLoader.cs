@@ -35,6 +35,11 @@ internal static class NativeModuleLoader
                 warnings.Add($"Native function '{function.SourceName}' in '{file.FullName}' is not imported: {exception.Message}");
             }
         }
+        // Types and sources are read and checked, but nothing uses them yet, so the library says so instead of ignoring them.
+        if (metadata.Types.Count > 0)
+            warnings.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' declares {metadata.Types.Count} type(s), which are not imported yet.");
+        if (metadata.Sources.Count > 0)
+            warnings.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' contains its Oxygen source, which is not used yet.");
         return new LoadedNativeModule(new ExternalModuleDeclaration(metadata.ModuleName, functions), warnings);
     }
 

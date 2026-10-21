@@ -7,8 +7,10 @@ namespace Oxygen.Llvm;
 public sealed record NativeModuleMetadata
 {
     // Version 2 names symbols with version 1 of the mangling scheme (_Ox_v1_, see docs/mangling.md). Version 1 metadata names
-    // symbols that this compiler does not produce, so it is rejected.
-    public const int CurrentFormatVersion = 2;
+    // symbols that this compiler does not produce, so it is rejected. Version 3 adds the types and the sources of the module.
+    // Version 2 documents have neither, so they are read as having none.
+    public const int CurrentFormatVersion = 3;
+    public const int PreviousFormatVersion = 2;
 
     public int FormatVersion { get; init; } = CurrentFormatVersion;
     // Every field that names the program is required, so no default such as "program" can stand in for the real name.
@@ -18,6 +20,10 @@ public sealed record NativeModuleMetadata
     public required string TargetTriple { get; init; }
     public IReadOnlyList<NativeFunctionMetadata> Functions { get; init; } = [];
     public IReadOnlyList<NativeDependencyMetadata> Dependencies { get; init; } = [];
+    // Version 3: the types that an importing program can use. Only the declarations are here; their code is in the module.
+    public IReadOnlyList<NativeTypeMetadata> Types { get; init; } = [];
+    // Version 3: the Oxygen source of the module, which an importing program needs to instantiate generic types and functions.
+    public IReadOnlyList<NativeSourceMetadata> Sources { get; init; } = [];
 }
 
 public sealed record NativeFunctionMetadata
@@ -38,6 +44,76 @@ public sealed record NativeDependencyMetadata
     public required NativeDependencyKind Kind { get; init; }
 }
 
+public enum NativeTypeKind
+{
+    Class,
+    Struct,
+    Enum
+}
+
+// A type of a native module, described with its layout so that an importing program can use it without compiling the module.
+// Each type is identified by its module and name, and its encoding in a signature is the one in docs/mangling.md. Fields keep
+// their declaration order, since it decides the layout. Kind-specific parts are validated for that kind only (see the serializer).
+public sealed record NativeTypeMetadata
+{
+    public required NativeTypeKind Kind { get; init; }
+    public required string ModuleName { get; init; }
+    public required string Name { get; init; }
+    // The size and alignment in bytes of a class or struct. The size is a multiple of the alignment, and the alignment is a power of two.
+    public int Size { get; init; }
+    public int Alignment { get; init; } = 1;
+    // Classes only: a @value class is stored inline, and other classes are references to heap objects.
+    public bool IsValue { get; init; }
+    // Enums only: the underlying type's encoding, whether the enum is a @flags enum, and its cases in declaration order.
+    public string? UnderlyingType { get; init; }
+    public bool IsFlags { get; init; }
+    public IReadOnlyList<NativeEnumCaseMetadata> Cases { get; init; } = [];
+    public IReadOnlyList<NativeFieldMetadata> Fields { get; init; } = [];
+    public IReadOnlyList<NativeMethodMetadata> Methods { get; init; } = [];
+}
+
+public sealed record NativeFieldMetadata
+{
+    public required string Name { get; init; }
+    public required string Type { get; init; }
+    // The byte offset of the field from the start of the type.
+    public int Offset { get; init; }
+}
+
+public sealed record NativeEnumCaseMetadata
+{
+    public required string Name { get; init; }
+    public long Value { get; init; }
+}
+
+public sealed record NativeMethodMetadata
+{
+    public required string SourceName { get; init; }
+    public required string NativeName { get; init; }
+    public required string ReturnType { get; init; }
+    public string Visibility { get; init; } = "private";
+    public bool IsStatic { get; init; }
+    public IReadOnlyList<string> ParameterTypes { get; init; } = [];
+}
+
+// The Oxygen source of a module, with its SHA-256 hash, so that a reader can tell a source that was changed after the library was built.
+public sealed record NativeSourceMetadata
+{
+    public required string ModuleName { get; init; }
+    public required string Path { get; init; }
+    public required string Text { get; init; }
+    // The hash of the UTF-8 bytes of Text, as lowercase hexadecimal.
+    public required string Sha256 { get; init; }
+
+    public static NativeSourceMetadata Create(string moduleName, string path, string text) => new()
+    {
+        ModuleName = moduleName,
+        Path = path,
+        Text = text,
+        Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()
+    };
+}
+
 [JsonSourceGenerationOptions(
     WriteIndented = true,
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
@@ -45,6 +121,11 @@ public sealed record NativeDependencyMetadata
 [JsonSerializable(typeof(NativeModuleMetadata))]
 [JsonSerializable(typeof(NativeFunctionMetadata))]
 [JsonSerializable(typeof(NativeDependencyMetadata))]
+[JsonSerializable(typeof(NativeTypeMetadata))]
+[JsonSerializable(typeof(NativeFieldMetadata))]
+[JsonSerializable(typeof(NativeEnumCaseMetadata))]
+[JsonSerializable(typeof(NativeMethodMetadata))]
+[JsonSerializable(typeof(NativeSourceMetadata))]
 [JsonSerializable(typeof(string))]
 internal partial class NativeModuleMetadataJsonContext : JsonSerializerContext;
 
@@ -67,6 +148,19 @@ public static class NativeModuleMetadataSerializer
             Dependencies = metadata.Dependencies
                 .OrderBy(dependency => dependency.Kind)
                 .ThenBy(dependency => dependency.Path, StringComparer.Ordinal)
+                .ToArray(),
+            Types = metadata.Types
+                .OrderBy(type => type.ModuleName, StringComparer.Ordinal)
+                .ThenBy(type => type.Name, StringComparer.Ordinal)
+                .Select(type => type with
+                {
+                    // Methods are ordered by symbol. Fields and enum cases keep their order, since it is part of the type.
+                    Methods = type.Methods.OrderBy(method => method.NativeName, StringComparer.Ordinal).ToArray()
+                })
+                .ToArray(),
+            Sources = metadata.Sources
+                .OrderBy(source => source.ModuleName, StringComparer.Ordinal)
+                .ThenBy(source => source.Path, StringComparer.Ordinal)
                 .ToArray()
         };
         return JsonSerializer.Serialize(
@@ -77,10 +171,19 @@ public static class NativeModuleMetadataSerializer
     public static NativeModuleMetadata Deserialize(string contents)
     {
         ArgumentNullException.ThrowIfNull(contents);
-        var metadata = JsonSerializer.Deserialize(
+        var read = JsonSerializer.Deserialize(
                 contents,
                 NativeModuleMetadataJsonContext.Default.NativeModuleMetadata)
             ?? throw new InvalidDataException("The native metadata document is empty.");
+        // An array that the document does not have is read as null, not as the empty default, so the arrays are made empty here.
+        // Version 2 documents have no types or sources at all.
+        var metadata = read with
+        {
+            Functions = read.Functions ?? [],
+            Dependencies = read.Dependencies ?? [],
+            Types = read.Types ?? [],
+            Sources = read.Sources ?? []
+        };
         Validate(metadata);
         return metadata;
     }
@@ -145,10 +248,13 @@ public static class NativeModuleMetadataSerializer
 
     private static void Validate(NativeModuleMetadata metadata)
     {
-        if (metadata.FormatVersion != NativeModuleMetadata.CurrentFormatVersion)
+        if (metadata.FormatVersion is not (NativeModuleMetadata.PreviousFormatVersion or NativeModuleMetadata.CurrentFormatVersion))
             throw new InvalidDataException(
                 $"Unsupported native metadata format version {metadata.FormatVersion}; " +
-                $"this compiler supports version {NativeModuleMetadata.CurrentFormatVersion}.");
+                $"this compiler supports versions {NativeModuleMetadata.PreviousFormatVersion} and {NativeModuleMetadata.CurrentFormatVersion}.");
+        if (metadata.FormatVersion == NativeModuleMetadata.PreviousFormatVersion &&
+            (metadata.Types.Count > 0 || metadata.Sources.Count > 0))
+            throw new InvalidDataException("Native metadata of format version 2 cannot contain types or sources.");
         if (string.IsNullOrWhiteSpace(metadata.ModuleName))
             throw new InvalidDataException("Native metadata must specify a module name.");
         if (string.IsNullOrWhiteSpace(metadata.EntryPoint))
@@ -162,5 +268,108 @@ public static class NativeModuleMetadataSerializer
             throw new InvalidDataException("Native metadata contains an incomplete function.");
         if (metadata.Dependencies.Any(dependency => string.IsNullOrWhiteSpace(dependency.Path)))
             throw new InvalidDataException("Native metadata contains a dependency without a path.");
+
+        // Functions and methods share the module's symbols, so each native name appears once.
+        var symbols = metadata.Functions.Select(function => function.NativeName)
+            .Concat(metadata.Types.SelectMany(type => type.Methods.Select(method => method.NativeName)));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (!seen.Add(symbol))
+                throw new InvalidDataException($"Native metadata names the symbol '{symbol}' more than once.");
+        }
+
+        ValidateTypes(metadata.Types);
+        ValidateSources(metadata.Sources);
+    }
+
+    private static void ValidateTypes(IReadOnlyList<NativeTypeMetadata> types)
+    {
+        var names = new HashSet<(string, string)>();
+        foreach (var type in types)
+        {
+            if (string.IsNullOrWhiteSpace(type.ModuleName) || string.IsNullOrWhiteSpace(type.Name))
+                throw new InvalidDataException("Native metadata contains a type without a module or a name.");
+            if (!names.Add((type.ModuleName, type.Name)))
+                throw new InvalidDataException($"Native metadata declares the type '{type.ModuleName}.{type.Name}' more than once.");
+
+            if (type.Kind == NativeTypeKind.Enum)
+                ValidateEnum(type);
+            else
+                ValidateLayout(type);
+        }
+    }
+
+    // A class or struct has a size and an alignment, fields and methods. Only a class can be @value.
+    private static void ValidateLayout(NativeTypeMetadata type)
+    {
+        var where = $"'{type.ModuleName}.{type.Name}'";
+        if (type.Cases.Count > 0 || type.UnderlyingType is not null || type.IsFlags)
+            throw new InvalidDataException($"The type {where} is not an enum, so it cannot have cases, an underlying type or flags.");
+        if (type.IsValue && type.Kind != NativeTypeKind.Class)
+            throw new InvalidDataException($"The type {where} is marked @value, but only a class can be.");
+        if (type.Alignment < 1 || (type.Alignment & (type.Alignment - 1)) != 0)
+            throw new InvalidDataException($"The type {where} has an alignment of {type.Alignment}, which is not a power of two.");
+        if (type.Size < 0 || type.Size % type.Alignment != 0)
+            throw new InvalidDataException($"The type {where} has a size of {type.Size}, which is not a multiple of its alignment.");
+
+        var fieldNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var field in type.Fields)
+        {
+            if (string.IsNullOrWhiteSpace(field.Name) || string.IsNullOrWhiteSpace(field.Type))
+                throw new InvalidDataException($"The type {where} contains a field without a name or a type.");
+            if (!fieldNames.Add(field.Name))
+                throw new InvalidDataException($"The type {where} declares the field '{field.Name}' more than once.");
+            if (field.Offset < 0 || field.Offset > type.Size)
+                throw new InvalidDataException($"The field '{field.Name}' of {where} is outside the type.");
+        }
+
+        foreach (var method in type.Methods)
+            ValidateMethod(method, where);
+    }
+
+    private static void ValidateEnum(NativeTypeMetadata type)
+    {
+        var where = $"'{type.ModuleName}.{type.Name}'";
+        if (type.Fields.Count > 0 || type.Methods.Count > 0 || type.IsValue || type.Size != 0 || type.Alignment != 1)
+            throw new InvalidDataException($"The enum {where} has fields, methods, a layout or @value, which enums do not have.");
+        if (string.IsNullOrWhiteSpace(type.UnderlyingType))
+            throw new InvalidDataException($"The enum {where} must specify its underlying type.");
+        if (type.Cases.Count == 0)
+            throw new InvalidDataException($"The enum {where} has no cases.");
+
+        var caseNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var enumCase in type.Cases)
+        {
+            if (string.IsNullOrWhiteSpace(enumCase.Name))
+                throw new InvalidDataException($"The enum {where} contains a case without a name.");
+            if (!caseNames.Add(enumCase.Name))
+                throw new InvalidDataException($"The enum {where} declares the case '{enumCase.Name}' more than once.");
+        }
+    }
+
+    private static void ValidateMethod(NativeMethodMetadata method, string where)
+    {
+        if (string.IsNullOrWhiteSpace(method.SourceName) ||
+            string.IsNullOrWhiteSpace(method.NativeName) ||
+            string.IsNullOrWhiteSpace(method.ReturnType) ||
+            method.ParameterTypes.Any(string.IsNullOrWhiteSpace))
+            throw new InvalidDataException($"The type {where} contains an incomplete method.");
+    }
+
+    // A source's hash is checked against its text, so a source that was changed after the library was built is detected.
+    private static void ValidateSources(IReadOnlyList<NativeSourceMetadata> sources)
+    {
+        var files = new HashSet<(string, string)>();
+        foreach (var source in sources)
+        {
+            if (string.IsNullOrWhiteSpace(source.ModuleName) || string.IsNullOrWhiteSpace(source.Path))
+                throw new InvalidDataException("Native metadata contains a source without a module or a path.");
+            if (!files.Add((source.ModuleName, source.Path)))
+                throw new InvalidDataException($"Native metadata contains the source '{source.Path}' more than once.");
+            if (NativeSourceMetadata.Create(source.ModuleName, source.Path, source.Text).Sha256 != source.Sha256)
+                throw new InvalidDataException(
+                    $"The source '{source.Path}' does not match its hash. It was changed after the library was built, or the metadata is damaged.");
+        }
     }
 }

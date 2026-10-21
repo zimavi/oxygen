@@ -298,9 +298,10 @@ public sealed class LlvmTests
     }
 
     // Version 1 names symbols with the scheme that version 2 replaced, so its metadata cannot link against this compiler's output.
+    // Versions 2 and 3 are read; a version after 3 is newer than this compiler understands.
     [Theory]
     [InlineData(1)]
-    [InlineData(3)]
+    [InlineData(4)]
     public void NativeMetadataRejectsOtherFormatVersions(int formatVersion)
     {
         var exception = Assert.Throws<InvalidDataException>(() =>

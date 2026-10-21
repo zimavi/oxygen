@@ -2,10 +2,35 @@
 
 Oxygen native builds can emit a sidecar `.oxmeta` file with
 `oxygen build --emit-metadata <path>`. The document is UTF-8 JSON and has a
-versioned `formatVersion` field. Format version `2` contains the source module
-name, the platform entry point, generated function symbols (named as described
-in [native symbol names](mangling.md)) and link dependencies. Format version `1`
-used the earlier symbol scheme, so readers reject it.
+versioned `formatVersion` field. Format version `3` is the current one. It
+contains the source module name, the platform entry point, generated function
+symbols (named as described in [native symbol names](mangling.md)), link
+dependencies, and two arrays that version 2 does not have: `types` and
+`sources`. Format version `2` is still read, and such a document has neither
+array. Format version `1` used the earlier symbol scheme, so readers reject it.
+
+## Types and sources (version 3)
+
+`types` describes the classes, structs and enums of the module, with what an
+importing program needs to lay them out and to call their methods: the kind,
+the module and the name, the size and alignment of a class or struct (the size is
+a multiple of the alignment, and the alignment is a power of two), the fields in
+declaration order with their byte offsets, the methods with their native names,
+and the cases and underlying type of an enum. A `@value` mark is allowed only on
+a class. Union and interface types are not described yet.
+
+`sources` carries the module's Oxygen source, with a SHA-256 hash of its UTF-8
+text. A reader rejects a source whose text does not match its hash, since the
+library was then changed after it was built or the metadata is damaged.
+
+Both arrays are validated when the document is read, and a native name may
+appear only once in a module, for a function or for a method. Entries are written
+in a fixed order: types by module and name, methods by symbol, and sources by
+module and path. Fields and enum cases keep their declaration order.
+
+Types and sources are read and checked, but the loader does not import them yet.
+A library that has them gets a warning that says so, instead of having them
+ignored silently.
 
 `Oxygen.Llvm.NativeModuleMetadataSerializer` provides deterministic
 serialization and read/write helpers. Functions are ordered by generated
