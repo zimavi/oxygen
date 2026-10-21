@@ -94,7 +94,7 @@ Useful CLI options include:
 - `--runtime`, `-r` — static Oxygen runtime archive to link
 - `--stdlib` — optional dynamic standard-library dependencies
 - `--clang`, `-c` — LLVM compiler driver used for object generation and linking
-- `--debug` — generate debug symbols
+- `--unoptimized`, `-u` — build without optimization, the same as `--optimization O0`. It does not add debug information, and it cannot be combined with `--optimization`
 - `--manual-memory`, `-mm` — manual memory mode for every function (C++ style)
 - `--warnings-as-errors` — treat semantic warnings as errors
 - `--optimization`, `-O` — optimization level passed to native code generation

@@ -130,10 +130,9 @@ any optional `--stdlib` paths as dynamic dependencies. The source standard
 library includes `std.io`, which provides `write_stdout`, `write_stderr`,
 and the generic `print`/`println` functions. Values of primitive types, strings,
 and classes implementing `Printable` can be printed. Formatting is written in
-Oxygen. Use `--debug` to generate debug symbols for
-the generated program and select
-another optimization level with `--optimization O0`, `--optimization O1`, or
-`--optimization O2`. The runtime archive always includes debug symbols.
+Oxygen. Select the optimization level with `--optimization O0`, `--optimization O1`,
+or `--optimization O2`, or use `--unoptimized` for `O0`. The compiler does not
+generate debug information yet. The runtime archive is built with `-g`.
 
 To emit textual LLVM IR without compiling or linking a native executable, use
 `--emit-ir`:
@@ -147,7 +146,7 @@ For example:
 
 ```powershell
 dotnet run --project .\src\Oxygen.Cli -- build .\main.oxy `
-  --debug --optimization O0 `
+  --unoptimized `
   --runtime .\runtime\build\windows\liboxygenrt.a `
   --output .\program.exe
 ```

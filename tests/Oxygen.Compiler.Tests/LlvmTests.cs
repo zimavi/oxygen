@@ -174,7 +174,7 @@ public sealed class LlvmTests
     }
 
     [Fact]
-    public void AddsDebugSymbolsAndIndependentOptimizationToBothStages()
+    public void PassesTheOptimizationLevelToBothStagesWithoutDebugInformation()
     {
         var runner = new RecordingToolRunner();
         var outputDirectory = Path.Combine(Path.GetTempPath(), $"oxygen-test-{Guid.NewGuid():N}");
@@ -185,13 +185,13 @@ public sealed class LlvmTests
                 new NativeBuildOptions
                 {
                     OptimizationLevel = "O0",
-                    GenerateDebugSymbols = true,
                     OutputPath = Path.Combine(outputDirectory, "program")
                 });
 
             Assert.Equal(2, runner.Invocations.Count);
-            Assert.Equal(["-O0", "-g"], runner.Invocations[0].Arguments.Take(2));
-            Assert.Equal(["-O0", "-g"], runner.Invocations[1].Arguments.Take(2));
+            Assert.Equal(["-O0"], runner.Invocations[0].Arguments.Take(1));
+            Assert.Equal(["-O0"], runner.Invocations[1].Arguments.Take(1));
+            Assert.All(runner.Invocations, invocation => Assert.DoesNotContain("-g", invocation.Arguments));
         }
         finally
         {

@@ -37,9 +37,9 @@ internal static class BuildCommand
         Description = "LLVM compiler driver used for object generation and linking",
         DefaultValueFactory = _ => "clang"
     };
-    public static readonly Option<bool> Debug = new("--debug")
+    public static readonly Option<bool> Unoptimized = new("--unoptimized", "-u")
     {
-        Description = "Generate debug symbols and use the debug runtime"
+        Description = "Build without optimization, the same as --optimization O0. Cannot be combined with --optimization"
     };
     public static readonly Option<bool> ManualMemory = new("--manual-memory", "-mm")
     {
@@ -51,8 +51,7 @@ internal static class BuildCommand
     };
     public static readonly Option<string> Optimization = new("--optimization", "-O")
     {
-        Description = "Clang optimization level, for example O0 or O2",
-        DefaultValueFactory = _ => "2"
+        Description = "Clang optimization level, for example O0 or O2. Default: O2"
     };
     public static readonly Option<int> Jobs = new("--jobs", "-j")
     {
@@ -95,7 +94,7 @@ internal static class BuildCommand
             EmitIr,
             EmitMetadata,
             Clang,
-            Debug,
+            Unoptimized,
             WarningsAsErrors,
             ManualMemory,
             Optimization,
@@ -107,6 +106,11 @@ internal static class BuildCommand
             Verbose,
             KeepTemps
         };
+        command.Validators.Add(result =>
+        {
+            if (result.GetResult(Unoptimized) is not null && result.GetResult(Optimization) is not null)
+                result.AddError("--unoptimized and --optimization cannot be used together. Use one of them.");
+        });
         command.SetAction(result =>
         {
             try
@@ -300,12 +304,11 @@ internal static class BuildCommand
             generated.BuildNative(new NativeBuildOptions
             {
                 CompilerPath = result.GetValue(Clang) ?? "clang",
-                OptimizationLevel = NormalizeOptimizationLevel(result.GetValue(Optimization) ?? "O2"),
+                OptimizationLevel = OptimizationLevelOf(result),
                 Target = target.Triple,
                 TemporaryDirectory = temporaryDirectory,
                 KeepTemporaryFiles = keepTemporaryFiles,
                 Jobs = result.GetValue(Jobs),
-                GenerateDebugSymbols = result.GetValue(Debug),
                 OutputPath = result.GetValue(Output)?.FullName ?? "program",
                 MetadataPath = metadataOutput?.FullName
                     ?? (result.GetValue(Output)?.FullName ?? "program") + ".oxmeta",
@@ -397,6 +400,10 @@ internal static class BuildCommand
             Console.Error.WriteLine(formatter.Format(diagnostic, source, useColor));
         }
     }
+
+    // --unoptimized means O0. Otherwise --optimization applies, and O2 is the default. The two are rejected together when parsed.
+    internal static string OptimizationLevelOf(System.CommandLine.ParseResult result) =>
+        result.GetValue(Unoptimized) ? "O0" : NormalizeOptimizationLevel(result.GetValue(Optimization) ?? "O2");
 
     private static string NormalizeOptimizationLevel(string value) =>
         value.StartsWith('O') ? value : "O" + value;

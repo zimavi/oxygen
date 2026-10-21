@@ -26,7 +26,6 @@ public sealed record NativeBuildOptions
     // Whether to keep the intermediate files after the build. Otherwise the temporary directory is deleted when the build ends.
     public bool KeepTemporaryFiles { get; init; }
     public int Jobs { get; init; } = 1;
-    public bool GenerateDebugSymbols { get; init; }
     public string? WorkingDirectory { get; init; }
     public IReadOnlyList<NativeDependency> Dependencies { get; init; } = [];
     public IReadOnlyList<string> AdditionalLinkerArguments { get; init; } = [];
@@ -273,8 +272,6 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         var arguments = new List<string> { $"-{options.OptimizationLevel}" };
         if (!string.IsNullOrWhiteSpace(options.Target))
             arguments.Add($"--target={options.Target}");
-        if (options.GenerateDebugSymbols)
-            arguments.Add("-g");
         if (options.Jobs > 1)
         {
             arguments.Add("-flto=thin");

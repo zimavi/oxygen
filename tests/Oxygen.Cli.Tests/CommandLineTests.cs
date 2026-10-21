@@ -47,6 +47,34 @@ public sealed class CommandLineTests : IDisposable
         Assert.Equal(0, run.ExitCode);
     }
 
+    [Fact]
+    public void UnoptimizedSelectsLevelZeroAndOptimizationDefaultsToTwo()
+    {
+        Assert.Equal("O0", BuildCommand.OptimizationLevelOf(ParseBuild("--unoptimized")));
+        Assert.Equal("O0", BuildCommand.OptimizationLevelOf(ParseBuild("-u")));
+        Assert.Equal("O1", BuildCommand.OptimizationLevelOf(ParseBuild("--optimization", "1")));
+        Assert.Equal("O2", BuildCommand.OptimizationLevelOf(ParseBuild()));
+    }
+
+    [Fact]
+    public void UnoptimizedCannotBeCombinedWithOptimization()
+    {
+        Assert.NotEmpty(ParseBuild("--unoptimized", "--optimization", "2").Errors);
+    }
+
+    [Fact]
+    public void DebugIsNoLongerAnOptionBecauseItDidNotGenerateDebugInformation()
+    {
+        Assert.DoesNotContain(BuildCommand.Create().Options, option => option.Aliases.Contains("--debug"));
+    }
+
+    private static System.CommandLine.ParseResult ParseBuild(params string[] options)
+    {
+        var root = new System.CommandLine.RootCommand();
+        root.Add(BuildCommand.Create());
+        return root.Parse(["build", "program.oxy", .. options]);
+    }
+
     [SkippableFact]
     public void KeepTempsKeepsTheIntermediateFilesAndNamesTheirDirectory()
     {
