@@ -21,25 +21,37 @@ internal static class BuildCommand
     };
     public static readonly Option<FileInfo?> Output = new("--output", "-o")
     {
-        Description = "Path of the native executable to produce",
-        DefaultValueFactory = _ => new FileInfo("program")
+        Description = "Path of the native executable to produce, or of the library with --library. Default: program, or the module name for a library " +
+            "(the first module when the library has several)"
+    };
+    public static readonly Option<bool> Library = new("--library")
+    {
+        Description = "Build a static library instead of an executable. A library has no main function, and it is not linked, " +
+            "so --runtime and --stdlib do not apply"
+    };
+    public static readonly Option<bool> NoStd = new("--no-std")
+    {
+        Description = "Do not load the standard library. Nothing implicit is loaded from it, an import of a std module must be one of the " +
+            "sources, and a null class reference stops the program with exit code 101, since there is no NullReferenceException to throw. " +
+            "Use it to build the standard library itself, or a library that does not need it"
+    };
+    public static readonly Option<bool> Dynamic = new("--dynamic")
+    {
+        Description = "With --library, build a shared library instead of a static one: a .dll with an import library on Windows, " +
+            "and a .so elsewhere. It links the shared runtime, which --runtime names (oxygenrt.lib or liboxygenrt.so)"
     };
     public static readonly Option<FileInfo?> EmitIr = new("--emit-ir")
     {
         Description = "Write textual LLVM IR to this path instead of building a native executable"
-    };
-    public static readonly Option<FileInfo?> EmitMetadata = new("--emit-metadata")
-    {
-        Description = "Write versioned native-module metadata (.oxmeta) to this path"
     };
     public static readonly Option<string> Clang = new("--clang", "-c")
     {
         Description = "LLVM compiler driver used for object generation and linking",
         DefaultValueFactory = _ => "clang"
     };
-    public static readonly Option<bool> Debug = new("--debug")
+    public static readonly Option<bool> Unoptimized = new("--unoptimized", "-u")
     {
-        Description = "Generate debug symbols and use the debug runtime"
+        Description = "Build without optimization, the same as --optimization O0. Cannot be combined with --optimization"
     };
     public static readonly Option<bool> ManualMemory = new("--manual-memory", "-mm")
     {
@@ -51,8 +63,7 @@ internal static class BuildCommand
     };
     public static readonly Option<string> Optimization = new("--optimization", "-O")
     {
-        Description = "Clang optimization level, for example O0 or O2",
-        DefaultValueFactory = _ => "2"
+        Description = "Clang optimization level, for example O0 or O2. Default: O2"
     };
     public static readonly Option<int> Jobs = new("--jobs", "-j")
     {
@@ -61,7 +72,8 @@ internal static class BuildCommand
     };
     public static readonly Option<FileInfo?> Runtime = new("--runtime", "-r")
     {
-        Description = "Static Oxygen runtime library to link"
+        Description = "Oxygen runtime to link: the static archive (liboxygenrt.a), or the shared runtime (oxygenrt.lib on Windows, " +
+            "liboxygenrt.so elsewhere). --library --dynamic and --stdlib link the shared runtime, and it is their default"
     };
     public static readonly Option<FileInfo[]> StandardLibrary = new("--stdlib")
     {
@@ -93,9 +105,11 @@ internal static class BuildCommand
             Sources,
             Output,
             EmitIr,
-            EmitMetadata,
+            Library,
+            Dynamic,
+            NoStd,
             Clang,
-            Debug,
+            Unoptimized,
             WarningsAsErrors,
             ManualMemory,
             Optimization,
@@ -107,6 +121,11 @@ internal static class BuildCommand
             Verbose,
             KeepTemps
         };
+        command.Validators.Add(result =>
+        {
+            if (result.GetResult(Unoptimized) is not null && result.GetResult(Optimization) is not null)
+                result.AddError("--unoptimized and --optimization cannot be used together. Use one of them.");
+        });
         command.SetAction(result =>
         {
             try
@@ -129,6 +148,30 @@ internal static class BuildCommand
     {
         var formatter = new DiagnosticFormatter();
         var useColor = !Console.IsErrorRedirected;
+        var library = result.GetValue(Library);
+        var dynamic = result.GetValue(Dynamic);
+        // A static library is not linked, so the options for linking do not apply to it. A shared library links the runtime, and it
+        // does not link standard-library dependencies yet.
+        if (dynamic && !library)
+        {
+            Console.Error.WriteLine("oxygenc: --dynamic builds a shared library, so it needs --library.");
+            return ExitCodes.SourceError;
+        }
+        if (library && !dynamic && result.GetValue(Runtime) is not null)
+        {
+            Console.Error.WriteLine("oxygenc: --library does not link, so --runtime cannot be used with it. Add --dynamic for a shared library.");
+            return ExitCodes.SourceError;
+        }
+        if (library && (result.GetValue(StandardLibrary) ?? []).Length > 0)
+        {
+            Console.Error.WriteLine("oxygenc: --stdlib cannot be used with --library yet.");
+            return ExitCodes.SourceError;
+        }
+        if (library && result.GetValue(EmitIr) is not null)
+        {
+            Console.Error.WriteLine("oxygenc: --emit-ir writes one module's IR, so it cannot be used with --library.");
+            return ExitCodes.SourceError;
+        }
 
         var input = ReadSources(result.GetValue(Sources)!);
         // An unsupported target is reported before the sources are analyzed, since no code can be generated for it.
@@ -137,13 +180,34 @@ internal static class BuildCommand
             Display(targetDiagnostics, input.Sources, formatter, useColor);
             return ExitCodes.ToolchainFailure;
         }
+        // The runtime is checked before the sources are analyzed, when the build links it. A shared library, and a program that uses the
+        // standard library's shared object, need the shared runtime: a static archive there would give the process two runtimes.
+        if (!(library && !dynamic))
+        {
+            var shared = dynamic || (result.GetValue(StandardLibrary) ?? []).Length > 0;
+            var runtimePath = RuntimePathOf(result, target, shared);
+            var runtimeKind = RuntimeKindOf(runtimePath, target);
+            if (runtimeKind is null)
+            {
+                Console.Error.WriteLine($"oxygenc: --runtime must be a static archive (.a) or the shared runtime ({SharedRuntimeFileName(target)}), " +
+                    $"not '{runtimePath}'.");
+                return ExitCodes.SourceError;
+            }
+            if (shared && runtimeKind == NativeDependencyKind.Static)
+            {
+                var flag = dynamic ? "--dynamic" : "--stdlib";
+                Console.Error.WriteLine($"oxygenc: {flag} links the shared runtime, so --runtime must name it ({SharedRuntimeFileName(target)}), " +
+                    $"not the static archive '{runtimePath}'.");
+                return ExitCodes.SourceError;
+            }
+        }
         if (input.Diagnostics.HasErrors)
         {
             Display(input.Diagnostics.Diagnostics, input.Sources, formatter, useColor);
             return ExitCodes.SourceError;
         }
 
-        var resolved = ResolveModules(input.Sources);
+        var resolved = ResolveModules(input.Sources, !result.GetValue(NoStd));
         if (resolved.Diagnostics.Count > 0)
         {
             Display(resolved.Diagnostics,
@@ -159,9 +223,18 @@ internal static class BuildCommand
         {
             try
             {
-                var module = NativeModuleLoader.Load(modulePath);
-                if (module is not null)
-                    externalModules.Add(module);
+                var loaded = NativeModuleLoader.Load(modulePath, target);
+                if (loaded is null)
+                    continue;
+                externalModules.Add(loaded.Module);
+                if (loaded.Warnings.Count > 0)
+                {
+                    var warningBag = new DiagnosticBag();
+                    foreach (var warning in loaded.Warnings)
+                        warningBag.Add(DiagnosticPhase.Metadata, DiagnosticSeverity.Warning, warning, new SourceLocation(1, 1),
+                            sourceName: modulePath.FullName);
+                    Display(warningBag.Diagnostics, sources, formatter, useColor);
+                }
             }
             catch (Exception exception) when (exception is InvalidDataException or IOException)
             {
@@ -184,7 +257,8 @@ internal static class BuildCommand
             .AnalyzeWithDiagnostics(
                 resolved.Units,
                 sources.Select(source => (string?)source.Name).ToList(),
-                externalModules);
+                externalModules,
+                requireMain: !library);
         if (semanticResult.Diagnostics.Count > 0)
         {
             Display(semanticResult.Diagnostics, sources, formatter, useColor);
@@ -192,10 +266,17 @@ internal static class BuildCommand
                 return ExitCodes.SourceError;
         }
 
+        if (library)
+            return BuildLibraryModules(result, input.Sources, resolved.Units, sources, semanticResult.Model!, target,
+                formatter, useColor);
+
         GeneratedLlvmModule generated;
         try
         {
-            generated = new LlvmModuleGenerator(target).Generate("program", semanticResult.Model!);
+            // The program's module is the one its first source file declares, which its metadata names.
+            var programModule = resolved.Units.FirstOrDefault()?.ModuleName ?? "program";
+            generated = new LlvmModuleGenerator(target).Generate(programModule, semanticResult.Model!,
+                GenericsOf(resolved.Units, resolved.Sources, programModule), library);
         }
         catch (LlvmVerificationException exception)
         {
@@ -220,9 +301,6 @@ internal static class BuildCommand
         using (generated)
         {
             var irOutput = result.GetValue(EmitIr);
-            var metadataOutput = result.GetValue(EmitMetadata);
-            if (metadataOutput is not null)
-                generated.WriteMetadata(metadataOutput.FullName);
             if (irOutput is not null)
             {
                 var irOutputPath = Path.GetFullPath(irOutput.FullName);
@@ -234,8 +312,164 @@ internal static class BuildCommand
                 return ExitCodes.Success;
             }
 
-            return BuildExecutable(result, generated, target, metadataOutput, sources, formatter, useColor);
+            return BuildExecutable(result, generated, target, sources, formatter, useColor);
         }
+    }
+
+    // The shared runtime's file: the import library on Windows, and the shared object elsewhere.
+    private static string SharedRuntimeFileName(OxygenTarget target) =>
+        target.Triple.Contains("-windows-", StringComparison.Ordinal) ? "oxygenrt.lib" : "liboxygenrt.so";
+
+    // The runtime that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH (the repository root): the static archive,
+    // or the shared runtime.
+    private static string DefaultRuntimePath(OxygenTarget target, bool shared) =>
+        Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? ".", "runtime", "build", target.Triple,
+            shared ? SharedRuntimeFileName(target) : "liboxygenrt.a");
+
+    // The runtime that the build links: --runtime, or the default for the target.
+    private static string RuntimePathOf(System.CommandLine.ParseResult result, OxygenTarget target, bool shared) =>
+        result.GetValue(Runtime)?.FullName ?? DefaultRuntimePath(target, shared);
+
+    // How a runtime file is linked for the target, or null when it is not a runtime. The static archive is .a on every target. The shared
+    // runtime is linked through its import library on Windows and through the shared object elsewhere.
+    internal static NativeDependencyKind? RuntimeKindOf(string path, OxygenTarget target)
+    {
+        var extension = Path.GetExtension(path);
+        if (extension.Equals(".a", StringComparison.OrdinalIgnoreCase))
+            return NativeDependencyKind.Static;
+        return extension.Equals(Path.GetExtension(SharedRuntimeFileName(target)), StringComparison.OrdinalIgnoreCase)
+            ? NativeDependencyKind.Dynamic
+            : null;
+    }
+
+    // Writes the module as a static library, with its metadata in the object file. The library is not linked, so the runtime is not needed.
+    // Generates each module that the given sources declare, and builds them into one library. A module that the sources import is not
+    // built: it is declared, and the program that uses the library provides it.
+    private static int BuildLibraryModules(
+        System.CommandLine.ParseResult result,
+        IReadOnlyList<SourceText> roots,
+        IReadOnlyList<CompilationUnit> units,
+        IReadOnlyList<SourceText> sources,
+        SemanticModel model,
+        OxygenTarget target,
+        DiagnosticFormatter formatter,
+        bool useColor)
+    {
+        var moduleNames = units
+            .Select((unit, index) => (Unit: unit, Source: sources[index]))
+            .Where(pair => roots.Any(root => root.Name == pair.Source.Name))
+            .Select(pair => pair.Unit.ModuleName ?? "program")
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var modules = new List<GeneratedLlvmModule>();
+        try
+        {
+            foreach (var moduleName in moduleNames)
+                modules.Add(new LlvmModuleGenerator(target).Generate(moduleName, model,
+                    GenericsOf(units, sources, moduleName), library: true));
+            return BuildLibrary(result, modules, target, sources, formatter, useColor);
+        }
+        catch (LlvmVerificationException exception)
+        {
+            // The IR was generated from a program that passed semantic analysis, so invalid IR is a compiler bug.
+            Console.Error.WriteLine("oxygenc: internal compiler error. This is a bug in the compiler, not in your program.");
+            Console.Error.WriteLine(exception.Message);
+            return ExitCodes.InternalError;
+        }
+        catch (Exception exception) when (exception is PlatformNotSupportedException or InvalidOperationException)
+        {
+            var diagnostics = new DiagnosticBag();
+            diagnostics.Add(
+                DiagnosticPhase.Backend,
+                DiagnosticSeverity.Error,
+                exception.Message,
+                new SourceLocation(1, 1));
+            Display(diagnostics.Diagnostics, sources, formatter, useColor);
+            return ExitCodes.InternalError;
+        }
+        finally
+        {
+            foreach (var module in modules)
+                module.Dispose();
+        }
+    }
+
+    private static int BuildLibrary(
+        System.CommandLine.ParseResult result,
+        IReadOnlyList<GeneratedLlvmModule> modules,
+        OxygenTarget target,
+        IReadOnlyList<SourceText> sources,
+        DiagnosticFormatter formatter,
+        bool useColor)
+    {
+        var shared = result.GetValue(Dynamic);
+        // A shared library links the shared runtime. The default is the one that runtime/build.ps1 or build.sh builds for the target.
+        var dependencies = new List<NativeDependency>();
+        if (shared)
+        {
+            var runtimePath = RuntimePathOf(result, target, shared: true);
+            if (!File.Exists(runtimePath))
+            {
+                var runtimeDiagnostics = new DiagnosticBag();
+                runtimeDiagnostics.Add(
+                    DiagnosticPhase.Toolchain,
+                    DiagnosticSeverity.Error,
+                    $"No shared runtime for target '{target.Triple}' at '{runtimePath}'. Build it with runtime/build.ps1 or " +
+                    "runtime/build.sh, or pass --runtime with the shared runtime built for this target.",
+                    new SourceLocation(1, 1));
+                Display(runtimeDiagnostics.Diagnostics, sources, formatter, useColor);
+                return ExitCodes.ToolchainFailure;
+            }
+            dependencies.Add(new NativeDependency(runtimePath, NativeDependencyKind.Dynamic));
+        }
+
+        var keepTemporaryFiles = result.GetValue(KeepTemps);
+        var temporaryDirectory = keepTemporaryFiles
+            ? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}")
+            : null;
+        if (temporaryDirectory is not null)
+            Console.Error.WriteLine($"oxygenc: keeping the intermediate files in '{temporaryDirectory}'.");
+
+        using var interrupt = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, eventArguments) =>
+        {
+            eventArguments.Cancel = true;
+            interrupt.Cancel();
+        };
+        try
+        {
+            // A library is named after its module unless -o gives a path.
+            new NativeBuildPipeline(new ProcessNativeToolRunner(cancellation: interrupt.Token)).BuildLibrary(modules, new NativeBuildOptions
+            {
+                CompilerPath = result.GetValue(Clang) ?? "clang",
+                OptimizationLevel = OptimizationLevelOf(result),
+                Target = target.Triple,
+                TemporaryDirectory = temporaryDirectory,
+                KeepTemporaryFiles = keepTemporaryFiles,
+                OutputPath = result.GetValue(Output)?.FullName ?? modules[0].Metadata.ModuleName,
+                Shared = shared,
+                Dependencies = dependencies
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("oxygenc: the build was cancelled.");
+            return ExitCodes.Interrupted;
+        }
+        catch (Exception exception) when (exception is NativeToolException or InvalidOperationException
+            or ArgumentException or IOException)
+        {
+            var diagnostics = new DiagnosticBag();
+            diagnostics.Add(
+                DiagnosticPhase.Toolchain,
+                DiagnosticSeverity.Error,
+                exception.Message,
+                new SourceLocation(1, 1));
+            Display(diagnostics.Diagnostics, sources, formatter, useColor);
+            return ExitCodes.ToolchainFailure;
+        }
+        return ExitCodes.Success;
     }
 
     // Links the generated module into the native executable with the runtime archive and the given dependencies.
@@ -243,30 +477,30 @@ internal static class BuildCommand
         System.CommandLine.ParseResult result,
         GeneratedLlvmModule generated,
         OxygenTarget target,
-        FileInfo? metadataOutput,
         IReadOnlyList<SourceText> sources,
         DiagnosticFormatter formatter,
         bool useColor)
     {
-        // The default runtime is the archive that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH
-        // (the repository root, which holds runtime/ and stdlib/).
-        var runtimePath = result.GetValue(Runtime)?.FullName
-            ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? ".", "runtime", "build", target.Triple,
-                "liboxygenrt.a");
+        // A program that uses the standard library's shared object links the shared runtime. Run has checked that --runtime is a runtime
+        // that can be linked this way.
+        var shared = (result.GetValue(StandardLibrary) ?? []).Length > 0;
+        var runtimePath = RuntimePathOf(result, target, shared);
         if (!File.Exists(runtimePath))
         {
             var runtimeDiagnostics = new DiagnosticBag();
             runtimeDiagnostics.Add(
                 DiagnosticPhase.Toolchain,
                 DiagnosticSeverity.Error,
-                $"No runtime archive for target '{target.Triple}' at '{runtimePath}'. Build it with runtime/build.ps1 or " +
-                "runtime/build.sh, or pass --runtime with an archive built for this target.",
+                $"No {(shared ? "shared runtime" : "runtime archive")} for target '{target.Triple}' at '{runtimePath}'. Build it with " +
+                "runtime/build.ps1 or runtime/build.sh, or pass --runtime with a runtime built for this target.",
                 new SourceLocation(1, 1));
             Display(runtimeDiagnostics.Diagnostics, sources, formatter, useColor);
             return ExitCodes.ToolchainFailure;
         }
 
-        var dependencies = new List<NativeDependency> { new(runtimePath, NativeDependencyKind.Static) };
+        var runtimeKind = RuntimeKindOf(runtimePath, target)
+            ?? throw new InvalidOperationException($"The runtime '{runtimePath}' was not checked before linking.");
+        var dependencies = new List<NativeDependency> { new(runtimePath, runtimeKind) };
         dependencies.AddRange((result.GetValue(StandardLibrary) ?? [])
             .Select(path => new NativeDependency(path.FullName, NativeDependencyKind.Dynamic)));
 
@@ -289,15 +523,12 @@ internal static class BuildCommand
             generated.BuildNative(new NativeBuildOptions
             {
                 CompilerPath = result.GetValue(Clang) ?? "clang",
-                OptimizationLevel = NormalizeOptimizationLevel(result.GetValue(Optimization) ?? "O2"),
+                OptimizationLevel = OptimizationLevelOf(result),
                 Target = target.Triple,
                 TemporaryDirectory = temporaryDirectory,
                 KeepTemporaryFiles = keepTemporaryFiles,
                 Jobs = result.GetValue(Jobs),
-                GenerateDebugSymbols = result.GetValue(Debug),
                 OutputPath = result.GetValue(Output)?.FullName ?? "program",
-                MetadataPath = metadataOutput?.FullName
-                    ?? (result.GetValue(Output)?.FullName ?? "program") + ".oxmeta",
                 Dependencies = dependencies
             }, new ProcessNativeToolRunner(cancellation: interrupt.Token));
         }
@@ -366,11 +597,11 @@ internal static class BuildCommand
     }
 
     private static (IReadOnlyList<SourceText> Sources, IReadOnlyList<CompilationUnit> Units, IReadOnlyList<Diagnostic> Diagnostics)
-        ResolveModules(IReadOnlyList<SourceText> rootSources)
+        ResolveModules(IReadOnlyList<SourceText> rootSources, bool loadStandardLibrary)
     {
         var tokenizer = new Tokenizer(Log.Logger.ForContext("SourceContext", "Lexer"));
         var resolved = new SourceModuleResolver(tokenizer, Log.Logger.ForContext("SourceContext", "Resolver"))
-            .Resolve(rootSources);
+            .Resolve(rootSources, loadStandardLibrary);
         return (resolved.Sources, resolved.Units, resolved.Diagnostics);
     }
 
@@ -385,6 +616,29 @@ internal static class BuildCommand
             var source = sources.FirstOrDefault(candidate => candidate.Name == diagnostic.SourceName);
             Console.Error.WriteLine(formatter.Format(diagnostic, source, useColor));
         }
+    }
+
+    // --unoptimized means O0. Otherwise --optimization applies, and O2 is the default. The two are rejected together when parsed.
+    internal static string OptimizationLevelOf(System.CommandLine.ParseResult result) =>
+        result.GetValue(Unoptimized) ? "O0" : NormalizeOptimizationLevel(result.GetValue(Optimization) ?? "O2");
+
+    // The generic declarations of the module being built, with one entry per source file that declares it. A file without a
+    // module header is in the module "program", as the analyzer treats it. Only the file name is recorded, so the metadata
+    // does not depend on where the sources are.
+    internal static IReadOnlyList<NativeGenericMetadata> GenericsOf(
+        IReadOnlyList<CompilationUnit> units,
+        IReadOnlyList<SourceText> sources,
+        string moduleName)
+    {
+        var entries = new List<NativeGenericMetadata>();
+        for (var index = 0; index < units.Count; index++)
+        {
+            var unit = units[index] with { ModuleName = units[index].ModuleName ?? "program" };
+            if (unit.ModuleName != moduleName || !GenericSyntax.HasDeclarations(unit))
+                continue;
+            entries.Add(NativeGenericMetadata.Create(unit, Path.GetFileName(sources[index].Name)));
+        }
+        return entries;
     }
 
     private static string NormalizeOptimizationLevel(string value) =>

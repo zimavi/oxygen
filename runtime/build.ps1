@@ -83,4 +83,31 @@ foreach ($triple in $Target) {
     }
 
     Write-Output $library
+
+    # The shared runtime is the same sources built with OXYGEN_RUNTIME_BUILD, which exports their entry points from the DLL. Clang
+    # writes the import library next to it, as oxygenrt.lib. Only the Windows target has a shared build so far.
+    if ($triple -like "*-windows-*") {
+        $sharedDirectory = Join-Path $targetDirectory "shared"
+        New-Item -ItemType Directory -Force -Path $sharedDirectory | Out-Null
+        $sharedObjects = @()
+
+        foreach ($source in Get-ChildItem -Path $sourceDirectory -Filter "*.c" -File | Sort-Object Name) {
+            $object = Join-Path $sharedDirectory "$($source.BaseName).o"
+            $clangArguments = @("--target=$triple", "-std=c17", "-O2", "-g", "-DOXYGEN_RUNTIME_BUILD=1",
+                "-Wall", "-Wextra", "-I", $includeDirectory, "-c", $source.FullName, "-o", $object)
+            & $Clang @clangArguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "Clang failed to compile '$($source.Name)' for the shared $triple Oxygen runtime."
+            }
+            $sharedObjects += $object
+        }
+
+        $dll = Join-Path $targetDirectory "oxygenrt.dll"
+        & $Clang "--target=$triple" -shared -o $dll @sharedObjects
+        if ($LASTEXITCODE -ne 0) {
+            throw "Clang failed to link the shared Oxygen runtime '$dll'."
+        }
+
+        Write-Output $dll
+    }
 }

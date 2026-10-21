@@ -74,4 +74,16 @@ for target in "$@"; do
     # shellcheck disable=SC2086
     "$ARCHIVER" rcs "$library" $objects
     printf '%s\n' "$library"
+
+    # The ELF shared runtime links the same position-independent objects into one shared object. Its entry points have default
+    # visibility, so they are exported. The Itanium exception functions come from the C++ runtime of the program that loads it.
+    case "$target" in
+        *-windows-*) ;;
+        *)
+            shared="$target_directory/liboxygenrt.so"
+            # shellcheck disable=SC2086
+            "$CLANG" "--target=$target" -shared -Wl,-soname,liboxygenrt.so -o "$shared" $objects
+            printf '%s\n' "$shared"
+            ;;
+    esac
 done

@@ -21,9 +21,9 @@ The repository contains the compiler, CLI, runtime, tests, and language/referenc
 To build the repository you will typically need:
 
 - .NET 10 SDK
-- A Clang-based C toolchain for the runtime and native linking
+- clang 22.x for the runtime and native linking. Its major version must match the LLVM libraries, which are LLVM 22.1.8. Other major versions are not part of the test matrix.
 - A compatible archiver such as `llvm-ar`, `ar`, or `llvm-lib`
-- LLVM runtime libraries required by `LLVMSharp`
+- The LLVM libraries used by `LLVMSharp`. NuGet restores them, pinned to LLVM 22.1.8 in `Directory.Build.props`. Keep `LLVMSharpVersion` and `LibLLVMVersion` changed together.
 
 On Windows, the commands below use `pwsh`. On POSIX systems, use the equivalent shell commands.
 
@@ -88,13 +88,15 @@ dotnet run --project .\src\Oxygen.Cli -- build .\main.oxy `
 
 Useful CLI options include:
 
-- `--output`, `-o` — output path for the native executable. On the Windows target `.exe` is added when the path has no extension
+- `--output`, `-o` — output path for the native executable, or for the library with `--library`. Defaults to `program`, or to the module name for a library. On the Windows target `.exe` is added when the path has no extension
+- `--library` — build a static library instead of an executable. A library has no `main` function, and it is not linked, so `--runtime` cannot be used with it. Each module that the given sources declare is compiled to its own object, which carries that module's metadata, and the objects are archived together. A module that the sources import is not built. The default name is the first module's, and `--emit-ir` and `--stdlib` are not supported with `--library` yet
+- `--dynamic` — with `--library`, build a shared library: `<name>.dll` with its import library `<name>.lib` on Windows, and `<name>.so` elsewhere. It links the shared runtime, which `--runtime` names (`oxygenrt.lib` or `liboxygenrt.so`); the default is the one that `runtime/build.ps1` or `build.sh` builds
 - `--emit-ir` — write textual LLVM IR instead of building a native executable
-- `--emit-metadata` — write `.oxmeta` native-module metadata
-- `--runtime`, `-r` — static Oxygen runtime archive to link
+- `--runtime`, `-r` — Oxygen runtime to link: the static archive (`liboxygenrt.a`), or the shared runtime (`oxygenrt.lib` on Windows, `liboxygenrt.so` elsewhere). A program built with `--stdlib`, and a `--library --dynamic` build, link the shared runtime, so they take it by default and reject the static archive. A static archive is linked into the program, and a shared runtime at run time needs `oxygenrt.dll` beside the program on Windows, or its directory on the library path elsewhere
 - `--stdlib` — optional dynamic standard-library dependencies
+- `--no-std` — do not load the standard library. The sources are built alone, so `import std.*` is an error unless the module is in the sources, and `RuntimeException` and `NullReferenceException` are not available. This is how the standard library itself is built (`build stdlib/*.oxy --library --dynamic --no-std`). A null class reference in such a program stops it with exit code 101
 - `--clang`, `-c` — LLVM compiler driver used for object generation and linking
-- `--debug` — generate debug symbols
+- `--unoptimized`, `-u` — build without optimization, the same as `--optimization O0`. It does not add debug information, and it cannot be combined with `--optimization`
 - `--manual-memory`, `-mm` — manual memory mode for every function (C++ style)
 - `--warnings-as-errors` — treat semantic warnings as errors
 - `--optimization`, `-O` — optimization level passed to native code generation
@@ -124,3 +126,24 @@ lexer, parser, AST, semantic analysis, LLVM IR generation, runtime, and native b
 
 If you are contributing new functionality, inspect the relevant source, tests, and docs first,
 then keep changes focused and add tests alongside behavior changes.
+
+## Versioning
+
+The version is in `VERSION` at the repository root, and it is written nowhere else.
+`Directory.Build.props` reads it into the assembly version, and `oxygenc --version`
+reports it. The project follows [Semantic Versioning](https://semver.org). It starts at
+`0.1.0`, and while the major version is 0 nothing is released.
+
+A commit that changes behavior changes `VERSION` in the same commit, by the bump for its
+conventional commit type:
+
+- `feat`: minor bump, `0.1.0` to `0.2.0`.
+- `fix` and `perf`: patch bump, `0.1.0` to `0.1.1`.
+- A breaking change (a `!` after the type, or a `BREAKING CHANGE:` footer): minor bump
+  while the major version is 0, since semver lets `0.y.z` change in any minor release.
+- `refactor`, `test`, `docs`, `build`, `ci` and `chore`: no bump. A refactor that changes
+  behavior is a `feat` or `fix` instead.
+
+The first release sets the major version to 1. That is a decision for the release, not for
+a single commit. Nightly builds add a prerelease suffix such as `0.1.0-nightly.20261021`
+and do not change `VERSION`.

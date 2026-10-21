@@ -54,22 +54,33 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildCondBr(isNull, failure, valid);
 
         builder.PositionAtEnd(failure);
-        var message = $"The member '{memberName}' was {access} through a null class reference.";
-        EmitThrowObject(builder, EmitNullReferenceException(builder, message, model, llvmFunctions));
+        // Without std.exception (a build with --no-std) there is no exception to throw, so the program stops, as a runtime failure does.
+        if (!model.Classes.ContainsKey(NullReferenceClassName))
+        {
+            builder.BuildCall2(_nullReferenceFailure.FunctionType, _nullReferenceFailure, Array.Empty<LLVMValueRef>(),
+                (ReadOnlySpan<char>)string.Empty);
+            builder.BuildUnreachable();
+        }
+        else
+        {
+            var message = $"The member '{memberName}' was {access} through a null class reference.";
+            EmitThrowObject(builder, EmitNullReferenceException(builder, message, model, llvmFunctions));
+        }
         builder.PositionAtEnd(valid);
     }
 
-    // Builds a NullReferenceException with its message. std.exception is always loaded (the source resolver requires
-    // it), so the class and its (string) constructor exist in every module.
+    private const string NullReferenceClassName = "std.exception.NullReferenceException";
+
+    // Builds a NullReferenceException with its message. When the class is loaded, its module (std.exception) is in the build, so the
+    // class and its (string) constructor exist.
     private LLVMValueRef EmitNullReferenceException(
         LLVMBuilderRef builder, string message, SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        const string className = "std.exception.NullReferenceException";
+        const string className = NullReferenceClassName;
         if (!model.Classes.TryGetValue(className, out var cls))
             throw new InvalidOperationException(
-                $"Internal compiler error: '{className}' is not loaded, so a null reference cannot be reported. " +
-                "The source resolver must load std.exception.");
+                $"Internal compiler error: '{className}' is not loaded, so a null reference cannot be reported.");
         var ctor = cls.Constructors.First(candidate => candidate.Parameters.Count == 1
             && candidate.Parameters[0].Type.Kind == SemanticTypeKind.String);
         var instance = AllocateClassInstance(builder, className, cls, true, model, llvmFunctions);

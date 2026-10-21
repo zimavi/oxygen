@@ -37,6 +37,19 @@ public sealed class CommandLineTests : IDisposable
     }
 
     [Fact]
+    public void EmitMetadataIsNoLongerAnOption()
+    {
+        var source = WriteSource("i32 main() { return 0; }");
+
+        var run = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "--emit-ir", Path.Combine(_directory, "program.ll"), "--emit-metadata", Path.Combine(_directory, "p.oxmeta")]);
+
+        // The flag is now an unknown token, which is read as a second source file, so the build fails on it.
+        Assert.NotEqual(0, run.ExitCode);
+        Assert.False(File.Exists(Path.Combine(_directory, "p.oxmeta")));
+    }
+
+    [Fact]
     public void VerboseIsAcceptedForABuild()
     {
         var source = WriteSource("i32 main() { return 0; }");
@@ -45,6 +58,34 @@ public sealed class CommandLineTests : IDisposable
             ["build", source, "--emit-ir", Path.Combine(_directory, "program.ll"), "--verbose"]);
 
         Assert.Equal(0, run.ExitCode);
+    }
+
+    [Fact]
+    public void UnoptimizedSelectsLevelZeroAndOptimizationDefaultsToTwo()
+    {
+        Assert.Equal("O0", BuildCommand.OptimizationLevelOf(ParseBuild("--unoptimized")));
+        Assert.Equal("O0", BuildCommand.OptimizationLevelOf(ParseBuild("-u")));
+        Assert.Equal("O1", BuildCommand.OptimizationLevelOf(ParseBuild("--optimization", "1")));
+        Assert.Equal("O2", BuildCommand.OptimizationLevelOf(ParseBuild()));
+    }
+
+    [Fact]
+    public void UnoptimizedCannotBeCombinedWithOptimization()
+    {
+        Assert.NotEmpty(ParseBuild("--unoptimized", "--optimization", "2").Errors);
+    }
+
+    [Fact]
+    public void DebugIsNoLongerAnOptionBecauseItDidNotGenerateDebugInformation()
+    {
+        Assert.DoesNotContain(BuildCommand.Create().Options, option => option.Aliases.Contains("--debug"));
+    }
+
+    private static System.CommandLine.ParseResult ParseBuild(params string[] options)
+    {
+        var root = new System.CommandLine.RootCommand();
+        root.Add(BuildCommand.Create());
+        return root.Parse(["build", "program.oxy", .. options]);
     }
 
     [SkippableFact]

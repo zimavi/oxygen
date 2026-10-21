@@ -46,6 +46,7 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef _exceptionObject;
     private LLVMValueRef _exceptionEndCatch;
     private LLVMValueRef _exceptionRethrow;
+    private LLVMValueRef _nullReferenceFailure;
     private LLVMValueRef _exceptionUnhandled;
     private LLVMValueRef _tracePush;
     private LLVMValueRef _tracePop;
@@ -73,7 +74,13 @@ public sealed partial class LlvmModuleGenerator
     private LLVMTypeRef ToLlvmStringType() =>
         _context.GetStructType([LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false);
 
-    public GeneratedLlvmModule Generate(string moduleName, SemanticModel model)
+    // The generic entries are the module's generic declarations (see NativeGenericMetadata), which go into the module's metadata.
+    // A library has no native entry point: its code is linked into a program, which has one. So a library has no native main.
+    public GeneratedLlvmModule Generate(
+        string moduleName,
+        SemanticModel model,
+        IReadOnlyList<NativeGenericMetadata>? generics = null,
+        bool library = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(moduleName);
         ArgumentNullException.ThrowIfNull(model);
@@ -223,6 +230,8 @@ public sealed partial class LlvmModuleGenerator
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             _exceptionRethrow = DeclareNativeFunction(module, "__oxygen_runtime_rethrow",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
+            _nullReferenceFailure = DeclareNativeFunction(module, "__oxygen_runtime_null_reference_failure",
+                LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             _exceptionUnhandled = DeclareNativeFunction(module, "__oxygen_runtime_unhandled_object",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
@@ -282,18 +291,35 @@ public sealed partial class LlvmModuleGenerator
 
             foreach (var symbol in symbols)
             {
-                if (!symbol.IsExternal && !IsInterfaceContract(symbol, model))
-                    EmitFunction(context, builder, llvmFunctions[symbol], symbol, model, llvmFunctions);
+                if (symbol.IsExternal || IsInterfaceContract(symbol, model) || !DefinesInThisObject(symbol, library, moduleName, methodOwners))
+                    continue;
+                var function = llvmFunctions[symbol];
+                EmitFunction(context, builder, function, symbol, model, llvmFunctions);
+                if (library && IsInstance(symbol, methodOwners))
+                    function.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
             }
             foreach (var cls in concreteClasses)
             {
+                if (library && !DefinesClassInThisObject(cls, moduleName))
+                    continue;
                 foreach (var ctor in cls.Constructors)
-                    EmitConstructor(context, builder, _constructors[ConstructorKey(cls, ctor)], cls, ctor, model, llvmFunctions);
+                {
+                    var constructor = _constructors[ConstructorKey(cls, ctor)];
+                    EmitConstructor(context, builder, constructor, cls, ctor, model, llvmFunctions);
+                    if (library && IsInstantiationName(cls.Name))
+                        constructor.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
+                }
                 if (cls.Destructor is not null)
-                    EmitDestructor(context, builder, _destructors[cls.QualifiedName], cls, model, llvmFunctions);
+                {
+                    var destructor = _destructors[cls.QualifiedName];
+                    EmitDestructor(context, builder, destructor, cls, model, llvmFunctions);
+                    if (library && IsInstantiationName(cls.Name))
+                        destructor.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
+                }
             }
 
-            EmitNativeMain(context, builder, module, model, llvmFunctions);
+            if (!library)
+                EmitNativeMain(context, builder, module, model, llvmFunctions);
             AllowNullPointerAccess(context, module);
 
             LlvmModuleVerifier.Verify(module);
@@ -303,7 +329,11 @@ public sealed partial class LlvmModuleGenerator
                 ModuleName = moduleName,
                 TargetTriple = _target.Triple,
                 EntryPoint = "main",
-                Functions = symbols.Select(symbol => new NativeFunctionMetadata
+                // The module's own functions. Methods and property accessors are described under their types, and the functions of
+                // other modules (the standard library) and the externals are not this module's to describe.
+                Functions = symbols
+                    .Where(symbol => !methodOwners.ContainsKey(symbol) && symbol.ModuleName == moduleName && !symbol.IsExternal)
+                    .Select(symbol => new NativeFunctionMetadata
                 {
                     ModuleName = symbol.ModuleName,
                     SourceName = symbol.Name,
@@ -315,7 +345,9 @@ public sealed partial class LlvmModuleGenerator
                         .ToArray(),
                     ExternalName = symbol.CInterop?.ExternalName,
                     CallingConvention = symbol.CInterop?.CallingConvention ?? "c"
-                }).ToArray()
+                }).ToArray(),
+                Types = TypeMetadataOf(model, moduleName, methodOwners),
+                Generics = generics ?? []
             };
             return new GeneratedLlvmModule(context, module, builder, metadata);
         }

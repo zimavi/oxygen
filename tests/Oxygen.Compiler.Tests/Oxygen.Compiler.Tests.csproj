@@ -5,6 +5,7 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Selects the native LLVM runtime packages, as src/Oxygen.Llvm does. -->
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
@@ -26,7 +27,7 @@
 
   <!-- The LLVM backend loads native libraries from these packages; see Oxygen.Cli.Tests. -->
   <ItemGroup>
-    <PackageReference Include="libLLVM" Version="23.1.0" />
+    <PackageReference Include="libLLVM" Version="$(LibLLVMVersion)" />
   </ItemGroup>
 
 </Project>

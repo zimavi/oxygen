@@ -101,6 +101,33 @@ symbols, to a directory named after the target triple:
 - `runtime/build/x86_64-unknown-linux-gnu/liboxygenrt.a` (Itanium landing pads)
 - `runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a` (Windows SEH)
 
+The Windows target also gets a shared runtime, `oxygenrt.dll` with its import
+library `oxygenrt.lib`, in the same directory. The DLL exports every entry point
+of `oxygen_runtime.h` (`OXYGEN_RUNTIME_API` marks them). A program linked with
+`--runtime .../oxygenrt.lib` needs `oxygenrt.dll` next to it when it runs. The
+ELF targets get `liboxygenrt.so` in the same directory from `build.sh`, with the
+SONAME `liboxygenrt.so`. A program linked with `--runtime .../liboxygenrt.so`
+needs that directory on the library path when it runs. The Linux build and tests
+were run on Ubuntu 24.04 under WSL.
+
+The runtime is a shared library that can serve several programs at once, so it
+keeps no state of its own. Each program's state (its trace stack, the traces of
+the exceptions it handles, and the exception objects in flight) lives in a
+context (`runtime/src/oxygen_context.h`). The thread that starts a program
+creates the context at its first runtime call, and the context is freed when the
+process exits. Two programs on two threads never see each other's trace or
+exception. `runtime_tests` checks this with two threads, and it fails when the
+context is a process-wide variable.
+
+A null class reference in a program built with `--no-std` has no
+`NullReferenceException` to throw, so the compiler calls
+`__oxygen_runtime_null_reference_failure` instead. It writes a message to standard
+error and exits with code 101, the same as the other runtime failures.
+
+The start of each program also registers its exit flush, the console code page
+and the Windows hardware fault handler. Those are process resources, not runtime
+state, and repeating them is harmless: the first fault handler stops the process.
+
 Pass a triple to build another target: `-Target` for `build.ps1`, or the triple as
 an argument for `build.sh`. The compiler's `--target` selects the archive that
 matches it. A cross build needs the target's C headers, which the host may not
@@ -122,7 +149,9 @@ OUTPUT_DIRECTORY=./artifacts/runtime \
 Each script requires Clang and a compatible archive tool (`llvm-ar`/`ar` or
 `llvm-lib`). Without `--runtime`, the compiler reads the archive for its target
 from `OXYGEN_PATH/runtime/build/<triple>/`, and reports a missing archive with
-the command that builds it.
+the command that builds it. A build with `--stdlib` or `--library --dynamic`
+reads the shared runtime from the same directory instead, since it links that
+one.
 
 The output is a static archive, not a complete executable. The CLI native
 build passes this archive after the LLVM-generated object file and then links
@@ -130,10 +159,9 @@ any optional `--stdlib` paths as dynamic dependencies. The source standard
 library includes `std.io`, which provides `write_stdout`, `write_stderr`,
 and the generic `print`/`println` functions. Values of primitive types, strings,
 and classes implementing `Printable` can be printed. Formatting is written in
-Oxygen. Use `--debug` to generate debug symbols for
-the generated program and select
-another optimization level with `--optimization O0`, `--optimization O1`, or
-`--optimization O2`. The runtime archive always includes debug symbols.
+Oxygen. Select the optimization level with `--optimization O0`, `--optimization O1`,
+or `--optimization O2`, or use `--unoptimized` for `O0`. The compiler does not
+generate debug information yet. The runtime archive is built with `-g`.
 
 To emit textual LLVM IR without compiling or linking a native executable, use
 `--emit-ir`:
@@ -147,7 +175,7 @@ For example:
 
 ```powershell
 dotnet run --project .\src\Oxygen.Cli -- build .\main.oxy `
-  --debug --optimization O0 `
+  --unoptimized `
   --runtime .\runtime\build\windows\liboxygenrt.a `
   --output .\program.exe
 ```

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using LLVMSharp.Interop;
 
 namespace Oxygen.Llvm;
 
@@ -16,6 +17,10 @@ public sealed record NativeBuildOptions
     public required string OutputPath { get; init; }
     public string? MetadataPath { get; init; }
     public string CompilerPath { get; init; } = "clang";
+    // The archiver of a library build. It takes the rcs arguments of llvm-ar, which GNU ar also accepts.
+    public string ArchiverPath { get; init; } = "llvm-ar";
+    // A library build writes a shared library instead of a static archive. Its dependencies are then linked into it.
+    public bool Shared { get; init; }
     public string OptimizationLevel { get; init; } = "O2";
     // The target triple passed to clang for both compiling and linking. Null leaves clang to the host.
     public string? Target { get; init; }
@@ -26,7 +31,6 @@ public sealed record NativeBuildOptions
     // Whether to keep the intermediate files after the build. Otherwise the temporary directory is deleted when the build ends.
     public bool KeepTemporaryFiles { get; init; }
     public int Jobs { get; init; } = 1;
-    public bool GenerateDebugSymbols { get; init; }
     public string? WorkingDirectory { get; init; }
     public IReadOnlyList<NativeDependency> Dependencies { get; init; } = [];
     public IReadOnlyList<string> AdditionalLinkerArguments { get; init; } = [];
@@ -130,19 +134,14 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
                     })
                     .ToArray()
             };
-            NativeModuleMetadataSerializer.Write(options.MetadataPath, metadata);
+            // The sidecar and the embedded copy are written only once the link has succeeded, so a failed build leaves no metadata
+            // that describes an executable which does not exist.
             Build(module.ToString(), options);
-            EmbedMetadataIfOutputExists(options.OutputPath, metadata);
+            NativeModuleMetadataSerializer.Write(options.MetadataPath, metadata);
+            NativeModuleMetadataSerializer.Embed(options.OutputPath, metadata);
             return;
         }
         Build(module.ToString(), options);
-    }
-
-    private static void EmbedMetadataIfOutputExists(string outputPath, NativeModuleMetadata metadata)
-    {
-        var fullPath = Path.GetFullPath(outputPath);
-        if (File.Exists(fullPath))
-            NativeModuleMetadataSerializer.Embed(fullPath, metadata);
     }
 
     // The file that the link writes for an output path. On the Windows target an executable needs the .exe extension, which is
@@ -162,9 +161,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             ?? throw new InvalidOperationException($"Output path '{options.OutputPath}' has no directory.");
         Directory.CreateDirectory(outputDirectory);
 
-        var temporaryDirectory = options.TemporaryDirectory ?? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(temporaryDirectory);
-        try
+        InTemporaryDirectory(options, temporaryDirectory =>
         {
             var irPath = Path.Combine(temporaryDirectory, "program.ll");
             var objectPath = Path.Combine(temporaryDirectory, "program.o");
@@ -178,6 +175,125 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             var linkArguments = CreateLinkArguments(objectPath, outputPath, options);
 
             toolRunner.Run(options.CompilerPath, linkArguments, options.WorkingDirectory);
+        });
+    }
+
+    // Builds a static or a shared library from one or more modules. Each module is compiled to its own object, with its metadata in
+    // the .oxmeta section, and the objects are archived together (or linked together into the shared library). A library is not
+    // linked as a program, so it needs neither the runtime nor a native entry point. A shared library links the runtime it depends on.
+    public void BuildLibrary(IReadOnlyList<GeneratedLlvmModule> modules, NativeBuildOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(modules);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.OutputPath);
+        if (modules.Count == 0)
+            throw new ArgumentException("A library needs at least one module.", nameof(modules));
+
+        foreach (var module in modules)
+        {
+            // The section is added once per module, so the library carries the metadata of each of its modules.
+            module.AddMetadataSection();
+            if (options.Shared && IsWindowsTarget(options.Target))
+                ExportDefinitions(module.Module);
+        }
+        var outputPath = Path.GetFullPath(options.Shared
+            ? SharedLibraryPath(options.OutputPath, options.Target)
+            : LibraryPath(options.OutputPath, options.Target));
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)
+            ?? throw new InvalidOperationException($"Output path '{options.OutputPath}' has no directory."));
+
+        InTemporaryDirectory(options, temporaryDirectory =>
+        {
+            var objectPaths = new List<string>();
+            foreach (var module in modules)
+            {
+                var name = module.Metadata.ModuleName;
+                var irPath = Path.Combine(temporaryDirectory, $"{name}.ll");
+                var objectPath = Path.Combine(temporaryDirectory, $"{name}.o");
+                File.WriteAllText(irPath, module.ToString());
+                toolRunner.Run(
+                    options.CompilerPath,
+                    CreateCompilationArguments(irPath, objectPath, options),
+                    options.WorkingDirectory);
+                objectPaths.Add(objectPath);
+            }
+
+            // The archiver adds members to an existing archive, and the linker would keep an old file's parts, so the old library is
+            // removed first.
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+            if (options.Shared)
+                toolRunner.Run(options.CompilerPath, CreateSharedLinkArguments(objectPaths, outputPath, options),
+                    options.WorkingDirectory);
+            else
+                toolRunner.Run(options.ArchiverPath, ["rcs", outputPath, .. objectPaths], options.WorkingDirectory);
+        });
+    }
+
+    // The single-module form of BuildLibrary.
+    public void BuildLibrary(GeneratedLlvmModule module, NativeBuildOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        BuildLibrary([module], options);
+    }
+
+    // The file that a library build writes for an output path. A library gets .lib on the Windows target and .a elsewhere, when the
+    // output has no extension.
+    public static string LibraryPath(string outputPath, string? target) =>
+        string.IsNullOrEmpty(Path.GetExtension(outputPath))
+            ? outputPath + (IsWindowsTarget(target) ? ".lib" : ".a")
+            : outputPath;
+
+    // The file that a shared library build writes: a .dll on the Windows target, which also gets an import library next to it, and an
+    // .so elsewhere. The extension is added when the output has none.
+    public static string SharedLibraryPath(string outputPath, string? target) =>
+        string.IsNullOrEmpty(Path.GetExtension(outputPath))
+            ? outputPath + (IsWindowsTarget(target) ? ".dll" : ".so")
+            : outputPath;
+
+    // Links a shared library from the modules' objects and its dependencies, which are the shared runtime and nothing else. The
+    // dependencies are resolved when the library is loaded, or by the linker through the import library on Windows.
+    public static IReadOnlyList<string> CreateSharedLinkArguments(
+        IReadOnlyList<string> objectPaths,
+        string outputPath,
+        NativeBuildOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(objectPaths);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var arguments = CreateCodeGenerationArguments(options, includeLtoJobs: false);
+        arguments.Add("-shared");
+        if (!IsWindowsTarget(options.Target))
+            arguments.Add($"-Wl,-soname,{Path.GetFileName(outputPath)}");
+        arguments.AddRange(objectPaths);
+        arguments.AddRange(options.Dependencies.Select(dependency => dependency.Path));
+        arguments.Add("-o");
+        arguments.Add(outputPath);
+        if (options.UseLld ?? IsLldOnPath(options.Target))
+            arguments.Add("-fuse-ld=lld");
+        return arguments;
+    }
+
+    // On Windows a shared library exports the functions it defines, so that the programs that link it can call them. An instance of a
+    // generic declaration is linkonce_odr and stays private to the object, so it is not exported.
+    private static void ExportDefinitions(LLVMModuleRef module)
+    {
+        for (var function = module.FirstFunction; function.Handle != IntPtr.Zero; function = function.NextFunction)
+        {
+            if (!function.IsDeclaration && function.Linkage == LLVMLinkage.LLVMExternalLinkage)
+                function.DLLStorageClass = LLVMDLLStorageClass.LLVMDLLExportStorageClass;
+        }
+    }
+
+    // Runs a build in a temporary directory, which is deleted afterwards unless the options keep it.
+    private static void InTemporaryDirectory(NativeBuildOptions options, Action<string> build)
+    {
+        var temporaryDirectory = options.TemporaryDirectory ?? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temporaryDirectory);
+        try
+        {
+            build(temporaryDirectory);
         }
         finally
         {
@@ -278,8 +394,6 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         var arguments = new List<string> { $"-{options.OptimizationLevel}" };
         if (!string.IsNullOrWhiteSpace(options.Target))
             arguments.Add($"--target={options.Target}");
-        if (options.GenerateDebugSymbols)
-            arguments.Add("-g");
         if (options.Jobs > 1)
         {
             arguments.Add("-flto=thin");

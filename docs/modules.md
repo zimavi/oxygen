@@ -91,11 +91,11 @@ module. Public declarations are the API exposed to importing modules.
 
 Compiler-produced native modules carry versioned Oxygen metadata containing
 qualified declarations, type encodings, visibility, native symbol names, and
-link dependencies. The CLI writes this metadata beside the native output as
-`<output>.oxmeta`, or to the path passed to `--emit-metadata`, and appends the
-same versioned payload to the native artifact. Readers prefer the embedded
-payload and fall back to the `.oxmeta` sidecar. Metadata is deterministically
-ordered and version validated.
+link dependencies. The CLI does not write a sidecar `.oxmeta` file or append
+the payload to executables at present. Library builds will embed the metadata
+in a `.oxmeta` object section (see [native module metadata](native-module-metadata.md)).
+Readers still accept a payload that an older build appended, or a sidecar
+`.oxmeta`. Metadata is deterministically ordered and version validated.
 
 Native binaries without Oxygen metadata are opaque. They may be linked as
 dependencies, but type-safe calls require an explicit ABI declaration or

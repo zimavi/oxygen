@@ -1,94 +1,82 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "oxygen_runtime.h"
+#include "oxygen_context.h"
 
 #if defined(_WIN32)
 #include <windows.h>
 #endif
 
-/* The trace stack of the running thread. Each function pushes a frame when it starts and pops it when it returns. The stack grows
- * as needed, so a deep call chain keeps every frame. An exception leaves its functions without popping them, so the catch that
- * handles it restores the depth that its `try` saved. */
+/* The trace stack of the running thread lives in its program's context (oxygen_context.h). Each function pushes a frame when it starts
+ * and pops it when it returns. The stack grows as needed, so a deep call chain keeps every frame. An exception leaves its functions
+ * without popping them, so the catch that handles it restores the depth that its `try` saved. */
 #define OXYGEN_TRACE_INITIAL_CAPACITY 256
-static _Thread_local oxygen_runtime_trace_frame *oxygen_trace_frames;
-static _Thread_local uint64_t oxygen_trace_depth;
-static _Thread_local uint64_t oxygen_trace_capacity;
-
-typedef struct oxygen_exception_trace_record
-{
-    void *object;
-    oxygen_runtime_trace trace;
-    oxygen_runtime_trace_frame *frames;
-    struct oxygen_exception_trace_record *next;
-} oxygen_exception_trace_record;
-
-static _Thread_local oxygen_exception_trace_record *oxygen_exception_traces;
 
 void __oxygen_runtime_trace_push(const char *function_name, const char *file_name,
     uint32_t line, uint32_t column)
 {
-    if (oxygen_trace_depth == oxygen_trace_capacity)
+    oxygen_context *context = oxygen_context_current();
+    if (context->trace_depth == context->trace_capacity)
     {
-        uint64_t capacity = oxygen_trace_capacity == 0
-            ? OXYGEN_TRACE_INITIAL_CAPACITY : oxygen_trace_capacity * 2;
-        oxygen_runtime_trace_frame *frames =
-            realloc(oxygen_trace_frames, sizeof(*frames) * capacity);
+        uint64_t capacity = context->trace_capacity == 0
+            ? OXYGEN_TRACE_INITIAL_CAPACITY : context->trace_capacity * 2;
+        oxygen_runtime_trace_frame *frames = realloc(context->trace_frames, sizeof(*frames) * capacity);
         if (frames == NULL)
         {
             fprintf(oxygen_runtime_error_stream(), "Oxygen ran out of memory for the stack trace\n");
             fflush(stderr);
             oxygen_runtime_abort();
         }
-        oxygen_trace_frames = frames;
-        oxygen_trace_capacity = capacity;
+        context->trace_frames = frames;
+        context->trace_capacity = capacity;
     }
-    oxygen_trace_frames[oxygen_trace_depth++] =
-        (oxygen_runtime_trace_frame){function_name, file_name, line, column};
+    context->trace_frames[context->trace_depth++] = (oxygen_runtime_trace_frame){function_name, file_name, line, column};
 }
 
 void __oxygen_runtime_trace_pop(void)
 {
-    if (oxygen_trace_depth != 0)
-        --oxygen_trace_depth;
+    oxygen_context *context = oxygen_context_current();
+    if (context->trace_depth != 0)
+        --context->trace_depth;
 }
 
 uint64_t __oxygen_runtime_trace_depth(void)
 {
-    return oxygen_trace_depth;
+    return oxygen_context_current()->trace_depth;
 }
 
 /* Sets the depth back to a depth saved by a `try`. The depth only goes down: frames above it belong to functions that the
  * exception has already left. */
 void __oxygen_runtime_trace_restore(uint64_t depth)
 {
-    if (depth < oxygen_trace_depth)
-        oxygen_trace_depth = depth;
+    oxygen_context *context = oxygen_context_current();
+    if (depth < context->trace_depth)
+        context->trace_depth = depth;
 }
 
 static void oxygen_capture_trace(void *object)
 {
+    oxygen_context *context = oxygen_context_current();
     oxygen_exception_trace_record *record = calloc(1, sizeof(*record));
     if (record == NULL)
         oxygen_runtime_abort();
     record->object = object;
-    record->trace.count = oxygen_trace_depth;
-    if (oxygen_trace_depth != 0)
+    record->trace.count = context->trace_depth;
+    if (context->trace_depth != 0)
     {
-        record->frames = malloc(sizeof(*record->frames) * oxygen_trace_depth);
+        record->frames = malloc(sizeof(*record->frames) * context->trace_depth);
         if (record->frames == NULL)
             oxygen_runtime_abort();
-        memcpy(record->frames, oxygen_trace_frames,
-            sizeof(*record->frames) * oxygen_trace_depth);
+        memcpy(record->frames, context->trace_frames, sizeof(*record->frames) * context->trace_depth);
         record->trace.frames = record->frames;
     }
-    record->next = oxygen_exception_traces;
-    oxygen_exception_traces = record;
+    record->next = context->exception_traces;
+    context->exception_traces = record;
 }
 
 static const oxygen_runtime_trace *oxygen_find_trace(void *object)
 {
-    for (oxygen_exception_trace_record *record = oxygen_exception_traces;
+    for (oxygen_exception_trace_record *record = oxygen_context_current()->exception_traces;
          record != NULL; record = record->next)
         if (record->object == object)
             return &record->trace;
@@ -97,7 +85,7 @@ static const oxygen_runtime_trace *oxygen_find_trace(void *object)
 
 static void oxygen_release_trace(void *object)
 {
-    oxygen_exception_trace_record **link = &oxygen_exception_traces;
+    oxygen_exception_trace_record **link = &oxygen_context_current()->exception_traces;
     while (*link != NULL)
     {
         if ((*link)->object == object)
@@ -178,7 +166,6 @@ extern void *__cxa_begin_catch(void *);
 extern void __cxa_end_catch(void);
 extern void __cxa_rethrow(void);
 extern const void *_ZTIv;
-static _Thread_local void *oxygen_current_posix_object;
 #endif
 
 #if defined(_WIN32)
@@ -187,13 +174,10 @@ static _Thread_local void *oxygen_current_posix_object;
  * filter/handler.  Keep only the active record, never an EXCEPTION_POINTERS
  * stack address, so rethrow remains valid after the filter returns.
  */
-static _Thread_local void *oxygen_current_seh_object;
-static _Thread_local DWORD oxygen_current_seh_flags;
 /* The Oxygen object of the exception being raised. On Windows, a catch funclet receives the exception code from
  * llvm.eh.exceptionpointer, not the exception record, so the object is handed over through this slot. It is set
  * immediately before RaiseException. A finally that throws and catches internally overwrites it, which is a known
  * limitation of this transport. */
-static _Thread_local void *oxygen_in_flight_seh_object;
 #endif
 
 /* Raises an exception object that is already being handled, so it continues to unwind. The object and its trace are the ones that
@@ -207,7 +191,7 @@ void __oxygen_runtime_continue_throw(void *object)
     *payload = object;
     __cxa_throw(payload, &_ZTIv, NULL);
 #else
-    oxygen_in_flight_seh_object = object;
+    oxygen_context_current()->in_flight_seh_object = object;
     ULONG_PTR arguments[1] = {(ULONG_PTR)object};
     RaiseException(
         (DWORD)OXYGEN_RUNTIME_SEH_EXCEPTION_CODE,
@@ -229,17 +213,18 @@ void *__oxygen_runtime_exception_object(void *exception_handle)
 {
 #if !defined(_WIN32)
     void **payload = (void **)__cxa_begin_catch(exception_handle);
-    oxygen_current_posix_object = payload == NULL ? NULL : *payload;
-    return oxygen_current_posix_object;
+    oxygen_context_current()->current_posix_object = payload == NULL ? NULL : *payload;
+    return oxygen_context_current()->current_posix_object;
 #else
     /* The handle is the exception code of the record being dispatched. Any other code (for example a hardware
      * fault caught by the same catch-all) is not an Oxygen exception. */
     if ((uintptr_t)exception_handle != (uintptr_t)OXYGEN_RUNTIME_SEH_EXCEPTION_CODE)
         return NULL;
 
-    oxygen_current_seh_object = oxygen_in_flight_seh_object;
-    oxygen_current_seh_flags = 0;
-    return oxygen_current_seh_object;
+    oxygen_context *context = oxygen_context_current();
+    context->current_seh_object = context->in_flight_seh_object;
+    context->current_seh_flags = 0;
+    return context->current_seh_object;
 #endif
 }
 
@@ -248,11 +233,11 @@ void *__oxygen_runtime_exception_object(void *exception_handle)
 void __oxygen_runtime_end_catch(void)
 {
 #if !defined(_WIN32)
-    oxygen_current_posix_object = NULL;
+    oxygen_context_current()->current_posix_object = NULL;
     __cxa_end_catch();
 #else
-    oxygen_current_seh_object = NULL;
-    oxygen_current_seh_flags = 0;
+    oxygen_context_current()->current_seh_object = NULL;
+    oxygen_context_current()->current_seh_flags = 0;
 #endif
 }
 
@@ -262,18 +247,19 @@ void __oxygen_runtime_rethrow(void)
     __cxa_rethrow();
     abort();
 #else
-    if (oxygen_current_seh_object == NULL)
+    oxygen_context *context = oxygen_context_current();
+    if (context->current_seh_object == NULL)
     {
         fprintf(oxygen_runtime_error_stream(), "Unhandled Exception\n");
         fflush(stderr);
         oxygen_runtime_abort();
     }
 
-    oxygen_in_flight_seh_object = oxygen_current_seh_object;
-    ULONG_PTR arguments[1] = {(ULONG_PTR)oxygen_current_seh_object};
+    context->in_flight_seh_object = context->current_seh_object;
+    ULONG_PTR arguments[1] = {(ULONG_PTR)context->current_seh_object};
     RaiseException(
         (DWORD)OXYGEN_RUNTIME_SEH_EXCEPTION_CODE,
-        oxygen_current_seh_flags | EXCEPTION_NONCONTINUABLE,
+        context->current_seh_flags | EXCEPTION_NONCONTINUABLE,
         1,
         arguments);
     abort();

@@ -18,7 +18,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.85" />
   </ItemGroup>
 
   <ItemGroup>
@@ -27,15 +27,19 @@
 
   <!-- The tests run the compiler's apphost, as users do: launching oxygenc.dll with `dotnet` cannot
        load the LLVM native library, while the apphost can. -->
-  <ItemGroup>
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <None Include="..\..\src\Oxygen.Cli\bin\$(Configuration)\$(TargetFramework)\oxygenc.exe"
           Link="oxygenc.exe" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <None Include="..\..\src\Oxygen.Cli\bin\$(Configuration)\$(TargetFramework)\oxygenc"
+          Link="oxygenc" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Native LLVM libraries used by the compiler. They are not copied into a project's output folder
        through a project reference to an executable, so the test project references the package directly. -->
   <ItemGroup>
-    <PackageReference Include="libLLVM" Version="23.1.0" />
+    <PackageReference Include="libLLVM" Version="$(LibLLVMVersion)" />
   </ItemGroup>
 
 </Project>

@@ -139,7 +139,8 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<CompilationUnit> compilationUnits,
         DiagnosticBag? diagnostics,
         IReadOnlyList<string?>? sourceNames = null,
-        IReadOnlyList<ExternalModuleDeclaration>? externalModules = null)
+        IReadOnlyList<ExternalModuleDeclaration>? externalModules = null,
+        bool requireMain = true)
     {
         ArgumentNullException.ThrowIfNull(compilationUnits);
         _diagnostics = diagnostics;
@@ -582,20 +583,21 @@ public sealed partial class SemanticAnalyzer
             }
         }
 
+        // A library has no entry point, so it does not need main. A program does.
         FunctionSymbol? mainFunction = null;
-        if (!functionsByName.TryGetValue("program.main", out var mainOverloads))
+        if (functionsByName.TryGetValue("program.main", out var mainOverloads))
+        {
+            mainFunction = mainOverloads.FirstOrDefault(function => function.Parameters.Count == 0)
+                ?? mainOverloads[0];
+            ValidateMainFunction(mainFunction, diagnostics, functionSources[mainFunction]);
+        }
+        else if (requireMain)
         {
             ReportOrThrow(
                 diagnostics,
                 "A parameterless 'main' function returning i32 or void is required",
                 compilationUnits.Count > 0 ? compilationUnits[0].Location : new SourceLocation(1, 1),
                 sourceName: sourceNames is { Count: > 0 } ? sourceNames[0] : null);
-        }
-        else
-        {
-            mainFunction = mainOverloads.FirstOrDefault(function => function.Parameters.Count == 0)
-                ?? mainOverloads[0];
-            ValidateMainFunction(mainFunction, diagnostics, functionSources[mainFunction]);
         }
 
         var expressionTypes = new Dictionary<Expression, SemanticType>(ReferenceEqualityComparer.Instance);
@@ -795,13 +797,14 @@ public sealed partial class SemanticAnalyzer
     public SemanticResult AnalyzeWithDiagnostics(
         IReadOnlyList<CompilationUnit> compilationUnits,
         IReadOnlyList<string?>? sourceNames = null,
-        IReadOnlyList<ExternalModuleDeclaration>? externalModules = null)
+        IReadOnlyList<ExternalModuleDeclaration>? externalModules = null,
+        bool requireMain = true)
     {
         var diagnostics = new DiagnosticBag();
         try
         {
             return new SemanticResult(
-                AnalyzeCore(compilationUnits, diagnostics, sourceNames, externalModules),
+                AnalyzeCore(compilationUnits, diagnostics, sourceNames, externalModules, requireMain),
                 diagnostics.Diagnostics);
         }
         catch (SemanticException exception)

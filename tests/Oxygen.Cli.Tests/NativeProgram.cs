@@ -46,6 +46,22 @@ internal static class NativeProgram
         throw new SkipException(missing);
     }
 
+    // A library is not linked, so it needs the compiler and the archiver, but not the runtime archive.
+    public static void RequireLibraryToolchain()
+    {
+        var missing = FindOnPath("clang") is null
+            ? "clang was not found on PATH."
+            : FindOnPath("llvm-ar") is null
+                ? "llvm-ar was not found on PATH."
+                : null;
+        if (missing is null)
+            return;
+
+        if (Environment.GetEnvironmentVariable(RequireNativeTestsVariable) == "1")
+            Assert.Fail($"Library tests are required but unavailable: {missing}");
+        throw new SkipException(missing);
+    }
+
     private static string? FindMissingToolchainPart()
     {
         if (!File.Exists(RuntimeLibrary))

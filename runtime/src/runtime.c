@@ -1,4 +1,4 @@
-#include "oxygen_runtime.h"
+#include "oxygen_context.h"
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -21,8 +21,13 @@ static LONG CALLBACK oxygen_hardware_fault_handler(EXCEPTION_POINTERS *exception
 }
 #endif
 
-void __oxygen_runtime_initialize(void)
+/* A program starts here, on the thread that runs it. The runtime is a shared library that can serve several programs, so the start keeps
+ * no state of its own: it creates the program's context, and the exit handler, the console settings and the fault handler are each
+ * program's own registrations. Their effects are idempotent, and the first fault handler to run stops the process, so a second start
+ * does not change what a fault does. */
+OXYGEN_RUNTIME_API void __oxygen_runtime_initialize(void)
 {
+    oxygen_context_begin();
     oxygen_io_initialize();
 #if defined(_WIN32)
     /* Oxygen strings are bytes. They are written unchanged: no newline becomes a carriage return and a line feed. */

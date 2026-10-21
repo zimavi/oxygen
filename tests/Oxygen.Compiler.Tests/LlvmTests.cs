@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using LLVMSharp.Interop;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Lexer;
@@ -15,6 +16,32 @@ namespace Oxygen.Compiler.Tests;
 
 public sealed class LlvmTests
 {
+    // The C API of the LLVM library that the process actually loads, not the version the package asks for.
+    // The package ships LLVM-C.dll on Windows and libLLVM.so on Linux. Each import is only resolved when it is called.
+    [DllImport("LLVM-C", EntryPoint = "LLVMGetVersion")]
+    private static extern void GetWindowsLlvmVersion(out uint major, out uint minor, out uint patch);
+
+    [DllImport("libLLVM", EntryPoint = "LLVMGetVersion")]
+    private static extern void GetLinuxLlvmVersion(out uint major, out uint minor, out uint patch);
+
+    private static void GetLlvmVersion(out uint major, out uint minor, out uint patch)
+    {
+        if (OperatingSystem.IsWindows())
+            GetWindowsLlvmVersion(out major, out minor, out patch);
+        else
+            GetLinuxLlvmVersion(out major, out minor, out patch);
+    }
+
+    // LLVMSharp.Interop 22.1.8 is built for LLVM 22.1.8. Loading another LLVM with those bindings is undefined, so this
+    // fails when the pins in Directory.Build.props drift apart. Update the expected version with LLVMSharpVersion.
+    [Fact]
+    public void TheLoadedLlvmIsTheVersionTheBindingsWereBuiltFor()
+    {
+        GetLlvmVersion(out var major, out var minor, out var patch);
+
+        Assert.Equal((22u, 1u, 8u), (major, minor, patch));
+    }
+
     [Fact]
     public void ManglesModuleAndFunctionNamesWithLengthPrefixes()
     {
@@ -159,7 +186,7 @@ public sealed class LlvmTests
     }
 
     [Fact]
-    public void AddsDebugSymbolsAndIndependentOptimizationToBothStages()
+    public void PassesTheOptimizationLevelToBothStagesWithoutDebugInformation()
     {
         var runner = new RecordingToolRunner();
         var outputDirectory = Path.Combine(Path.GetTempPath(), $"oxygen-test-{Guid.NewGuid():N}");
@@ -170,13 +197,13 @@ public sealed class LlvmTests
                 new NativeBuildOptions
                 {
                     OptimizationLevel = "O0",
-                    GenerateDebugSymbols = true,
                     OutputPath = Path.Combine(outputDirectory, "program")
                 });
 
             Assert.Equal(2, runner.Invocations.Count);
-            Assert.Equal(["-O0", "-g"], runner.Invocations[0].Arguments.Take(2));
-            Assert.Equal(["-O0", "-g"], runner.Invocations[1].Arguments.Take(2));
+            Assert.Equal(["-O0"], runner.Invocations[0].Arguments.Take(1));
+            Assert.Equal(["-O0"], runner.Invocations[1].Arguments.Take(1));
+            Assert.All(runner.Invocations, invocation => Assert.DoesNotContain("-g", invocation.Arguments));
         }
         finally
         {
@@ -211,16 +238,19 @@ public sealed class LlvmTests
         {
             ModuleName = "program",
             EntryPoint = "main",
+            TargetTriple = "x86_64-pc-windows-msvc",
             Functions =
             [
                 new NativeFunctionMetadata
                 {
+                    ModuleName = "program",
                     SourceName = "z",
                     NativeName = "_Ox_z",
                     ReturnType = "i32"
                 },
                 new NativeFunctionMetadata
                 {
+                    ModuleName = "program",
                     SourceName = "a",
                     NativeName = "_Ox_a",
                     ReturnType = "void"
@@ -257,10 +287,12 @@ public sealed class LlvmTests
         {
             ModuleName = "program",
             EntryPoint = "main",
+            TargetTriple = "x86_64-pc-windows-msvc",
             Functions =
             [
                 new NativeFunctionMetadata
                 {
+                    ModuleName = "program",
                     SourceName = "puts",
                     NativeName = "_Ox_puts",
                     ExternalName = "puts",
@@ -278,14 +310,15 @@ public sealed class LlvmTests
     }
 
     // Version 1 names symbols with the scheme that version 2 replaced, so its metadata cannot link against this compiler's output.
+    // Versions 2 and 3 are read; a version after 3 is newer than this compiler understands.
     [Theory]
     [InlineData(1)]
-    [InlineData(3)]
+    [InlineData(4)]
     public void NativeMetadataRejectsOtherFormatVersions(int formatVersion)
     {
         var exception = Assert.Throws<InvalidDataException>(() =>
             NativeModuleMetadataSerializer.Deserialize(
-                $$"""{"formatVersion":{{formatVersion}},"moduleName":"program","entryPoint":"main"}"""));
+                $$"""{"formatVersion":{{formatVersion}},"moduleName":"program","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}"""));
 
         Assert.Contains("Unsupported native metadata format version", exception.Message);
     }
@@ -431,10 +464,12 @@ public sealed class LlvmTests
             {
                 ModuleName = "foo.bar",
                 EntryPoint = "main",
+                TargetTriple = "x86_64-pc-windows-msvc",
                 Functions =
                 [
                     new NativeFunctionMetadata
                     {
+                        ModuleName = "program",
                         SourceName = "value",
                         NativeName = "_Ox_native_value",
                         ReturnType = "i32"
@@ -1172,6 +1207,37 @@ public sealed class LlvmTests
         Assert.Contains("define i32 @_Ox_v1_m9program.A_f5value_p0_()", ir);
         Assert.Contains("define i32 @_Ox_v1_m7program_c1A_f5value_p0_(", ir);
         Assert.DoesNotContain(".1(", ir);
+    }
+
+    [Fact]
+    public void AFailedBuildWritesNoMetadataSidecar()
+    {
+        using var generated = new LlvmModuleGenerator().Generate("program", Analyze("i32 main() { return 0; }"));
+        var directory = Path.Combine(Path.GetTempPath(), $"oxygen-test-{Guid.NewGuid():N}");
+        try
+        {
+            var sidecar = Path.Combine(directory, "program.oxmeta");
+
+            Assert.Throws<InvalidOperationException>(() => generated.BuildNative(new NativeBuildOptions
+            {
+                OutputPath = Path.Combine(directory, "program"),
+                MetadataPath = sidecar,
+                Target = "x86_64-pc-windows-msvc"
+            }, new FailingToolRunner()));
+
+            Assert.False(File.Exists(sidecar));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private sealed class FailingToolRunner : INativeToolRunner
+    {
+        public void Run(string executable, IReadOnlyList<string> arguments, string? workingDirectory) =>
+            throw new InvalidOperationException("The native tool failed.");
     }
 
     private static SemanticModel Analyze(string source)

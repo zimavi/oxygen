@@ -36,6 +36,15 @@ void __oxygen_runtime_enum_cast_failure(uint64_t value)
     oxygen_runtime_abort();
 }
 
+/* A null class reference was used in a program built with --no-std, which has no NullReferenceException to throw. Like the other runtime
+ * failures, it stops the program with exit code 101. */
+void __oxygen_runtime_null_reference_failure(void)
+{
+    fprintf(oxygen_runtime_error_stream(), "Oxygen stopped: a null class reference was used\n");
+    fflush(stderr);
+    oxygen_runtime_abort();
+}
+
 void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand)
 {
     switch (kind)

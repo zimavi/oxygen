@@ -14,20 +14,26 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Ensure LLVM (clang, llvm-ar) is installed
+      - name: Install LLVM 22.1.8 (clang, llvm-ar) and check the version
+        # The runner's own clang is older than the LLVM libraries the compiler binds to, and the try/catch lowering depends on the
+        # matching clang (README, Prerequisites). So the pinned version is installed and checked, not whichever clang the image has.
         shell: pwsh
         run: |
-          if (-not (Get-Command clang -ErrorAction SilentlyContinue)) {
-            choco install llvm -y --no-progress
-            echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          choco install llvm --version 22.1.8 -y --no-progress --force
+          $bin = 'C:\Program Files\LLVM\bin'
+          echo $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $version = (& "$bin\clang.exe" --version | Select-Object -First 1)
+          Write-Output $version
+          if ($version -notmatch 'clang version 22\.1\.') {
+            throw "Expected clang 22.1.x, found: $version"
           }
 
       - name: Build the Windows runtime archive
         shell: pwsh
         run: |
           ./runtime/build.ps1
-          if (-not (Test-Path runtime/build/windows/liboxygenrt.a)) {
-            throw "runtime/build/windows/liboxygenrt.a was not produced."
+          if (-not (Test-Path runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a)) {
+            throw "runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a was not produced."
           }
 
       - name: Build solution
