@@ -72,10 +72,10 @@ var standardLibraryOption = new Option<FileInfo[]>("--stdlib")
     Description = "Optional dynamic standard-library dependency",
     Arity = ArgumentArity.ZeroOrMore
 };
-var targetOption = new Option<string?>("--target")
+var targetOption = new Option<TargetTriple?>("--target")
 {
-    Description = "Target triple: x86_64-pc-windows-msvc or x86_64-unknown-linux-gnu. Defaults to the host platform. " +
-        "The runtime library passed with --runtime must be built for the same target"
+    Description = "Target, written with underscores for the triple: x86_64_pc_windows_msvc is x86_64-pc-windows-msvc. " +
+        "Defaults to the host platform. The runtime library passed with --runtime must be built for the same target"
 };
 var buildCommand = new Command("build", "Build the project")
 {
@@ -124,7 +124,7 @@ int RunBuild(System.CommandLine.ParseResult result)
     try
     {
         var triple = result.GetValue(targetOption);
-        target = triple is null ? OxygenTarget.Host : OxygenTarget.Parse(triple);
+        target = triple is null ? OxygenTarget.Host : triple.Value.ToTarget();
     }
     catch (Exception exception) when (exception is ArgumentException or PlatformNotSupportedException)
     {

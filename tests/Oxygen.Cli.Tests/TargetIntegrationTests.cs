@@ -16,24 +16,24 @@ public sealed class TargetIntegrationTests : IDisposable
     }
 
     [Theory]
-    [InlineData("x86_64-pc-windows-msvc", "e-m:w-")]
-    [InlineData("x86_64-unknown-linux-gnu", "e-m:e-")]
-    public void EmittedIrNamesTheRequestedTarget(string target, string dataLayoutPrefix)
+    [InlineData("x86_64_pc_windows_msvc", "x86_64-pc-windows-msvc", "e-m:w-")]
+    [InlineData("x86_64_unknown_linux_gnu", "x86_64-unknown-linux-gnu", "e-m:e-")]
+    public void EmittedIrNamesTheRequestedTarget(string name, string triple, string dataLayoutPrefix)
     {
         var source = WriteSource("i32 main() { return 0; }");
         var ir = Path.Combine(_directory, "program.ll");
 
         var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
-            ["build", source, "-o", Path.Combine(_directory, "program.exe"), "--target", target, "--emit-ir", ir]);
+            ["build", source, "-o", Path.Combine(_directory, "program.exe"), "--target", name, "--emit-ir", ir]);
 
         Assert.True(build.ExitCode == 0, build.Error);
         var text = File.ReadAllText(ir);
-        Assert.Contains($"target triple = \"{target}\"", text);
+        Assert.Contains($"target triple = \"{triple}\"", text);
         Assert.Contains($"target datalayout = \"{dataLayoutPrefix}", text);
     }
 
     [Fact]
-    public void AnUnsupportedTargetIsReportedBeforeAnythingIsBuilt()
+    public void AnUnknownTargetNameIsRejectedWithTheNamesThatAreAccepted()
     {
         var source = WriteSource("i32 main() { return 0; }");
         var executable = Path.Combine(_directory, "program.exe");
@@ -42,7 +42,9 @@ public sealed class TargetIntegrationTests : IDisposable
             ["build", source, "-o", executable, "--target", "x86_64-w64-windows-gnu"]);
 
         Assert.Equal(1, build.ExitCode);
-        Assert.Contains("Unsupported target 'x86_64-w64-windows-gnu'", build.Error);
+        var message = build.Output + build.Error;
+        Assert.Contains("Cannot parse argument 'x86_64-w64-windows-gnu' for option '--target'", message);
+        Assert.Contains("x86_64_pc_windows_msvc", message);
         Assert.False(File.Exists(executable));
     }
 
