@@ -71,7 +71,9 @@ public sealed class HardwareFaultIntegrationTests : IDisposable
             }
             """, optimization: "0");
 
-        Assert.Equal(101, run.ExitCode);
+        // The standard error is part of the message, so a run that fails in CI shows what the fault handler wrote before it stopped.
+        Assert.True(run.ExitCode == 101,
+            $"Expected exit code 101, got {run.ExitCode}. The standard error of the run was:\n{run.Error}");
         Assert.Equal(string.Empty, run.Output);
         Assert.Contains("Oxygen stopped after a hardware fault", run.Error);
     }
