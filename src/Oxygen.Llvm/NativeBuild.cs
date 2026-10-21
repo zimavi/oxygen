@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using LLVMSharp.Interop;
 
 namespace Oxygen.Llvm;
 
@@ -18,6 +19,8 @@ public sealed record NativeBuildOptions
     public string CompilerPath { get; init; } = "clang";
     // The archiver of a library build. It takes the rcs arguments of llvm-ar, which GNU ar also accepts.
     public string ArchiverPath { get; init; } = "llvm-ar";
+    // A library build writes a shared library instead of a static archive. Its dependencies are then linked into it.
+    public bool Shared { get; init; }
     public string OptimizationLevel { get; init; } = "O2";
     // The target triple passed to clang for both compiling and linking. Null leaves clang to the host.
     public string? Target { get; init; }
@@ -185,7 +188,11 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
 
         // The section is added once here, so every library carries its metadata.
         module.AddMetadataSection();
-        var outputPath = Path.GetFullPath(LibraryPath(options.OutputPath, options.Target));
+        if (options.Shared && IsWindowsTarget(options.Target))
+            ExportDefinitions(module.Module);
+        var outputPath = Path.GetFullPath(options.Shared
+            ? SharedLibraryPath(options.OutputPath, options.Target)
+            : LibraryPath(options.OutputPath, options.Target));
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)
             ?? throw new InvalidOperationException($"Output path '{options.OutputPath}' has no directory."));
 
@@ -200,10 +207,15 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
                 CreateCompilationArguments(irPath, objectPath, options),
                 options.WorkingDirectory);
 
-            // The archiver adds members to an existing archive, so the old library is removed first.
+            // The archiver adds members to an existing archive, and the linker would keep an old file's parts, so the old library is
+            // removed first.
             if (File.Exists(outputPath))
                 File.Delete(outputPath);
-            toolRunner.Run(options.ArchiverPath, ["rcs", outputPath, objectPath], options.WorkingDirectory);
+            if (options.Shared)
+                toolRunner.Run(options.CompilerPath, CreateSharedLinkArguments(objectPath, outputPath, options),
+                    options.WorkingDirectory);
+            else
+                toolRunner.Run(options.ArchiverPath, ["rcs", outputPath, objectPath], options.WorkingDirectory);
         });
     }
 
@@ -213,6 +225,48 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         string.IsNullOrEmpty(Path.GetExtension(outputPath))
             ? outputPath + (IsWindowsTarget(target) ? ".lib" : ".a")
             : outputPath;
+
+    // The file that a shared library build writes: a .dll on the Windows target, which also gets an import library next to it, and an
+    // .so elsewhere. The extension is added when the output has none.
+    public static string SharedLibraryPath(string outputPath, string? target) =>
+        string.IsNullOrEmpty(Path.GetExtension(outputPath))
+            ? outputPath + (IsWindowsTarget(target) ? ".dll" : ".so")
+            : outputPath;
+
+    // Links a shared library from the module's object and its dependencies, which are the shared runtime and nothing else. The
+    // dependencies are resolved when the library is loaded, or by the linker through the import library on Windows.
+    public static IReadOnlyList<string> CreateSharedLinkArguments(
+        string objectPath,
+        string outputPath,
+        NativeBuildOptions options)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(objectPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var arguments = CreateCodeGenerationArguments(options, includeLtoJobs: false);
+        arguments.Add("-shared");
+        if (!IsWindowsTarget(options.Target))
+            arguments.Add($"-Wl,-soname,{Path.GetFileName(outputPath)}");
+        arguments.Add(objectPath);
+        arguments.AddRange(options.Dependencies.Select(dependency => dependency.Path));
+        arguments.Add("-o");
+        arguments.Add(outputPath);
+        if (options.UseLld ?? IsLldOnPath(options.Target))
+            arguments.Add("-fuse-ld=lld");
+        return arguments;
+    }
+
+    // On Windows a shared library exports the functions it defines, so that the programs that link it can call them. An instance of a
+    // generic declaration is linkonce_odr and stays private to the object, so it is not exported.
+    private static void ExportDefinitions(LLVMModuleRef module)
+    {
+        for (var function = module.FirstFunction; function.Handle != IntPtr.Zero; function = function.NextFunction)
+        {
+            if (!function.IsDeclaration && function.Linkage == LLVMLinkage.LLVMExternalLinkage)
+                function.DLLStorageClass = LLVMDLLStorageClass.LLVMDLLExportStorageClass;
+        }
+    }
 
     // Runs a build in a temporary directory, which is deleted afterwards unless the options keep it.
     private static void InTemporaryDirectory(NativeBuildOptions options, Action<string> build)

@@ -28,6 +28,11 @@ internal static class BuildCommand
         Description = "Build a static library instead of an executable. A library has no main function, and it is not linked, " +
             "so --runtime and --stdlib do not apply"
     };
+    public static readonly Option<bool> Dynamic = new("--dynamic")
+    {
+        Description = "With --library, build a shared library instead of a static one: a .dll with an import library on Windows, " +
+            "and a .so elsewhere. It links the shared runtime, which --runtime names (oxygenrt.lib or liboxygenrt.so)"
+    };
     public static readonly Option<FileInfo?> EmitIr = new("--emit-ir")
     {
         Description = "Write textual LLVM IR to this path instead of building a native executable"
@@ -60,7 +65,8 @@ internal static class BuildCommand
     };
     public static readonly Option<FileInfo?> Runtime = new("--runtime", "-r")
     {
-        Description = "Static Oxygen runtime library to link"
+        Description = "Oxygen runtime library to link: the static archive for an executable, and the shared runtime (oxygenrt.lib " +
+            "or liboxygenrt.so) for --library --dynamic"
     };
     public static readonly Option<FileInfo[]> StandardLibrary = new("--stdlib")
     {
@@ -93,6 +99,7 @@ internal static class BuildCommand
             Output,
             EmitIr,
             Library,
+            Dynamic,
             Clang,
             Unoptimized,
             WarningsAsErrors,
@@ -134,10 +141,22 @@ internal static class BuildCommand
         var formatter = new DiagnosticFormatter();
         var useColor = !Console.IsErrorRedirected;
         var library = result.GetValue(Library);
-        // A library is not linked, so the options for linking do not apply to it.
-        if (library && (result.GetValue(Runtime) is not null || (result.GetValue(StandardLibrary) ?? []).Length > 0))
+        var dynamic = result.GetValue(Dynamic);
+        // A static library is not linked, so the options for linking do not apply to it. A shared library links the runtime, and it
+        // does not link standard-library dependencies yet.
+        if (dynamic && !library)
         {
-            Console.Error.WriteLine("oxygenc: --library does not link, so --runtime and --stdlib cannot be used with it.");
+            Console.Error.WriteLine("oxygenc: --dynamic builds a shared library, so it needs --library.");
+            return ExitCodes.SourceError;
+        }
+        if (library && !dynamic && result.GetValue(Runtime) is not null)
+        {
+            Console.Error.WriteLine("oxygenc: --library does not link, so --runtime cannot be used with it. Add --dynamic for a shared library.");
+            return ExitCodes.SourceError;
+        }
+        if (library && (result.GetValue(StandardLibrary) ?? []).Length > 0)
+        {
+            Console.Error.WriteLine("oxygenc: --stdlib cannot be used with --library yet.");
             return ExitCodes.SourceError;
         }
 
@@ -261,6 +280,12 @@ internal static class BuildCommand
         }
     }
 
+    // The shared runtime that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH (the repository root). It is the
+    // import library on Windows and the shared object elsewhere.
+    private static string DefaultSharedRuntimePath(OxygenTarget target) =>
+        Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? ".", "runtime", "build", target.Triple,
+            target.Triple.Contains("-windows-", StringComparison.Ordinal) ? "oxygenrt.lib" : "liboxygenrt.so");
+
     // Writes the module as a static library, with its metadata in the object file. The library is not linked, so the runtime is not needed.
     private static int BuildLibrary(
         System.CommandLine.ParseResult result,
@@ -270,6 +295,27 @@ internal static class BuildCommand
         DiagnosticFormatter formatter,
         bool useColor)
     {
+        var shared = result.GetValue(Dynamic);
+        // A shared library links the shared runtime. The default is the one that runtime/build.ps1 or build.sh builds for the target.
+        var dependencies = new List<NativeDependency>();
+        if (shared)
+        {
+            var runtimePath = result.GetValue(Runtime)?.FullName ?? DefaultSharedRuntimePath(target);
+            if (!File.Exists(runtimePath))
+            {
+                var runtimeDiagnostics = new DiagnosticBag();
+                runtimeDiagnostics.Add(
+                    DiagnosticPhase.Toolchain,
+                    DiagnosticSeverity.Error,
+                    $"No shared runtime for target '{target.Triple}' at '{runtimePath}'. Build it with runtime/build.ps1 or " +
+                    "runtime/build.sh, or pass --runtime with the shared runtime built for this target.",
+                    new SourceLocation(1, 1));
+                Display(runtimeDiagnostics.Diagnostics, sources, formatter, useColor);
+                return ExitCodes.ToolchainFailure;
+            }
+            dependencies.Add(new NativeDependency(runtimePath, NativeDependencyKind.Static));
+        }
+
         var keepTemporaryFiles = result.GetValue(KeepTemps);
         var temporaryDirectory = keepTemporaryFiles
             ? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}")
@@ -293,7 +339,9 @@ internal static class BuildCommand
                 Target = target.Triple,
                 TemporaryDirectory = temporaryDirectory,
                 KeepTemporaryFiles = keepTemporaryFiles,
-                OutputPath = result.GetValue(Output)?.FullName ?? generated.Metadata.ModuleName
+                OutputPath = result.GetValue(Output)?.FullName ?? generated.Metadata.ModuleName,
+                Shared = shared,
+                Dependencies = dependencies
             });
         }
         catch (OperationCanceledException)

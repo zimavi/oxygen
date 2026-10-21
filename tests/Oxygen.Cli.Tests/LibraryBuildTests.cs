@@ -49,6 +49,29 @@ public sealed class LibraryBuildTests : IDisposable
         Assert.Contains("--library does not link", run.Error);
     }
 
+    [Fact]
+    public void DynamicNeedsALibrary()
+    {
+        var source = WriteSource(Library);
+
+        var run = NativeProgram.RunProcess(NativeProgram.CompilerExecutable, ["build", source, "--dynamic"]);
+
+        Assert.Equal(ExitCodes.SourceError, run.ExitCode);
+        Assert.Contains("--dynamic builds a shared library, so it needs --library", run.Error);
+    }
+
+    [Fact]
+    public void ASharedLibraryDoesNotLinkStandardLibraryDependenciesYet()
+    {
+        var source = WriteSource(Library);
+
+        var run = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "--library", "--dynamic", "--stdlib", Path.Combine(_directory, "std.a")]);
+
+        Assert.Equal(ExitCodes.SourceError, run.ExitCode);
+        Assert.Contains("--stdlib cannot be used with --library yet", run.Error);
+    }
+
     private string WriteSource(string text)
     {
         var path = Path.Combine(_directory, "shapes.oxy");

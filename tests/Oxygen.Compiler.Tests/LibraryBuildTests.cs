@@ -134,6 +134,62 @@ public sealed class LibraryBuildTests : IDisposable
         Assert.Contains("linkonce_odr", ir);
     }
 
+    [Fact]
+    public void AWindowsSharedLibraryExportsItsDefinitionsAndLinksTheSharedRuntime()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics([Parse(Module)], null, null, requireMain: false).Model!;
+        using var generated = new LlvmModuleGenerator(OxygenTarget.WindowsMsvcX64).Generate("shapes", model, library: true);
+        var runner = new RecordingRunner();
+        var temporary = Path.Combine(_directory, "work");
+
+        new NativeBuildPipeline(runner).BuildLibrary(generated, new NativeBuildOptions
+        {
+            OutputPath = Path.Combine(_directory, "shapes"),
+            Target = OxygenTarget.WindowsMsvcX64.Triple,
+            TemporaryDirectory = temporary,
+            KeepTemporaryFiles = true,
+            Shared = true,
+            Dependencies = [new NativeDependency(Path.Combine(_directory, "oxygenrt.lib"), NativeDependencyKind.Static)]
+        });
+
+        // The definitions are exported from the DLL, and the link takes the shared runtime's import library.
+        Assert.Contains("dllexport", File.ReadAllText(Path.Combine(temporary, "library.ll")));
+        Assert.Equal(["clang", "clang"], runner.Invocations.Select(invocation => invocation.Executable));
+        var link = runner.Invocations[1].Arguments;
+        Assert.Contains("-shared", link);
+        Assert.Contains(Path.Combine(_directory, "oxygenrt.lib"), link);
+        Assert.Equal(Path.Combine(_directory, "shapes.dll"), Path.GetFullPath(link.Skip(link.ToList().IndexOf("-o") + 1).First()));
+    }
+
+    [Fact]
+    public void ALinuxSharedLibraryIsNamedBySonameAndExportsByDefaultVisibility()
+    {
+        var model = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics([Parse(Module)], null, null, requireMain: false).Model!;
+        using var generated = new LlvmModuleGenerator(OxygenTarget.LinuxGnuX64).Generate("shapes", model, library: true);
+        var runner = new RecordingRunner();
+
+        new NativeBuildPipeline(runner).BuildLibrary(generated, new NativeBuildOptions
+        {
+            OutputPath = Path.Combine(_directory, "libshapes"),
+            Target = OxygenTarget.LinuxGnuX64.Triple,
+            TemporaryDirectory = Path.Combine(_directory, "work"),
+            KeepTemporaryFiles = true,
+            Shared = true
+        });
+
+        Assert.DoesNotContain("dllexport", File.ReadAllText(Path.Combine(_directory, "work", "library.ll")));
+        var link = runner.Invocations[1].Arguments;
+        Assert.Contains("-Wl,-soname,libshapes.so", link);
+        Assert.Equal(Path.Combine(_directory, "libshapes.so"), Path.GetFullPath(link.Skip(link.ToList().IndexOf("-o") + 1).First()));
+    }
+
+    [Theory]
+    [InlineData("shapes", "x86_64-pc-windows-msvc", "shapes.dll")]
+    [InlineData("shapes", "x86_64-unknown-linux-gnu", "shapes.so")]
+    [InlineData("shapes.dll", "x86_64-pc-windows-msvc", "shapes.dll")]
+    public void ASharedLibraryIsNamedWithTheSharedExtensionOfItsPlatform(string output, string target, string expected) =>
+        Assert.Equal(expected, NativeBuildPipeline.SharedLibraryPath(output, target));
+
     private static SemanticModel Analyze(string source, string dependency)
     {
         var tokens = new Tokenizer(Log.Logger);
