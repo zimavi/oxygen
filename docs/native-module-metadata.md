@@ -28,3 +28,19 @@ The generated module exposes its metadata through `GeneratedLlvmModule.Metadata`
 and writes it when `NativeBuildOptions.MetadataPath` is supplied. Metadata
 describes the generated module; dependency paths are populated by a future
 build invocation and are not inferred from LLVM IR.
+
+## The metadata section
+
+`GeneratedLlvmModule.AddMetadataSection()` writes the same JSON document into a
+`.oxmeta` section of the module's object file. The section is kept through
+`llvm.used`, so optimization does not remove it. Adding the section twice is an
+error. `NativeModuleSection.ReadPayloads(path)` reads the payload of every object
+in an object file or an `ar` archive that has the section. Archives are read in
+the GNU and BSD name forms by the tests. An archive written by `llvm-ar` (a COFF
+`.lib` with a long member name, and an ELF `.a`) was also read, in a manual
+check. Archives written by `lib.exe` have not been read yet. Other archive members
+are skipped, and a file that is neither an object nor an archive is invalid input.
+
+The command line does not write the section yet, and the payloads are not turned
+into declarations yet. Libraries are still read from the embedded copy or the
+sidecar.
