@@ -17,8 +17,20 @@ namespace Oxygen.Compiler.Tests;
 public sealed class LlvmTests
 {
     // The C API of the LLVM library that the process actually loads, not the version the package asks for.
+    // The package ships LLVM-C.dll on Windows and libLLVM.so on Linux. Each import is only resolved when it is called.
     [DllImport("LLVM-C", EntryPoint = "LLVMGetVersion")]
-    private static extern void GetLlvmVersion(out uint major, out uint minor, out uint patch);
+    private static extern void GetWindowsLlvmVersion(out uint major, out uint minor, out uint patch);
+
+    [DllImport("libLLVM", EntryPoint = "LLVMGetVersion")]
+    private static extern void GetLinuxLlvmVersion(out uint major, out uint minor, out uint patch);
+
+    private static void GetLlvmVersion(out uint major, out uint minor, out uint patch)
+    {
+        if (OperatingSystem.IsWindows())
+            GetWindowsLlvmVersion(out major, out minor, out patch);
+        else
+            GetLinuxLlvmVersion(out major, out minor, out patch);
+    }
 
     // LLVMSharp.Interop 22.1.8 is built for LLVM 22.1.8. Loading another LLVM with those bindings is undefined, so this
     // fails when the pins in Directory.Build.props drift apart. Update the expected version with LLVMSharpVersion.

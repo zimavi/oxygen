@@ -2,12 +2,13 @@ using Xunit;
 
 namespace Oxygen.Cli.Tests;
 
-// A program linked against the shared runtime, oxygenrt.dll, through its import library. The DLL is copied next to the program, as a
-// user would install it, and the program runs with it.
+// A program linked against the shared runtime: oxygenrt.dll through its import library on Windows, and liboxygenrt.so on Linux. The
+// program runs with the shared runtime found the way an installed program finds it: next to it on Windows, and through the library
+// path on Linux.
 public sealed class SharedRuntimeTests : IDisposable
 {
     private static readonly string TargetDirectory = Path.Combine(NativeProgram.RepositoryRoot, "runtime", "build",
-        "x86_64-pc-windows-msvc");
+        OperatingSystem.IsWindows() ? "x86_64-pc-windows-msvc" : "x86_64-unknown-linux-gnu");
 
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "oxygenc-tests", Guid.NewGuid().ToString("N"));
 
@@ -23,13 +24,14 @@ public sealed class SharedRuntimeTests : IDisposable
     public void AProgramLinkedWithTheSharedRuntimeRunsAndItsFailuresExitWithTheRuntimeCode()
     {
         NativeProgram.RequireNativeToolchain();
-        var importLibrary = Path.Combine(TargetDirectory, "oxygenrt.lib");
+        // On Windows the program links the import library and needs the DLL beside it. On Linux it links the shared object itself.
+        var library = Path.Combine(TargetDirectory, OperatingSystem.IsWindows() ? "oxygenrt.lib" : "liboxygenrt.so");
         var dll = Path.Combine(TargetDirectory, "oxygenrt.dll");
-        Skip.IfNot(OperatingSystem.IsWindows() && File.Exists(importLibrary) && File.Exists(dll),
-            "The shared runtime is not built. Run runtime/build.ps1 to build it.");
+        Skip.IfNot(File.Exists(library) && (!OperatingSystem.IsWindows() || File.Exists(dll)),
+            "The shared runtime is not built. Run runtime/build.ps1 or runtime/build.sh to build it.");
 
         var source = Path.Combine(_directory, "main.oxy");
-        var executable = Path.Combine(_directory, "main.exe");
+        var executable = Path.Combine(_directory, OperatingSystem.IsWindows() ? "main.exe" : "main");
         File.WriteAllText(source, """
             import std.io;
 
@@ -42,14 +44,26 @@ public sealed class SharedRuntimeTests : IDisposable
             """);
 
         var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
-            ["build", source, "-o", executable, "-r", importLibrary]);
+            ["build", source, "-o", executable, "-r", library]);
         Assert.True(build.ExitCode == 0, $"Build failed with exit code {build.ExitCode}:\n{build.Error}");
-        File.Copy(dll, Path.Combine(_directory, "oxygenrt.dll"));
+        if (OperatingSystem.IsWindows())
+            File.Copy(dll, Path.Combine(_directory, "oxygenrt.dll"));
 
-        var run = NativeProgram.RunProcess(executable, []);
+        var previousLibraryPath = Environment.GetEnvironmentVariable("LD_LIBRARY_PATH");
+        if (!OperatingSystem.IsWindows())
+            Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", TargetDirectory);
+        try
+        {
+            var run = NativeProgram.RunProcess(executable, []);
 
-        // The index is out of range, which is a runtime failure with exit code 101, after the first line was written.
-        Assert.Equal(101, run.ExitCode);
-        Assert.Equal("hello\n", run.Output);
+            // The index is out of range, which is a runtime failure with exit code 101, after the first line was written.
+            Assert.Equal(101, run.ExitCode);
+            Assert.Equal("hello\n", run.Output);
+        }
+        finally
+        {
+            if (!OperatingSystem.IsWindows())
+                Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", previousLibraryPath);
+        }
     }
 }

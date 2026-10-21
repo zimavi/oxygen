@@ -110,10 +110,13 @@ public sealed class RuntimeLibraryTests : IDisposable
         NativeProgram.RequireNativeToolchain();
         Directory.CreateDirectory(_directory);
         var executable = Path.Combine(_directory, "runtime_tests.exe");
+        // The ELF runtime uses the Itanium exception functions, which the C++ runtime provides, and libm. The compiler links them
+        // the same way for a program.
+        var elfLibraries = OperatingSystem.IsWindows() ? Array.Empty<string>() : new[] { "-lm", "-lstdc++" };
         var build = NativeProgram.RunProcess("clang",
             ["-I", Path.Combine(NativeProgram.RepositoryRoot, "runtime", "include"),
                 Path.Combine(NativeProgram.RepositoryRoot, "runtime", "tests", "runtime_tests.c"),
-                NativeProgram.RuntimeLibrary, "-o", executable]);
+                NativeProgram.RuntimeLibrary, .. elfLibraries, "-o", executable]);
         Assert.True(build.ExitCode == 0, $"Building the runtime tests failed:\n{build.Error}");
 
         return NativeProgram.RunProcess(executable, [name]);

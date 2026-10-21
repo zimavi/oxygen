@@ -105,7 +105,10 @@ The Windows target also gets a shared runtime, `oxygenrt.dll` with its import
 library `oxygenrt.lib`, in the same directory. The DLL exports every entry point
 of `oxygen_runtime.h` (`OXYGEN_RUNTIME_API` marks them). A program linked with
 `--runtime .../oxygenrt.lib` needs `oxygenrt.dll` next to it when it runs. The
-ELF shared runtime is not built yet.
+ELF targets get `liboxygenrt.so` in the same directory from `build.sh`, with the
+SONAME `liboxygenrt.so`. A program linked with `--runtime .../liboxygenrt.so`
+needs that directory on the library path when it runs. The Linux build and tests
+were run on Ubuntu 24.04 under WSL.
 
 Process setup (the exit handler, the console code page and the hardware fault
 handler) runs once per process, so a second program started in the same process
