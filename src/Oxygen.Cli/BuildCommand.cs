@@ -72,8 +72,8 @@ internal static class BuildCommand
     };
     public static readonly Option<FileInfo?> Runtime = new("--runtime", "-r")
     {
-        Description = "Oxygen runtime library to link: the static archive for an executable, and the shared runtime (oxygenrt.lib " +
-            "or liboxygenrt.so) for --library --dynamic"
+        Description = "Oxygen runtime to link: the static archive (liboxygenrt.a), or the shared runtime (oxygenrt.lib on Windows, " +
+            "liboxygenrt.so elsewhere). --library --dynamic and --stdlib link the shared runtime, and it is their default"
     };
     public static readonly Option<FileInfo[]> StandardLibrary = new("--stdlib")
     {
@@ -179,6 +179,27 @@ internal static class BuildCommand
         {
             Display(targetDiagnostics, input.Sources, formatter, useColor);
             return ExitCodes.ToolchainFailure;
+        }
+        // The runtime is checked before the sources are analyzed, when the build links it. A shared library, and a program that uses the
+        // standard library's shared object, need the shared runtime: a static archive there would give the process two runtimes.
+        if (!(library && !dynamic))
+        {
+            var shared = dynamic || (result.GetValue(StandardLibrary) ?? []).Length > 0;
+            var runtimePath = RuntimePathOf(result, target, shared);
+            var runtimeKind = RuntimeKindOf(runtimePath, target);
+            if (runtimeKind is null)
+            {
+                Console.Error.WriteLine($"oxygenc: --runtime must be a static archive (.a) or the shared runtime ({SharedRuntimeFileName(target)}), " +
+                    $"not '{runtimePath}'.");
+                return ExitCodes.SourceError;
+            }
+            if (shared && runtimeKind == NativeDependencyKind.Static)
+            {
+                var flag = dynamic ? "--dynamic" : "--stdlib";
+                Console.Error.WriteLine($"oxygenc: {flag} links the shared runtime, so --runtime must name it ({SharedRuntimeFileName(target)}), " +
+                    $"not the static archive '{runtimePath}'.");
+                return ExitCodes.SourceError;
+            }
         }
         if (input.Diagnostics.HasErrors)
         {
@@ -295,11 +316,31 @@ internal static class BuildCommand
         }
     }
 
-    // The shared runtime that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH (the repository root). It is the
-    // import library on Windows and the shared object elsewhere.
-    private static string DefaultSharedRuntimePath(OxygenTarget target) =>
+    // The shared runtime's file: the import library on Windows, and the shared object elsewhere.
+    private static string SharedRuntimeFileName(OxygenTarget target) =>
+        target.Triple.Contains("-windows-", StringComparison.Ordinal) ? "oxygenrt.lib" : "liboxygenrt.so";
+
+    // The runtime that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH (the repository root): the static archive,
+    // or the shared runtime.
+    private static string DefaultRuntimePath(OxygenTarget target, bool shared) =>
         Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? ".", "runtime", "build", target.Triple,
-            target.Triple.Contains("-windows-", StringComparison.Ordinal) ? "oxygenrt.lib" : "liboxygenrt.so");
+            shared ? SharedRuntimeFileName(target) : "liboxygenrt.a");
+
+    // The runtime that the build links: --runtime, or the default for the target.
+    private static string RuntimePathOf(System.CommandLine.ParseResult result, OxygenTarget target, bool shared) =>
+        result.GetValue(Runtime)?.FullName ?? DefaultRuntimePath(target, shared);
+
+    // How a runtime file is linked for the target, or null when it is not a runtime. The static archive is .a on every target. The shared
+    // runtime is linked through its import library on Windows and through the shared object elsewhere.
+    internal static NativeDependencyKind? RuntimeKindOf(string path, OxygenTarget target)
+    {
+        var extension = Path.GetExtension(path);
+        if (extension.Equals(".a", StringComparison.OrdinalIgnoreCase))
+            return NativeDependencyKind.Static;
+        return extension.Equals(Path.GetExtension(SharedRuntimeFileName(target)), StringComparison.OrdinalIgnoreCase)
+            ? NativeDependencyKind.Dynamic
+            : null;
+    }
 
     // Writes the module as a static library, with its metadata in the object file. The library is not linked, so the runtime is not needed.
     // Generates each module that the given sources declare, and builds them into one library. A module that the sources import is not
@@ -367,7 +408,7 @@ internal static class BuildCommand
         var dependencies = new List<NativeDependency>();
         if (shared)
         {
-            var runtimePath = result.GetValue(Runtime)?.FullName ?? DefaultSharedRuntimePath(target);
+            var runtimePath = RuntimePathOf(result, target, shared: true);
             if (!File.Exists(runtimePath))
             {
                 var runtimeDiagnostics = new DiagnosticBag();
@@ -380,7 +421,7 @@ internal static class BuildCommand
                 Display(runtimeDiagnostics.Diagnostics, sources, formatter, useColor);
                 return ExitCodes.ToolchainFailure;
             }
-            dependencies.Add(new NativeDependency(runtimePath, NativeDependencyKind.Static));
+            dependencies.Add(new NativeDependency(runtimePath, NativeDependencyKind.Dynamic));
         }
 
         var keepTemporaryFiles = result.GetValue(KeepTemps);
@@ -440,25 +481,26 @@ internal static class BuildCommand
         DiagnosticFormatter formatter,
         bool useColor)
     {
-        // The default runtime is the archive that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH
-        // (the repository root, which holds runtime/ and stdlib/).
-        var runtimePath = result.GetValue(Runtime)?.FullName
-            ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? ".", "runtime", "build", target.Triple,
-                "liboxygenrt.a");
+        // A program that uses the standard library's shared object links the shared runtime. Run has checked that --runtime is a runtime
+        // that can be linked this way.
+        var shared = (result.GetValue(StandardLibrary) ?? []).Length > 0;
+        var runtimePath = RuntimePathOf(result, target, shared);
         if (!File.Exists(runtimePath))
         {
             var runtimeDiagnostics = new DiagnosticBag();
             runtimeDiagnostics.Add(
                 DiagnosticPhase.Toolchain,
                 DiagnosticSeverity.Error,
-                $"No runtime archive for target '{target.Triple}' at '{runtimePath}'. Build it with runtime/build.ps1 or " +
-                "runtime/build.sh, or pass --runtime with an archive built for this target.",
+                $"No {(shared ? "shared runtime" : "runtime archive")} for target '{target.Triple}' at '{runtimePath}'. Build it with " +
+                "runtime/build.ps1 or runtime/build.sh, or pass --runtime with a runtime built for this target.",
                 new SourceLocation(1, 1));
             Display(runtimeDiagnostics.Diagnostics, sources, formatter, useColor);
             return ExitCodes.ToolchainFailure;
         }
 
-        var dependencies = new List<NativeDependency> { new(runtimePath, NativeDependencyKind.Static) };
+        var runtimeKind = RuntimeKindOf(runtimePath, target)
+            ?? throw new InvalidOperationException($"The runtime '{runtimePath}' was not checked before linking.");
+        var dependencies = new List<NativeDependency> { new(runtimePath, runtimeKind) };
         dependencies.AddRange((result.GetValue(StandardLibrary) ?? [])
             .Select(path => new NativeDependency(path.FullName, NativeDependencyKind.Dynamic)));
 

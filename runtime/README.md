@@ -149,7 +149,9 @@ OUTPUT_DIRECTORY=./artifacts/runtime \
 Each script requires Clang and a compatible archive tool (`llvm-ar`/`ar` or
 `llvm-lib`). Without `--runtime`, the compiler reads the archive for its target
 from `OXYGEN_PATH/runtime/build/<triple>/`, and reports a missing archive with
-the command that builds it.
+the command that builds it. A build with `--stdlib` or `--library --dynamic`
+reads the shared runtime from the same directory instead, since it links that
+one.
 
 The output is a static archive, not a complete executable. The CLI native
 build passes this archive after the LLVM-generated object file and then links
