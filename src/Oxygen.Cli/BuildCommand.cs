@@ -21,7 +21,8 @@ internal static class BuildCommand
     };
     public static readonly Option<FileInfo?> Output = new("--output", "-o")
     {
-        Description = "Path of the native executable to produce, or of the library with --library. Default: program, or the module name for a library"
+        Description = "Path of the native executable to produce, or of the library with --library. Default: program, or the module name for a library " +
+            "(the first module when the library has several)"
     };
     public static readonly Option<bool> Library = new("--library")
     {
@@ -159,6 +160,11 @@ internal static class BuildCommand
             Console.Error.WriteLine("oxygenc: --stdlib cannot be used with --library yet.");
             return ExitCodes.SourceError;
         }
+        if (library && result.GetValue(EmitIr) is not null)
+        {
+            Console.Error.WriteLine("oxygenc: --emit-ir writes one module's IR, so it cannot be used with --library.");
+            return ExitCodes.SourceError;
+        }
 
         var input = ReadSources(result.GetValue(Sources)!);
         // An unsupported target is reported before the sources are analyzed, since no code can be generated for it.
@@ -232,6 +238,10 @@ internal static class BuildCommand
                 return ExitCodes.SourceError;
         }
 
+        if (library)
+            return BuildLibraryModules(result, input.Sources, resolved.Units, sources, semanticResult.Model!, target,
+                formatter, useColor);
+
         GeneratedLlvmModule generated;
         try
         {
@@ -274,9 +284,7 @@ internal static class BuildCommand
                 return ExitCodes.Success;
             }
 
-            return library
-                ? BuildLibrary(result, generated, target, sources, formatter, useColor)
-                : BuildExecutable(result, generated, target, sources, formatter, useColor);
+            return BuildExecutable(result, generated, target, sources, formatter, useColor);
         }
     }
 
@@ -287,9 +295,61 @@ internal static class BuildCommand
             target.Triple.Contains("-windows-", StringComparison.Ordinal) ? "oxygenrt.lib" : "liboxygenrt.so");
 
     // Writes the module as a static library, with its metadata in the object file. The library is not linked, so the runtime is not needed.
+    // Generates each module that the given sources declare, and builds them into one library. A module that the sources import is not
+    // built: it is declared, and the program that uses the library provides it.
+    private static int BuildLibraryModules(
+        System.CommandLine.ParseResult result,
+        IReadOnlyList<SourceText> roots,
+        IReadOnlyList<CompilationUnit> units,
+        IReadOnlyList<SourceText> sources,
+        SemanticModel model,
+        OxygenTarget target,
+        DiagnosticFormatter formatter,
+        bool useColor)
+    {
+        var moduleNames = units
+            .Select((unit, index) => (Unit: unit, Source: sources[index]))
+            .Where(pair => roots.Any(root => root.Name == pair.Source.Name))
+            .Select(pair => pair.Unit.ModuleName ?? "program")
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var modules = new List<GeneratedLlvmModule>();
+        try
+        {
+            foreach (var moduleName in moduleNames)
+                modules.Add(new LlvmModuleGenerator(target).Generate(moduleName, model,
+                    GenericsOf(units, sources, moduleName), library: true));
+            return BuildLibrary(result, modules, target, sources, formatter, useColor);
+        }
+        catch (LlvmVerificationException exception)
+        {
+            // The IR was generated from a program that passed semantic analysis, so invalid IR is a compiler bug.
+            Console.Error.WriteLine("oxygenc: internal compiler error. This is a bug in the compiler, not in your program.");
+            Console.Error.WriteLine(exception.Message);
+            return ExitCodes.InternalError;
+        }
+        catch (Exception exception) when (exception is PlatformNotSupportedException or InvalidOperationException)
+        {
+            var diagnostics = new DiagnosticBag();
+            diagnostics.Add(
+                DiagnosticPhase.Backend,
+                DiagnosticSeverity.Error,
+                exception.Message,
+                new SourceLocation(1, 1));
+            Display(diagnostics.Diagnostics, sources, formatter, useColor);
+            return ExitCodes.InternalError;
+        }
+        finally
+        {
+            foreach (var module in modules)
+                module.Dispose();
+        }
+    }
+
     private static int BuildLibrary(
         System.CommandLine.ParseResult result,
-        GeneratedLlvmModule generated,
+        IReadOnlyList<GeneratedLlvmModule> modules,
         OxygenTarget target,
         IReadOnlyList<SourceText> sources,
         DiagnosticFormatter formatter,
@@ -332,14 +392,14 @@ internal static class BuildCommand
         try
         {
             // A library is named after its module unless -o gives a path.
-            new NativeBuildPipeline(new ProcessNativeToolRunner(cancellation: interrupt.Token)).BuildLibrary(generated, new NativeBuildOptions
+            new NativeBuildPipeline(new ProcessNativeToolRunner(cancellation: interrupt.Token)).BuildLibrary(modules, new NativeBuildOptions
             {
                 CompilerPath = result.GetValue(Clang) ?? "clang",
                 OptimizationLevel = OptimizationLevelOf(result),
                 Target = target.Triple,
                 TemporaryDirectory = temporaryDirectory,
                 KeepTemporaryFiles = keepTemporaryFiles,
-                OutputPath = result.GetValue(Output)?.FullName ?? generated.Metadata.ModuleName,
+                OutputPath = result.GetValue(Output)?.FullName ?? modules[0].Metadata.ModuleName,
                 Shared = shared,
                 Dependencies = dependencies
             });

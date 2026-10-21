@@ -178,18 +178,24 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         });
     }
 
-    // Builds a static library from a module: its object file, with the metadata in the .oxmeta section, archived into one file. A
-    // library is not linked, so it needs neither the runtime nor a native entry point, and the program that links it provides both.
-    public void BuildLibrary(GeneratedLlvmModule module, NativeBuildOptions options)
+    // Builds a static or a shared library from one or more modules. Each module is compiled to its own object, with its metadata in
+    // the .oxmeta section, and the objects are archived together (or linked together into the shared library). A library is not
+    // linked as a program, so it needs neither the runtime nor a native entry point. A shared library links the runtime it depends on.
+    public void BuildLibrary(IReadOnlyList<GeneratedLlvmModule> modules, NativeBuildOptions options)
     {
-        ArgumentNullException.ThrowIfNull(module);
+        ArgumentNullException.ThrowIfNull(modules);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.OutputPath);
+        if (modules.Count == 0)
+            throw new ArgumentException("A library needs at least one module.", nameof(modules));
 
-        // The section is added once here, so every library carries its metadata.
-        module.AddMetadataSection();
-        if (options.Shared && IsWindowsTarget(options.Target))
-            ExportDefinitions(module.Module);
+        foreach (var module in modules)
+        {
+            // The section is added once per module, so the library carries the metadata of each of its modules.
+            module.AddMetadataSection();
+            if (options.Shared && IsWindowsTarget(options.Target))
+                ExportDefinitions(module.Module);
+        }
         var outputPath = Path.GetFullPath(options.Shared
             ? SharedLibraryPath(options.OutputPath, options.Target)
             : LibraryPath(options.OutputPath, options.Target));
@@ -198,25 +204,37 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
 
         InTemporaryDirectory(options, temporaryDirectory =>
         {
-            var irPath = Path.Combine(temporaryDirectory, "library.ll");
-            var objectPath = Path.Combine(temporaryDirectory, "library.o");
-            File.WriteAllText(irPath, module.ToString());
-
-            toolRunner.Run(
-                options.CompilerPath,
-                CreateCompilationArguments(irPath, objectPath, options),
-                options.WorkingDirectory);
+            var objectPaths = new List<string>();
+            foreach (var module in modules)
+            {
+                var name = module.Metadata.ModuleName;
+                var irPath = Path.Combine(temporaryDirectory, $"{name}.ll");
+                var objectPath = Path.Combine(temporaryDirectory, $"{name}.o");
+                File.WriteAllText(irPath, module.ToString());
+                toolRunner.Run(
+                    options.CompilerPath,
+                    CreateCompilationArguments(irPath, objectPath, options),
+                    options.WorkingDirectory);
+                objectPaths.Add(objectPath);
+            }
 
             // The archiver adds members to an existing archive, and the linker would keep an old file's parts, so the old library is
             // removed first.
             if (File.Exists(outputPath))
                 File.Delete(outputPath);
             if (options.Shared)
-                toolRunner.Run(options.CompilerPath, CreateSharedLinkArguments(objectPath, outputPath, options),
+                toolRunner.Run(options.CompilerPath, CreateSharedLinkArguments(objectPaths, outputPath, options),
                     options.WorkingDirectory);
             else
-                toolRunner.Run(options.ArchiverPath, ["rcs", outputPath, objectPath], options.WorkingDirectory);
+                toolRunner.Run(options.ArchiverPath, ["rcs", outputPath, .. objectPaths], options.WorkingDirectory);
         });
+    }
+
+    // The single-module form of BuildLibrary.
+    public void BuildLibrary(GeneratedLlvmModule module, NativeBuildOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        BuildLibrary([module], options);
     }
 
     // The file that a library build writes for an output path. A library gets .lib on the Windows target and .a elsewhere, when the
@@ -233,14 +251,14 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             ? outputPath + (IsWindowsTarget(target) ? ".dll" : ".so")
             : outputPath;
 
-    // Links a shared library from the module's object and its dependencies, which are the shared runtime and nothing else. The
+    // Links a shared library from the modules' objects and its dependencies, which are the shared runtime and nothing else. The
     // dependencies are resolved when the library is loaded, or by the linker through the import library on Windows.
     public static IReadOnlyList<string> CreateSharedLinkArguments(
-        string objectPath,
+        IReadOnlyList<string> objectPaths,
         string outputPath,
         NativeBuildOptions options)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(objectPath);
+        ArgumentNullException.ThrowIfNull(objectPaths);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
         ArgumentNullException.ThrowIfNull(options);
 
@@ -248,7 +266,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         arguments.Add("-shared");
         if (!IsWindowsTarget(options.Target))
             arguments.Add($"-Wl,-soname,{Path.GetFileName(outputPath)}");
-        arguments.Add(objectPath);
+        arguments.AddRange(objectPaths);
         arguments.AddRange(options.Dependencies.Select(dependency => dependency.Path));
         arguments.Add("-o");
         arguments.Add(outputPath);

@@ -79,7 +79,7 @@ public sealed class LibraryBuildTests : IDisposable
         Assert.Equal(["clang", "llvm-ar"], runner.Invocations.Select(invocation => invocation.Executable));
         Assert.Contains("-c", runner.Invocations[0].Arguments);
         Assert.Equal(["rcs", output], runner.Invocations[1].Arguments.Take(2));
-        Assert.Contains("section \".oxmeta\"", File.ReadAllText(Path.Combine(temporary, "library.ll")));
+        Assert.Contains("section \".oxmeta\"", File.ReadAllText(Path.Combine(temporary, "shapes.ll")));
     }
 
     [Theory]
@@ -153,7 +153,7 @@ public sealed class LibraryBuildTests : IDisposable
         });
 
         // The definitions are exported from the DLL, and the link takes the shared runtime's import library.
-        Assert.Contains("dllexport", File.ReadAllText(Path.Combine(temporary, "library.ll")));
+        Assert.Contains("dllexport", File.ReadAllText(Path.Combine(temporary, "shapes.ll")));
         Assert.Equal(["clang", "clang"], runner.Invocations.Select(invocation => invocation.Executable));
         var link = runner.Invocations[1].Arguments;
         Assert.Contains("-shared", link);
@@ -177,7 +177,7 @@ public sealed class LibraryBuildTests : IDisposable
             Shared = true
         });
 
-        Assert.DoesNotContain("dllexport", File.ReadAllText(Path.Combine(_directory, "work", "library.ll")));
+        Assert.DoesNotContain("dllexport", File.ReadAllText(Path.Combine(_directory, "work", "shapes.ll")));
         var link = runner.Invocations[1].Arguments;
         Assert.Contains("-Wl,-soname,libshapes.so", link);
         Assert.Equal(Path.Combine(_directory, "libshapes.so"), Path.GetFullPath(link.Skip(link.ToList().IndexOf("-o") + 1).First()));
@@ -189,6 +189,42 @@ public sealed class LibraryBuildTests : IDisposable
     [InlineData("shapes.dll", "x86_64-pc-windows-msvc", "shapes.dll")]
     public void ASharedLibraryIsNamedWithTheSharedExtensionOfItsPlatform(string output, string target, string expected) =>
         Assert.Equal(expected, NativeBuildPipeline.SharedLibraryPath(output, target));
+
+    [Fact]
+    public void ALibraryOfTwoModulesHasAnObjectAndAMetadataSectionForEach()
+    {
+        const string alpha = "module alpha; public i32 one() { return 1; }";
+        const string beta = "module beta; import alpha; public i32 two() { return alpha.one() + 1; }";
+        var model = Analyze(beta, alpha);
+        using var first = new LlvmModuleGenerator().Generate("alpha", model, library: true);
+        using var second = new LlvmModuleGenerator().Generate("beta", model, library: true);
+        var runner = new RecordingRunner();
+        var temporary = Path.Combine(_directory, "work");
+
+        new NativeBuildPipeline(runner).BuildLibrary([first, second], new NativeBuildOptions
+        {
+            OutputPath = Path.Combine(_directory, "both"),
+            Target = OxygenTarget.LinuxGnuX64.Triple,
+            TemporaryDirectory = temporary,
+            KeepTemporaryFiles = true
+        });
+
+        // Each module is compiled to its own object, and the archive takes both objects.
+        Assert.Equal(["clang", "clang", "llvm-ar"], runner.Invocations.Select(invocation => invocation.Executable));
+        var archive = runner.Invocations[2].Arguments;
+        Assert.Equal("rcs", archive[0]);
+        Assert.Equal(Path.Combine(_directory, "both.a"), Path.GetFullPath(archive[1]));
+        Assert.Equal([Path.Combine(temporary, "alpha.o"), Path.Combine(temporary, "beta.o")], archive.Skip(2));
+        // Each object defines its own function and declares the other module's, and each carries its own metadata.
+        var alphaIr = File.ReadAllText(Path.Combine(temporary, "alpha.ll"));
+        var betaIr = File.ReadAllText(Path.Combine(temporary, "beta.ll"));
+        Assert.Contains("define i32 @_Ox_v1_m5alpha_f3one_p0_", alphaIr);
+        Assert.DoesNotContain("define i32 @_Ox_v1_m5alpha_f3one_p0_", betaIr);
+        Assert.Contains("declare i32 @_Ox_v1_m5alpha_f3one_p0_", betaIr);
+        Assert.Contains("define i32 @_Ox_v1_m4beta_f3two_p0_", betaIr);
+        Assert.Contains("section \".oxmeta\"", alphaIr);
+        Assert.Contains("section \".oxmeta\"", betaIr);
+    }
 
     private static SemanticModel Analyze(string source, string dependency)
     {

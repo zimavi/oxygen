@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Text;
 using Oxygen.Llvm;
@@ -47,6 +48,27 @@ public sealed class LibraryBuildTests : IDisposable
 
         Assert.Equal(ExitCodes.SourceError, run.ExitCode);
         Assert.Contains("--library does not link", run.Error);
+    }
+
+    [SkippableFact]
+    public void ALibraryOfSeveralModulesCarriesTheMetadataOfEachModule()
+    {
+        NativeProgram.RequireLibraryToolchain();
+        var alpha = Path.Combine(_directory, "alpha.oxy");
+        File.WriteAllText(alpha, "module alpha; public i32 one() { return 1; }");
+        var beta = Path.Combine(_directory, "beta.oxy");
+        File.WriteAllText(beta, "module beta; import alpha; public i32 two() { return alpha.one() + 1; }");
+        var output = Path.Combine(_directory, "both.a");
+
+        var run = NativeProgram.RunProcess(NativeProgram.CompilerExecutable, ["build", alpha, beta, "--library", "-o", output]);
+
+        Assert.True(run.ExitCode == 0, run.Error + run.Output);
+        // Each module's object carries its own payload, so the archive has one per module.
+        var modules = NativeModuleSection.ReadPayloads(output)
+            .Select(payload => NativeModuleMetadataSerializer.Deserialize(Encoding.UTF8.GetString(payload)).ModuleName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(["alpha", "beta"], modules);
     }
 
     [Fact]
