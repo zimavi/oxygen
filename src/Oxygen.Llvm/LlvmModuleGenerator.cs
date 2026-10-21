@@ -74,7 +74,12 @@ public sealed partial class LlvmModuleGenerator
         _context.GetStructType([LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false);
 
     // The generic entries are the module's generic declarations (see NativeGenericMetadata), which go into the module's metadata.
-    public GeneratedLlvmModule Generate(string moduleName, SemanticModel model, IReadOnlyList<NativeGenericMetadata>? generics = null)
+    // A library has no native entry point: its code is linked into a program, which has one. So a library has no native main.
+    public GeneratedLlvmModule Generate(
+        string moduleName,
+        SemanticModel model,
+        IReadOnlyList<NativeGenericMetadata>? generics = null,
+        bool library = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(moduleName);
         ArgumentNullException.ThrowIfNull(model);
@@ -294,7 +299,8 @@ public sealed partial class LlvmModuleGenerator
                     EmitDestructor(context, builder, _destructors[cls.QualifiedName], cls, model, llvmFunctions);
             }
 
-            EmitNativeMain(context, builder, module, model, llvmFunctions);
+            if (!library)
+                EmitNativeMain(context, builder, module, model, llvmFunctions);
             AllowNullPointerAccess(context, module);
 
             LlvmModuleVerifier.Verify(module);
@@ -304,8 +310,11 @@ public sealed partial class LlvmModuleGenerator
                 ModuleName = moduleName,
                 TargetTriple = _target.Triple,
                 EntryPoint = "main",
-                // Methods and property accessors are described under their types, so they are not listed as functions here.
-                Functions = symbols.Where(symbol => !methodOwners.ContainsKey(symbol)).Select(symbol => new NativeFunctionMetadata
+                // The module's own functions. Methods and property accessors are described under their types, and the functions of
+                // other modules (the standard library) and the externals are not this module's to describe.
+                Functions = symbols
+                    .Where(symbol => !methodOwners.ContainsKey(symbol) && symbol.ModuleName == moduleName && !symbol.IsExternal)
+                    .Select(symbol => new NativeFunctionMetadata
                 {
                     ModuleName = symbol.ModuleName,
                     SourceName = symbol.Name,

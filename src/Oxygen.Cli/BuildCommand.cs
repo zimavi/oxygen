@@ -21,8 +21,12 @@ internal static class BuildCommand
     };
     public static readonly Option<FileInfo?> Output = new("--output", "-o")
     {
-        Description = "Path of the native executable to produce",
-        DefaultValueFactory = _ => new FileInfo("program")
+        Description = "Path of the native executable to produce, or of the library with --library. Default: program, or the module name for a library"
+    };
+    public static readonly Option<bool> Library = new("--library")
+    {
+        Description = "Build a static library instead of an executable. A library has no main function, and it is not linked, " +
+            "so --runtime and --stdlib do not apply"
     };
     public static readonly Option<FileInfo?> EmitIr = new("--emit-ir")
     {
@@ -88,6 +92,7 @@ internal static class BuildCommand
             Sources,
             Output,
             EmitIr,
+            Library,
             Clang,
             Unoptimized,
             WarningsAsErrors,
@@ -128,6 +133,13 @@ internal static class BuildCommand
     {
         var formatter = new DiagnosticFormatter();
         var useColor = !Console.IsErrorRedirected;
+        var library = result.GetValue(Library);
+        // A library is not linked, so the options for linking do not apply to it.
+        if (library && (result.GetValue(Runtime) is not null || (result.GetValue(StandardLibrary) ?? []).Length > 0))
+        {
+            Console.Error.WriteLine("oxygenc: --library does not link, so --runtime and --stdlib cannot be used with it.");
+            return ExitCodes.SourceError;
+        }
 
         var input = ReadSources(result.GetValue(Sources)!);
         // An unsupported target is reported before the sources are analyzed, since no code can be generated for it.
@@ -192,7 +204,8 @@ internal static class BuildCommand
             .AnalyzeWithDiagnostics(
                 resolved.Units,
                 sources.Select(source => (string?)source.Name).ToList(),
-                externalModules);
+                externalModules,
+                requireMain: !library);
         if (semanticResult.Diagnostics.Count > 0)
         {
             Display(semanticResult.Diagnostics, sources, formatter, useColor);
@@ -206,7 +219,7 @@ internal static class BuildCommand
             // The program's module is the one its first source file declares, which its metadata names.
             var programModule = resolved.Units.FirstOrDefault()?.ModuleName ?? "program";
             generated = new LlvmModuleGenerator(target).Generate(programModule, semanticResult.Model!,
-                GenericsOf(resolved.Units, resolved.Sources, programModule));
+                GenericsOf(resolved.Units, resolved.Sources, programModule), library);
         }
         catch (LlvmVerificationException exception)
         {
@@ -242,8 +255,65 @@ internal static class BuildCommand
                 return ExitCodes.Success;
             }
 
-            return BuildExecutable(result, generated, target, sources, formatter, useColor);
+            return library
+                ? BuildLibrary(result, generated, target, sources, formatter, useColor)
+                : BuildExecutable(result, generated, target, sources, formatter, useColor);
         }
+    }
+
+    // Writes the module as a static library, with its metadata in the object file. The library is not linked, so the runtime is not needed.
+    private static int BuildLibrary(
+        System.CommandLine.ParseResult result,
+        GeneratedLlvmModule generated,
+        OxygenTarget target,
+        IReadOnlyList<SourceText> sources,
+        DiagnosticFormatter formatter,
+        bool useColor)
+    {
+        var keepTemporaryFiles = result.GetValue(KeepTemps);
+        var temporaryDirectory = keepTemporaryFiles
+            ? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}")
+            : null;
+        if (temporaryDirectory is not null)
+            Console.Error.WriteLine($"oxygenc: keeping the intermediate files in '{temporaryDirectory}'.");
+
+        using var interrupt = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, eventArguments) =>
+        {
+            eventArguments.Cancel = true;
+            interrupt.Cancel();
+        };
+        try
+        {
+            // A library is named after its module unless -o gives a path.
+            new NativeBuildPipeline(new ProcessNativeToolRunner(cancellation: interrupt.Token)).BuildLibrary(generated, new NativeBuildOptions
+            {
+                CompilerPath = result.GetValue(Clang) ?? "clang",
+                OptimizationLevel = OptimizationLevelOf(result),
+                Target = target.Triple,
+                TemporaryDirectory = temporaryDirectory,
+                KeepTemporaryFiles = keepTemporaryFiles,
+                OutputPath = result.GetValue(Output)?.FullName ?? generated.Metadata.ModuleName
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("oxygenc: the build was cancelled.");
+            return ExitCodes.Interrupted;
+        }
+        catch (Exception exception) when (exception is NativeToolException or InvalidOperationException
+            or ArgumentException or IOException)
+        {
+            var diagnostics = new DiagnosticBag();
+            diagnostics.Add(
+                DiagnosticPhase.Toolchain,
+                DiagnosticSeverity.Error,
+                exception.Message,
+                new SourceLocation(1, 1));
+            Display(diagnostics.Diagnostics, sources, formatter, useColor);
+            return ExitCodes.ToolchainFailure;
+        }
+        return ExitCodes.Success;
     }
 
     // Links the generated module into the native executable with the runtime archive and the given dependencies.

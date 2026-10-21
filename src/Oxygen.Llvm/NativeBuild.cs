@@ -16,6 +16,8 @@ public sealed record NativeBuildOptions
     public required string OutputPath { get; init; }
     public string? MetadataPath { get; init; }
     public string CompilerPath { get; init; } = "clang";
+    // The archiver of a library build. It takes the rcs arguments of llvm-ar, which GNU ar also accepts.
+    public string ArchiverPath { get; init; } = "llvm-ar";
     public string OptimizationLevel { get; init; } = "O2";
     // The target triple passed to clang for both compiling and linking. Null leaves clang to the host.
     public string? Target { get; init; }
@@ -156,9 +158,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             ?? throw new InvalidOperationException($"Output path '{options.OutputPath}' has no directory.");
         Directory.CreateDirectory(outputDirectory);
 
-        var temporaryDirectory = options.TemporaryDirectory ?? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(temporaryDirectory);
-        try
+        InTemporaryDirectory(options, temporaryDirectory =>
         {
             var irPath = Path.Combine(temporaryDirectory, "program.ll");
             var objectPath = Path.Combine(temporaryDirectory, "program.o");
@@ -172,6 +172,56 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             var linkArguments = CreateLinkArguments(objectPath, outputPath, options);
 
             toolRunner.Run(options.CompilerPath, linkArguments, options.WorkingDirectory);
+        });
+    }
+
+    // Builds a static library from a module: its object file, with the metadata in the .oxmeta section, archived into one file. A
+    // library is not linked, so it needs neither the runtime nor a native entry point, and the program that links it provides both.
+    public void BuildLibrary(GeneratedLlvmModule module, NativeBuildOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.OutputPath);
+
+        // The section is added once here, so every library carries its metadata.
+        module.AddMetadataSection();
+        var outputPath = Path.GetFullPath(LibraryPath(options.OutputPath, options.Target));
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)
+            ?? throw new InvalidOperationException($"Output path '{options.OutputPath}' has no directory."));
+
+        InTemporaryDirectory(options, temporaryDirectory =>
+        {
+            var irPath = Path.Combine(temporaryDirectory, "library.ll");
+            var objectPath = Path.Combine(temporaryDirectory, "library.o");
+            File.WriteAllText(irPath, module.ToString());
+
+            toolRunner.Run(
+                options.CompilerPath,
+                CreateCompilationArguments(irPath, objectPath, options),
+                options.WorkingDirectory);
+
+            // The archiver adds members to an existing archive, so the old library is removed first.
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+            toolRunner.Run(options.ArchiverPath, ["rcs", outputPath, objectPath], options.WorkingDirectory);
+        });
+    }
+
+    // The file that a library build writes for an output path. A library gets .lib on the Windows target and .a elsewhere, when the
+    // output has no extension.
+    public static string LibraryPath(string outputPath, string? target) =>
+        string.IsNullOrEmpty(Path.GetExtension(outputPath))
+            ? outputPath + (IsWindowsTarget(target) ? ".lib" : ".a")
+            : outputPath;
+
+    // Runs a build in a temporary directory, which is deleted afterwards unless the options keep it.
+    private static void InTemporaryDirectory(NativeBuildOptions options, Action<string> build)
+    {
+        var temporaryDirectory = options.TemporaryDirectory ?? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temporaryDirectory);
+        try
+        {
+            build(temporaryDirectory);
         }
         finally
         {

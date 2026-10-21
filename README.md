@@ -88,7 +88,8 @@ dotnet run --project .\src\Oxygen.Cli -- build .\main.oxy `
 
 Useful CLI options include:
 
-- `--output`, `-o` — output path for the native executable. On the Windows target `.exe` is added when the path has no extension
+- `--output`, `-o` — output path for the native executable, or for the library with `--library`. Defaults to `program`, or to the module name for a library. On the Windows target `.exe` is added when the path has no extension
+- `--library` — build a static library instead of an executable. A library has no `main` function, and it is not linked, so `--runtime` and `--stdlib` cannot be used with it. The library's object carries the module's metadata
 - `--emit-ir` — write textual LLVM IR instead of building a native executable
 - `--runtime`, `-r` — static Oxygen runtime archive to link
 - `--stdlib` — optional dynamic standard-library dependencies

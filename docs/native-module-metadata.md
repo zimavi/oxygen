@@ -86,6 +86,9 @@ the GNU and BSD name forms by the tests. An archive written by `llvm-ar` (a COFF
 check. Archives written by `lib.exe` have not been read yet. Other archive members
 are skipped, and a file that is neither an object nor an archive is invalid input.
 
-The command line does not write the section yet, and the payloads are not turned
-into declarations yet. Libraries are still read from the embedded copy or the
-sidecar.
+`--library` writes the section: the module is compiled without a native `main`,
+its object carries the metadata, and the object is archived with `llvm-ar rcs`
+into a static library. A library on the Windows target gets the `.lib` extension
+when `-o` has none, and `.a` elsewhere. Its name defaults to the module name. The
+payloads are not turned into declarations yet, so a library cannot be imported
+by its metadata until the importer (slice 2b) is done.
