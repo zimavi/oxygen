@@ -135,12 +135,12 @@ int RunBuild(System.CommandLine.ParseResult result)
             exception.Message,
             new SourceLocation(1, 1));
         DisplayDiagnostics(targetDiagnostics.Diagnostics, rootSources, formatter, useColor);
-        return ExitCodes.CompilationFailed;
+        return ExitCodes.ToolchainFailure;
     }
     if (inputDiagnostics.HasErrors)
     {
         DisplayDiagnostics(inputDiagnostics.Diagnostics, rootSources, formatter, useColor);
-        return ExitCodes.CompilationFailed;
+        return ExitCodes.SourceError;
     }
     var tokenizer = new Tokenizer(Log.Logger.ForContext("SourceContext", "Lexer"));
     var resolved = new SourceModuleResolver(tokenizer, Log.Logger.ForContext("SourceContext", "Resolver"))
@@ -155,7 +155,7 @@ int RunBuild(System.CommandLine.ParseResult result)
                 .Select(group => group.First()).ToList(),
             formatter,
             useColor);
-        return ExitCodes.CompilationFailed;
+        return ExitCodes.SourceError;
     }
 
     var externalModules = new List<ExternalModuleDeclaration>();
@@ -177,7 +177,7 @@ int RunBuild(System.CommandLine.ParseResult result)
                 new SourceLocation(1, 1),
                 sourceName: modulePath.FullName);
             DisplayDiagnostics(diagnostics.Diagnostics, sources, formatter, useColor);
-            return ExitCodes.CompilationFailed;
+            return ExitCodes.SourceError;
         }
     }
     var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
@@ -194,7 +194,7 @@ int RunBuild(System.CommandLine.ParseResult result)
         DisplayDiagnostics(semanticResult.Diagnostics, sources, formatter, useColor);
         if (semanticResult.HasBlockingDiagnostics(warningsAsErrors))
         {
-            return ExitCodes.CompilationFailed;
+            return ExitCodes.SourceError;
         }
     }
 
@@ -255,7 +255,7 @@ int RunBuild(System.CommandLine.ParseResult result)
                 "runtime/build.sh, or pass --runtime with an archive built for this target.",
                 new SourceLocation(1, 1));
             DisplayDiagnostics(runtimeDiagnostics.Diagnostics, sources, formatter, useColor);
-            return ExitCodes.CompilationFailed;
+            return ExitCodes.ToolchainFailure;
         }
         var dependencies = new List<NativeDependency>
     {
@@ -301,7 +301,7 @@ int RunBuild(System.CommandLine.ParseResult result)
                 exception.Message,
                 new SourceLocation(1, 1));
             DisplayDiagnostics(diagnostics.Diagnostics, sources, formatter, useColor);
-            return ExitCodes.CompilationFailed;
+            return ExitCodes.ToolchainFailure;
         }
     }
 

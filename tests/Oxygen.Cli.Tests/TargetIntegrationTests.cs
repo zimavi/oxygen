@@ -57,7 +57,7 @@ public sealed class TargetIntegrationTests : IDisposable
         var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
             ["build", source, "-o", executable, "-r", Path.Combine(_directory, "missing.a")]);
 
-        Assert.Equal(1, build.ExitCode);
+        Assert.Equal(ExitCodes.ToolchainFailure, build.ExitCode);
         Assert.Contains("No runtime archive for target", build.Error);
         Assert.Contains("runtime/build.ps1", build.Error);
         Assert.False(File.Exists(executable));

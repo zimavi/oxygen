@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Semantic;
 using Oxygen.Llvm;
@@ -14,7 +15,17 @@ internal static class NativeModuleLoader
         if (!File.Exists(metadataPath))
             return null;
 
-        var metadata = NativeModuleMetadataSerializer.ReadArtifact(file.FullName);
+        NativeModuleMetadata metadata;
+        try
+        {
+            metadata = NativeModuleMetadataSerializer.ReadArtifact(file.FullName);
+        }
+        catch (JsonException exception)
+        {
+            // Malformed metadata is invalid input, reported like any other unusable library rather than as a crash.
+            throw new InvalidDataException(
+                $"The native module metadata for '{file.FullName}' is not valid JSON: {exception.Message}", exception);
+        }
         return new ExternalModuleDeclaration(
             metadata.ModuleName,
             metadata.Functions.Select(function => new ExternalFunctionDeclaration(
