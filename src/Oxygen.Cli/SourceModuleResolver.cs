@@ -13,9 +13,22 @@ internal sealed record ResolvedSourceModules(
 
 internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
 {
+    // Paths are compared the way the filesystem compares them: without regard to case on Windows and macOS, and exactly elsewhere.
+    private static readonly bool CaseInsensitivePaths = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
+    private static readonly StringComparer PathComparer = CaseInsensitivePaths
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+    private static readonly StringComparison PathComparison = CaseInsensitivePaths
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
     public ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots) =>
         Resolve(roots, Environment.GetEnvironmentVariable("OXYGEN_PATH"));
 
+    // The compiled files are the given roots, the files that declare a module the program needs, and the standard library files
+    // that imports reach. A module is needed when a compiled file imports it, or when a compiled file declares it. Other files in
+    // the program's folders are not compiled, so a file that is unrelated to the program cannot stop the build.
+    //
     // Every program needs the standard library: std.exception supplies the exception that null-reference checks throw.
     // A missing standard library is therefore reported here rather than surfacing later in the backend.
     internal ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots, string? oxygenPath)
@@ -23,13 +36,11 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
         var sources = new List<SourceText>();
         var units = new List<CompilationUnit>();
         var diagnostics = new DiagnosticBag();
-        var queued = new Queue<SourceText>(roots);
-        var visitedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var rootDirectories = roots
             .Select(source => Path.GetDirectoryName(Path.GetFullPath(source.Name)))
             .Where(directory => !string.IsNullOrWhiteSpace(directory))
             .Select(directory => directory!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(PathComparer)
             .ToArray();
 
         var standardLibraries = FindStandardLibraries(rootDirectories, oxygenPath);
@@ -52,20 +63,116 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                 sourceName: roots.FirstOrDefault()?.Name);
         }
 
-        // The program's own folders are compiled as a whole. The standard library is not: its modules load on demand, below.
+        var programModules = IndexProgramModules(rootDirectories, roots, standardLibraries, diagnostics);
+        var queued = new Queue<SourceText>();
+        var needed = new HashSet<string>(StringComparer.Ordinal);
+        // Queues the program's files that declare a module, the first time the module is needed.
+        void NeedModule(string moduleName)
+        {
+            if (!needed.Add(moduleName) || !programModules.TryGetValue(moduleName, out var files))
+                return;
+            foreach (var file in files)
+                queued.Enqueue(file);
+        }
+
+        foreach (var root in roots)
+        {
+            queued.Enqueue(root);
+            NeedModule(ModuleNameOf(root));
+        }
+
+        // std.exception is always loaded, because null-reference checks throw its NullReferenceException. Other standard
+        // modules load when a loaded module imports them.
+        EnqueueStandardModule(queued, diagnostics, standardLibraries, "exception.oxy");
+
+        var seen = new HashSet<string>(PathComparer);
+        while (queued.Count > 0)
+        {
+            var source = queued.Dequeue();
+            if (!seen.Add(GetCanonicalPath(source.Name)))
+                continue;
+
+            var tokenization = tokenizer.TokenizeWithDiagnostics(source.Text, source.Name);
+            diagnostics.AddRange(tokenization.Diagnostics);
+            if (tokenization.Diagnostics.Count > 0)
+                continue;
+
+            var parsed = new Parser(tokenization.Tokens, logger).ParseWithDiagnostics(source.Name);
+            diagnostics.AddRange(parsed.Diagnostics);
+            if (parsed.Diagnostics.Count > 0)
+                continue;
+
+            sources.Add(source);
+            units.Add(parsed.Unit);
+            NeedModule(parsed.Unit.ModuleName ?? "program");
+            foreach (var import in parsed.Unit.Imports)
+            {
+                // An import of std.a.b is the module file a/b.oxy in a standard library folder.
+                if (import.Name.StartsWith("std.", StringComparison.Ordinal))
+                    EnqueueStandardModule(queued, diagnostics, standardLibraries,
+                        import.Name["std.".Length..].Replace('.', Path.DirectorySeparatorChar) + ".oxy");
+                else
+                    NeedModule(import.Name);
+            }
+        }
+
+        foreach (var pair in sources.Zip(units))
+        {
+            var aliases = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var import in pair.Second.Imports)
+            {
+                if (import.Alias is not null && !aliases.Add(import.Alias))
+                {
+                    diagnostics.Add(
+                        DiagnosticPhase.Semantic,
+                        $"Import alias '{import.Alias}' is declared more than once",
+                        import.Location,
+                        import.Alias.Length,
+                        pair.First.Name);
+                }
+            }
+        }
+
+        return new ResolvedSourceModules(sources, units, diagnostics.Diagnostics);
+    }
+
+    // The program's own .oxy files, by the module each one declares. The roots come first, then the other files of the program's
+    // folders in name order. A file's module is read from its header only, so a file with errors elsewhere is still indexed. A
+    // file that cannot be read is a diagnostic, since it might be one that the program needs.
+    private Dictionary<string, List<SourceText>> IndexProgramModules(
+        IReadOnlyList<string> rootDirectories,
+        IReadOnlyList<SourceText> roots,
+        IReadOnlyList<string> standardLibraries,
+        DiagnosticBag diagnostics)
+    {
+        var index = new Dictionary<string, List<SourceText>>(StringComparer.Ordinal);
+        var indexed = new HashSet<string>(PathComparer);
+        void Add(SourceText source)
+        {
+            if (!indexed.Add(GetCanonicalPath(source.Name)))
+                return;
+            var moduleName = ModuleNameOf(source);
+            if (!index.TryGetValue(moduleName, out var files))
+                index[moduleName] = files = [];
+            files.Add(source);
+        }
+
+        foreach (var root in roots)
+            Add(root);
+
         foreach (var sourceDirectory in rootDirectories)
         {
             try
             {
                 foreach (var path in Directory.EnumerateFiles(sourceDirectory, "*.oxy", SearchOption.AllDirectories)
-                             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+                             .OrderBy(path => path, PathComparer))
                 {
-                    if (visitedFiles.Contains(GetCanonicalPath(path)) || standardLibraries.Any(library => IsInside(path, library)))
+                    if (standardLibraries.Any(library => IsInside(path, library)))
                         continue;
 
                     try
                     {
-                        queued.Enqueue(new SourceText(path, File.ReadAllText(path)));
+                        Add(new SourceText(path, File.ReadAllText(path)));
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
@@ -89,55 +196,27 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
             }
         }
 
-        // std.exception is always loaded, because null-reference checks throw its NullReferenceException. Other standard
-        // modules load when a loaded module imports them.
-        EnqueueStandardModule(queued, diagnostics, standardLibraries, "exception.oxy");
+        return index;
+    }
 
-        while (queued.Count > 0)
+    // The module a file declares, read from the start of the file: an optional visibility, then `module` and the dotted name.
+    // A file without a module declaration belongs to the program's own module, as the parser decides it.
+    private string ModuleNameOf(SourceText source)
+    {
+        var tokens = tokenizer.TokenizeWithDiagnostics(source.Text, source.Name).Tokens;
+        var index = 0;
+        if (index < tokens.Count && tokens[index].Kind is TokenKind.Public or TokenKind.Private)
+            index++;
+        if (index >= tokens.Count || tokens[index].Kind != TokenKind.Module)
+            return "program";
+
+        var parts = new List<string>();
+        for (index++; index < tokens.Count && tokens[index].Kind is TokenKind.Identifier or TokenKind.Dot; index++)
         {
-            var source = queued.Dequeue();
-            if (!visitedFiles.Add(GetCanonicalPath(source.Name)))
-                continue;
-
-            var tokenization = tokenizer.TokenizeWithDiagnostics(source.Text, source.Name);
-            diagnostics.AddRange(tokenization.Diagnostics);
-            if (tokenization.Diagnostics.Count > 0)
-                continue;
-
-            var parsed = new Parser(tokenization.Tokens, logger).ParseWithDiagnostics(source.Name);
-            diagnostics.AddRange(parsed.Diagnostics);
-            if (parsed.Diagnostics.Count > 0)
-                continue;
-
-            sources.Add(source);
-            units.Add(parsed.Unit);
-            foreach (var import in parsed.Unit.Imports)
-            {
-                // An import of std.a.b is the module file a/b.oxy in a standard library folder.
-                if (import.Name.StartsWith("std.", StringComparison.Ordinal))
-                    EnqueueStandardModule(queued, diagnostics, standardLibraries,
-                        import.Name["std.".Length..].Replace('.', Path.DirectorySeparatorChar) + ".oxy");
-            }
+            if (tokens[index].Kind == TokenKind.Identifier)
+                parts.Add(tokens[index].Lexeme);
         }
-
-        foreach (var pair in sources.Zip(units))
-        {
-            var aliases = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var import in pair.Second.Imports)
-            {
-                if (import.Alias is not null && !aliases.Add(import.Alias))
-                {
-                    diagnostics.Add(
-                        DiagnosticPhase.Semantic,
-                        $"Import alias '{import.Alias}' is declared more than once",
-                        import.Location,
-                        import.Alias.Length,
-                        pair.First.Name); 
-                }
-            }
-        }
-
-        return new ResolvedSourceModules(sources, units, diagnostics.Diagnostics);
+        return parts.Count == 0 ? "program" : string.Join(".", parts);
     }
 
     // Queues the first standard library file with this relative path, if a standard library folder has one.
@@ -171,7 +250,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
     private static bool IsInside(string path, string directory) =>
         Path.GetFullPath(path).StartsWith(
             Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
-            StringComparison.OrdinalIgnoreCase);
+            PathComparison);
 
     // The stdlib folder found above each source root. OXYGEN_PATH names one only when no root has one above it.
     private static List<string> FindStandardLibraries(IReadOnlyList<string> rootDirectories, string? oxygenPath)
@@ -187,7 +266,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                 if (Directory.Exists(standardLibraryDirectory))
                 {
                     var fullPath = Path.GetFullPath(standardLibraryDirectory);
-                    if (!standardLibraries.Contains(fullPath, StringComparer.OrdinalIgnoreCase))
+                    if (!standardLibraries.Contains(fullPath, PathComparer))
                         standardLibraries.Add(fullPath);
                     break;
                 }
@@ -199,7 +278,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
         if (standardLibraries.Count == 0 && !string.IsNullOrWhiteSpace(oxygenPath))
         {
             var oxygenDirectory = new DirectoryInfo(Path.GetFullPath(oxygenPath));
-            var standardLibraryDirectory = oxygenDirectory.Name.Equals("stdlib", StringComparison.OrdinalIgnoreCase)
+            var standardLibraryDirectory = oxygenDirectory.Name.Equals("stdlib", PathComparison)
                 ? oxygenDirectory.FullName
                 : Path.Combine(oxygenDirectory.FullName, "stdlib");
             if (Directory.Exists(standardLibraryDirectory))

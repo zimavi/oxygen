@@ -10,11 +10,15 @@ public i32 add(i32 left, i32 right) {
 }
 ```
 
-Before semantic analysis, the CLI scans the source directories recursively for
-`.oxy` files and resolves every declared module. File names do not need to
-match module names, and multiple files may declare the same module; their
-functions are combined into one module. Imports are checked against the
-combined discovered module set before name lookup.
+The CLI reads the module each `.oxy` file declares, from its header. Files are
+found by the module they declare, not by their names, so file names do not need
+to match module names, and multiple files may declare the same module; their
+functions are combined into one module. The compiled files are the files that
+were given on the command line, the files that declare a module the program
+needs, and, transitively, the files that declare each module that a compiled
+file imports. A file that the program does not need is not compiled, so a
+syntax error in it does not stop the build. Imports are checked against the
+set of compiled modules before name lookup.
 
 Nested modules are independent modules. For example, `math.float` can provide
 floating-point operations:

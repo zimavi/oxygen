@@ -68,6 +68,46 @@ public sealed class SourceModuleResolverTests : IDisposable
         Assert.DoesNotContain("collection.oxy", names);
     }
 
+    [Fact]
+    public void AFileInTheProgramFolderThatTheProgramDoesNotNeedIsNotCompiled()
+    {
+        // The broken file declares a module that nothing imports, so its syntax errors are not part of the program.
+        File.WriteAllText(Path.Combine(_directory, "unrelated.oxy"), "module unrelated; i32 broken( {");
+        var source = new SourceText(Path.Combine(_directory, "main.oxy"), "i32 main() { return 0; }");
+
+        var resolved = Resolve([source], NativeProgram.RepositoryRoot);
+
+        Assert.Empty(resolved.Diagnostics);
+        Assert.DoesNotContain(resolved.Sources, text => Path.GetFileName(text.Name) == "unrelated.oxy");
+    }
+
+    [Fact]
+    public void AnImportedModuleIsFoundByTheModuleThatAFileDeclaresNotByItsFileName()
+    {
+        File.WriteAllText(Path.Combine(_directory, "helpers.oxy"),
+            "module util;\npublic i32 one() { return 1; }\n");
+        var source = new SourceText(Path.Combine(_directory, "main.oxy"),
+            "import util;\ni32 main() { return one(); }");
+
+        var resolved = Resolve([source], NativeProgram.RepositoryRoot);
+
+        Assert.Empty(resolved.Diagnostics);
+        Assert.Contains(resolved.Sources, text => Path.GetFileName(text.Name) == "helpers.oxy");
+    }
+
+    [Fact]
+    public void EveryFileOfTheProgramsOwnModuleIsCompiled()
+    {
+        // A file without a module declaration belongs to the program's own module, as main.oxy does.
+        File.WriteAllText(Path.Combine(_directory, "more.oxy"), "i32 helper() { return 2; }\n");
+        var source = new SourceText(Path.Combine(_directory, "main.oxy"), "i32 main() { return 0; }");
+
+        var resolved = Resolve([source], NativeProgram.RepositoryRoot);
+
+        Assert.Empty(resolved.Diagnostics);
+        Assert.Contains(resolved.Sources, text => Path.GetFileName(text.Name) == "more.oxy");
+    }
+
     // The file names of every resolved source, so the tests can tell which standard modules were loaded.
     private static List<string> StandardFileNames(ResolvedSourceModules resolved) =>
         resolved.Sources.Select(source => Path.GetFileName(source.Name)).ToList();
