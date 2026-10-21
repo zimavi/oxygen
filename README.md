@@ -90,7 +90,6 @@ Useful CLI options include:
 
 - `--output`, `-o` — output path for the native executable. On the Windows target `.exe` is added when the path has no extension
 - `--emit-ir` — write textual LLVM IR instead of building a native executable
-- `--emit-metadata` — write `.oxmeta` native-module metadata
 - `--runtime`, `-r` — static Oxygen runtime archive to link
 - `--stdlib` — optional dynamic standard-library dependencies
 - `--clang`, `-c` — LLVM compiler driver used for object generation and linking

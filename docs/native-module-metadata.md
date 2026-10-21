@@ -1,8 +1,8 @@
 # Native module metadata
 
-Oxygen native builds can emit a sidecar `.oxmeta` file with
-`oxygen build --emit-metadata <path>`. The document is UTF-8 JSON and has a
-versioned `formatVersion` field. Format version `3` is the current one. It
+The metadata document is UTF-8 JSON and has a versioned `formatVersion` field.
+The build no longer writes it as a sidecar file; the `--emit-metadata` flag was
+removed, and library builds embed it in an object section (see below). Format version `3` is the current one. It
 contains the source module name, the platform entry point, generated function
 symbols (named as described in [native symbol names](mangling.md)), link
 dependencies, and two arrays that version 2 does not have: `types` and

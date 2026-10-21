@@ -1,5 +1,3 @@
-using Oxygen.Compiler.Ast;
-using Oxygen.Llvm;
 using Xunit;
 
 namespace Oxygen.Cli.Tests;
@@ -39,32 +37,16 @@ public sealed class CommandLineTests : IDisposable
     }
 
     [Fact]
-    public void TheGenericDeclarationsOfTheProgramModuleAreWrittenToTheMetadata()
-    {
-        var source = WriteSource("module program; struct Box<T> { T item; } i32 main() { return 0; }");
-        var metadataPath = Path.Combine(_directory, "program.oxmeta");
-
-        var run = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
-            ["build", source, "--emit-ir", Path.Combine(_directory, "program.ll"), "--emit-metadata", metadataPath]);
-
-        Assert.Equal(0, run.ExitCode);
-        var generic = Assert.Single(NativeModuleMetadataSerializer.Read(metadataPath).Generics);
-        Assert.Equal("program", generic.ModuleName);
-        Assert.Equal(Path.GetFileName(source), generic.SourceName);
-        Assert.Equal(["Box"], SyntaxTreeCodec.Read(generic.Syntax).Unit.Structs.Select(structure => structure.Name));
-    }
-
-    [Fact]
-    public void AProgramWithoutGenericDeclarationsHasNoGenericEntries()
+    public void EmitMetadataIsNoLongerAnOption()
     {
         var source = WriteSource("i32 main() { return 0; }");
-        var metadataPath = Path.Combine(_directory, "plain.oxmeta");
 
         var run = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
-            ["build", source, "--emit-ir", Path.Combine(_directory, "plain.ll"), "--emit-metadata", metadataPath]);
+            ["build", source, "--emit-ir", Path.Combine(_directory, "program.ll"), "--emit-metadata", Path.Combine(_directory, "p.oxmeta")]);
 
-        Assert.Equal(0, run.ExitCode);
-        Assert.Empty(NativeModuleMetadataSerializer.Read(metadataPath).Generics);
+        // The flag is now an unknown token, which is read as a second source file, so the build fails on it.
+        Assert.NotEqual(0, run.ExitCode);
+        Assert.False(File.Exists(Path.Combine(_directory, "p.oxmeta")));
     }
 
     [Fact]

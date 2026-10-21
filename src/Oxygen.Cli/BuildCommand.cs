@@ -28,10 +28,6 @@ internal static class BuildCommand
     {
         Description = "Write textual LLVM IR to this path instead of building a native executable"
     };
-    public static readonly Option<FileInfo?> EmitMetadata = new("--emit-metadata")
-    {
-        Description = "Write versioned native-module metadata (.oxmeta) to this path"
-    };
     public static readonly Option<string> Clang = new("--clang", "-c")
     {
         Description = "LLVM compiler driver used for object generation and linking",
@@ -92,7 +88,6 @@ internal static class BuildCommand
             Sources,
             Output,
             EmitIr,
-            EmitMetadata,
             Clang,
             Unoptimized,
             WarningsAsErrors,
@@ -236,9 +231,6 @@ internal static class BuildCommand
         using (generated)
         {
             var irOutput = result.GetValue(EmitIr);
-            var metadataOutput = result.GetValue(EmitMetadata);
-            if (metadataOutput is not null)
-                generated.WriteMetadata(metadataOutput.FullName);
             if (irOutput is not null)
             {
                 var irOutputPath = Path.GetFullPath(irOutput.FullName);
@@ -250,7 +242,7 @@ internal static class BuildCommand
                 return ExitCodes.Success;
             }
 
-            return BuildExecutable(result, generated, target, metadataOutput, sources, formatter, useColor);
+            return BuildExecutable(result, generated, target, sources, formatter, useColor);
         }
     }
 
@@ -259,7 +251,6 @@ internal static class BuildCommand
         System.CommandLine.ParseResult result,
         GeneratedLlvmModule generated,
         OxygenTarget target,
-        FileInfo? metadataOutput,
         IReadOnlyList<SourceText> sources,
         DiagnosticFormatter formatter,
         bool useColor)
@@ -311,8 +302,6 @@ internal static class BuildCommand
                 KeepTemporaryFiles = keepTemporaryFiles,
                 Jobs = result.GetValue(Jobs),
                 OutputPath = result.GetValue(Output)?.FullName ?? "program",
-                MetadataPath = metadataOutput?.FullName
-                    ?? (result.GetValue(Output)?.FullName ?? "program") + ".oxmeta",
                 Dependencies = dependencies
             }, new ProcessNativeToolRunner(cancellation: interrupt.Token));
         }
@@ -409,7 +398,7 @@ internal static class BuildCommand
     // The generic declarations of the module being built, with one entry per source file that declares it. A file without a
     // module header is in the module "program", as the analyzer treats it. Only the file name is recorded, so the metadata
     // does not depend on where the sources are.
-    private static IReadOnlyList<NativeGenericMetadata> GenericsOf(
+    internal static IReadOnlyList<NativeGenericMetadata> GenericsOf(
         IReadOnlyList<CompilationUnit> units,
         IReadOnlyList<SourceText> sources,
         string moduleName)
