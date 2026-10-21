@@ -288,15 +288,31 @@ public sealed partial class LlvmModuleGenerator
 
             foreach (var symbol in symbols)
             {
-                if (!symbol.IsExternal && !IsInterfaceContract(symbol, model))
-                    EmitFunction(context, builder, llvmFunctions[symbol], symbol, model, llvmFunctions);
+                if (symbol.IsExternal || IsInterfaceContract(symbol, model) || !DefinesInThisObject(symbol, library, moduleName, methodOwners))
+                    continue;
+                var function = llvmFunctions[symbol];
+                EmitFunction(context, builder, function, symbol, model, llvmFunctions);
+                if (library && IsInstance(symbol, methodOwners))
+                    function.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
             }
             foreach (var cls in concreteClasses)
             {
+                if (library && !DefinesClassInThisObject(cls, moduleName))
+                    continue;
                 foreach (var ctor in cls.Constructors)
-                    EmitConstructor(context, builder, _constructors[ConstructorKey(cls, ctor)], cls, ctor, model, llvmFunctions);
+                {
+                    var constructor = _constructors[ConstructorKey(cls, ctor)];
+                    EmitConstructor(context, builder, constructor, cls, ctor, model, llvmFunctions);
+                    if (library && IsInstantiationName(cls.Name))
+                        constructor.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
+                }
                 if (cls.Destructor is not null)
-                    EmitDestructor(context, builder, _destructors[cls.QualifiedName], cls, model, llvmFunctions);
+                {
+                    var destructor = _destructors[cls.QualifiedName];
+                    EmitDestructor(context, builder, destructor, cls, model, llvmFunctions);
+                    if (library && IsInstantiationName(cls.Name))
+                        destructor.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
+                }
             }
 
             if (!library)

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
 using Oxygen.Compiler.Parsing;
 using Oxygen.Compiler.Semantic;
@@ -91,6 +92,55 @@ public sealed class LibraryBuildTests : IDisposable
     public void AWindowsLibraryWithoutAnExtensionGetsLib()
     {
         Assert.Equal("shapes.lib", NativeBuildPipeline.LibraryPath("shapes", "x86_64-pc-windows-msvc"));
+    }
+
+    [Fact]
+    public void ALibraryDefinesItsOwnFunctionsAndOnlyDeclaresAnotherModulesFunctions()
+    {
+        const string other = "module other; public i32 helper() { return 1; }";
+        const string shapes = "module shapes; import other; public i32 add() { return other.helper() + 1; }";
+        var model = Analyze(shapes, other);
+
+        using var library = new LlvmModuleGenerator().Generate("shapes", model, library: true);
+        var ir = library.ToString();
+
+        Assert.Contains("define i32 @_Ox_v1_m6shapes_f3add_p0_", ir);
+        Assert.Contains("declare i32 @_Ox_v1_m5other_f6helper_p0_", ir);
+        Assert.DoesNotContain("define i32 @_Ox_v1_m5other_f6helper_p0_", ir);
+    }
+
+    [Fact]
+    public void AProgramStillDefinesEveryFunctionItGenerates()
+    {
+        const string other = "module other; public i32 helper() { return 1; }";
+        var model = Analyze("module program; import other; public i32 main() { return other.helper(); }", other);
+
+        using var program = new LlvmModuleGenerator().Generate("program", model);
+
+        Assert.Contains("define i32 @_Ox_v1_m5other_f6helper_p0_", program.ToString());
+    }
+
+    [Fact]
+    public void AGenericInstanceUsedByALibraryIsLinkOnceOdr()
+    {
+        const string other = "module other; public class Box<T> { T item; public T get() { return item; } }";
+        const string shapes = "module shapes; import other; " +
+            "public i32 read() { Box<i32> box = new Box<i32>(); return 0; }";
+        var model = Analyze(shapes, other);
+
+        using var library = new LlvmModuleGenerator().Generate("shapes", model, library: true);
+        var ir = library.ToString();
+
+        Assert.Contains("linkonce_odr", ir);
+    }
+
+    private static SemanticModel Analyze(string source, string dependency)
+    {
+        var tokens = new Tokenizer(Log.Logger);
+        var units = new[] { new Parser(tokens.Tokenize(dependency), Log.Logger).Parse(), new Parser(tokens.Tokenize(source), Log.Logger).Parse() };
+        var result = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics(units, null, null, requireMain: false);
+        Assert.Empty(result.Diagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        return result.Model!;
     }
 
     private static CompilationUnit Parse(string source)
