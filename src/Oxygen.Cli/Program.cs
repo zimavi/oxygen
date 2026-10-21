@@ -8,13 +8,7 @@ using Oxygen.Compiler.Semantic;
 using Oxygen.Llvm;
 using Oxygen.Cli;
 using Serilog;
-
-Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Warning()
-    .WriteTo.Console(outputTemplate: "[{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{ExceptionMessage}")
-    .CreateLogger();
-
-Log.Logger.ForContext("SourceContext", "Compiler");
+using Serilog.Events;
 
 var rootCommand = new RootCommand("Oxygen CLI");
 
@@ -77,6 +71,18 @@ var targetOption = new Option<TargetTriple?>("--target")
     Description = "Target, written with underscores for the triple: x86_64_pc_windows_msvc is x86_64-pc-windows-msvc. " +
         "Defaults to the host platform. The runtime library passed with --runtime must be built for the same target"
 };
+var logLevelOption = new Option<LogEventLevel?>("--log-level")
+{
+    Description = "Lowest level of compiler messages to show: Verbose, Debug, Information, Warning, Error or Fatal. Default: Warning"
+};
+var verboseOption = new Option<bool>("--verbose", "-v")
+{
+    Description = "Show informational compiler messages. Same as --log-level Information"
+};
+var keepTempsOption = new Option<bool>("--keep-temps")
+{
+    Description = "Keep the intermediate IR and object files, and print the directory that holds them"
+};
 var buildCommand = new Command("build", "Build the project")
 {
     sourcesArgument,
@@ -91,7 +97,10 @@ var buildCommand = new Command("build", "Build the project")
     jobsOption,
     runtimeOption,
     standardLibraryOption,
-    targetOption
+    targetOption,
+    logLevelOption,
+    verboseOption,
+    keepTempsOption
 };
 // Exit codes: 0 on success, 1 when the program could not be compiled (errors in the source, unreadable
 // inputs, or a failing native toolchain), 2 when the compiler itself failed on valid source.
@@ -264,6 +273,13 @@ int RunBuild(System.CommandLine.ParseResult result)
         dependencies.AddRange((result.GetValue(standardLibraryOption) ?? [])
             .Select(path => new NativeDependency(path.FullName, NativeDependencyKind.Dynamic)));
 
+        var keepTemporaryFiles = result.GetValue(keepTempsOption);
+        var temporaryDirectory = keepTemporaryFiles
+            ? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}")
+            : null;
+        if (temporaryDirectory is not null)
+            Console.Error.WriteLine($"oxygenc: keeping the intermediate files in '{temporaryDirectory}'.");
+
         using var interrupt = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArguments) =>
         {
@@ -278,6 +294,8 @@ int RunBuild(System.CommandLine.ParseResult result)
                 CompilerPath = result.GetValue(clangOption) ?? "clang",
                 OptimizationLevel = NormalizeOptimizationLevel(result.GetValue(optimizationOption) ?? "O2"),
                 Target = target.Triple,
+                TemporaryDirectory = temporaryDirectory,
+                KeepTemporaryFiles = keepTemporaryFiles,
                 Jobs = result.GetValue(jobsOption),
                 GenerateDebugSymbols = result.GetValue(debugOption),
                 OutputPath = result.GetValue(outputOption)?.FullName ?? "program",
@@ -326,7 +344,21 @@ buildCommand.SetAction(result =>
 
 rootCommand.Add(buildCommand);
 
-return rootCommand.Parse(args).Invoke();
+var parsed = rootCommand.Parse(args);
+// A command line with errors is reported by Invoke, which does not run the command. Its option values cannot be read.
+if (parsed.Errors.Count == 0)
+{
+    ConfigureLogging(parsed.GetValue(logLevelOption)
+        ?? (parsed.GetValue(verboseOption) ? LogEventLevel.Information : LogEventLevel.Warning));
+}
+return parsed.Invoke();
+
+// Compiler messages go to the console at the chosen level. The default shows warnings and errors only.
+static void ConfigureLogging(LogEventLevel minimumLevel) =>
+    Log.Logger = new LoggerConfiguration()
+        .MinimumLevel.Is(minimumLevel)
+        .WriteTo.Console(outputTemplate: "[{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{ExceptionMessage}")
+        .CreateLogger();
 
 static void DisplayDiagnostics(
     IReadOnlyList<Diagnostic> diagnostics,

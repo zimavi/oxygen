@@ -21,6 +21,10 @@ public sealed record NativeBuildOptions
     public string? Target { get; init; }
     // Whether to link with lld (-fuse-ld=lld). Null uses lld when it is found on PATH, and the default linker otherwise.
     public bool? UseLld { get; init; }
+    // The directory for the intermediate IR and object files. Null creates a new directory under the system temporary directory.
+    public string? TemporaryDirectory { get; init; }
+    // Whether to keep the intermediate files after the build. Otherwise the temporary directory is deleted when the build ends.
+    public bool KeepTemporaryFiles { get; init; }
     public int Jobs { get; init; } = 1;
     public bool GenerateDebugSymbols { get; init; }
     public string? WorkingDirectory { get; init; }
@@ -158,7 +162,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             ?? throw new InvalidOperationException($"Output path '{options.OutputPath}' has no directory.");
         Directory.CreateDirectory(outputDirectory);
 
-        var temporaryDirectory = Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}");
+        var temporaryDirectory = options.TemporaryDirectory ?? Path.Combine(Path.GetTempPath(), $"oxygen-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temporaryDirectory);
         try
         {
@@ -179,7 +183,8 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         {
             try
             {
-                Directory.Delete(temporaryDirectory, recursive: true);
+                if (!options.KeepTemporaryFiles)
+                    Directory.Delete(temporaryDirectory, recursive: true);
             }
             catch (IOException)
             {
