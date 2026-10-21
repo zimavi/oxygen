@@ -1,0 +1,11 @@
+<Project>
+
+  <!-- The LLVM versions the compiler is built against. LLVMSharp.Interop 22.1.8 depends on libLLVM 22.1.8 and on the
+       libLLVMSharp 22.1.8.1 shim, and its bindings call the LLVM-C API of that version. libLLVM must stay at the same
+       version, or the compiler loads an LLVM whose C API the bindings were not built for. Change both values together. -->
+  <PropertyGroup>
+    <LLVMSharpVersion>22.1.8</LLVMSharpVersion>
+    <LibLLVMVersion>22.1.8</LibLLVMVersion>
+  </PropertyGroup>
+
+</Project>

@@ -26,7 +26,7 @@
 
   <!-- The LLVM backend loads native libraries from these packages; see Oxygen.Cli.Tests. -->
   <ItemGroup>
-    <PackageReference Include="libLLVM" Version="23.1.0" />
+    <PackageReference Include="libLLVM" Version="$(LibLLVMVersion)" />
   </ItemGroup>
 
 </Project>

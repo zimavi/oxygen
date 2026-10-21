@@ -10,8 +10,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="LLVMSharp" Version="22.1.8" />
-    <PackageReference Include="libLLVM" Version="23.1.0" />
+    <PackageReference Include="LLVMSharp" Version="$(LLVMSharpVersion)" />
+    <PackageReference Include="libLLVM" Version="$(LibLLVMVersion)" />
     <ProjectReference Include="..\Oxygen.Compiler\Oxygen.Compiler.csproj" />
   </ItemGroup>
 

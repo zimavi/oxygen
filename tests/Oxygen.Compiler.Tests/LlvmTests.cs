@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using LLVMSharp.Interop;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Lexer;
@@ -15,6 +16,20 @@ namespace Oxygen.Compiler.Tests;
 
 public sealed class LlvmTests
 {
+    // The C API of the LLVM library that the process actually loads, not the version the package asks for.
+    [DllImport("LLVM-C", EntryPoint = "LLVMGetVersion")]
+    private static extern void GetLlvmVersion(out uint major, out uint minor, out uint patch);
+
+    // LLVMSharp.Interop 22.1.8 is built for LLVM 22.1.8. Loading another LLVM with those bindings is undefined, so this
+    // fails when the pins in Directory.Build.props drift apart. Update the expected version with LLVMSharpVersion.
+    [Fact]
+    public void TheLoadedLlvmIsTheVersionTheBindingsWereBuiltFor()
+    {
+        GetLlvmVersion(out var major, out var minor, out var patch);
+
+        Assert.Equal((22u, 1u, 8u), (major, minor, patch));
+    }
+
     [Fact]
     public void ManglesModuleAndFunctionNamesWithLengthPrefixes()
     {

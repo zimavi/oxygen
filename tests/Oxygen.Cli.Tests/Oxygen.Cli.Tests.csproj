@@ -35,7 +35,7 @@
   <!-- Native LLVM libraries used by the compiler. They are not copied into a project's output folder
        through a project reference to an executable, so the test project references the package directly. -->
   <ItemGroup>
-    <PackageReference Include="libLLVM" Version="23.1.0" />
+    <PackageReference Include="libLLVM" Version="$(LibLLVMVersion)" />
   </ItemGroup>
 
 </Project>

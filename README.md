@@ -21,9 +21,9 @@ The repository contains the compiler, CLI, runtime, tests, and language/referenc
 To build the repository you will typically need:
 
 - .NET 10 SDK
-- A Clang-based C toolchain for the runtime and native linking
+- clang 22.x for the runtime and native linking. Its major version must match the LLVM libraries, which are LLVM 22.1.8. Other major versions are not part of the test matrix.
 - A compatible archiver such as `llvm-ar`, `ar`, or `llvm-lib`
-- LLVM runtime libraries required by `LLVMSharp`
+- The LLVM libraries used by `LLVMSharp`. NuGet restores them, pinned to LLVM 22.1.8 in `Directory.Build.props`. Keep `LLVMSharpVersion` and `LibLLVMVersion` changed together.
 
 On Windows, the commands below use `pwsh`. On POSIX systems, use the equivalent shell commands.
 
