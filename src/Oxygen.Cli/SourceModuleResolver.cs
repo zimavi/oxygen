@@ -21,9 +21,13 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
     private static readonly StringComparison PathComparison = CaseInsensitivePaths
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
+    private const string ExceptionModuleName = "std.exception";
 
-    public ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots, bool loadStandardLibrary = true) =>
-        Resolve(roots, Environment.GetEnvironmentVariable("OXYGEN_PATH"), loadStandardLibrary);
+    public ResolvedSourceModules Resolve(
+        IReadOnlyList<SourceText> roots,
+        bool loadStandardLibrary = true,
+        IReadOnlySet<string>? providedModules = null) =>
+        Resolve(roots, Environment.GetEnvironmentVariable("OXYGEN_PATH"), loadStandardLibrary, providedModules);
 
     // The compiled files are the given roots, the files that declare a module the program needs, and the standard library files
     // that imports reach. A module is needed when a compiled file imports it, or when a compiled file declares it. Other files in
@@ -33,8 +37,16 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
     // A missing standard library is therefore reported here rather than surfacing later in the backend.
     // With loadStandardLibrary false (--no-std), the standard library is not loaded at all: std.exception is not added, a standard library
     // is not looked for, and an import of a std module must be one of the sources of the build.
-    internal ResolvedSourceModules Resolve(IReadOnlyList<SourceText> roots, string? oxygenPath, bool loadStandardLibrary)
+    // The modules in providedModules come from a native library (--stdlib), so their source is not loaded: an import of one of them is
+    // satisfied by the library, and std.exception is not added when the library provides it.
+    internal ResolvedSourceModules Resolve(
+        IReadOnlyList<SourceText> roots,
+        string? oxygenPath,
+        bool loadStandardLibrary,
+        IReadOnlySet<string>? providedModules = null)
     {
+        var provided = providedModules ?? new HashSet<string>(StringComparer.Ordinal);
+        var loadExceptionModule = loadStandardLibrary && !provided.Contains(ExceptionModuleName);
         var sources = new List<SourceText>();
         var units = new List<CompilationUnit>();
         var diagnostics = new DiagnosticBag();
@@ -47,7 +59,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
 
         var standardLibraries = loadStandardLibrary ? FindStandardLibraries(rootDirectories, oxygenPath) : [];
         // A build that loads the standard library needs its exception module, and says so when it cannot find it.
-        if (loadStandardLibrary && standardLibraries.Count == 0)
+        if (loadExceptionModule && standardLibraries.Count == 0)
         {
             diagnostics.Add(
                 DiagnosticPhase.Toolchain,
@@ -57,7 +69,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                 new SourceLocation(1, 1),
                 sourceName: roots.FirstOrDefault()?.Name);
         }
-        else if (loadStandardLibrary && !standardLibraries.Any(directory => File.Exists(Path.Combine(directory, "exception.oxy"))))
+        else if (loadExceptionModule && !standardLibraries.Any(directory => File.Exists(Path.Combine(directory, "exception.oxy"))))
         {
             diagnostics.Add(
                 DiagnosticPhase.Toolchain,
@@ -87,7 +99,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
 
         // std.exception is always loaded, because null-reference checks throw its NullReferenceException. Other standard
         // modules load when a loaded module imports them. Without the standard library (--no-std) neither loads.
-        if (loadStandardLibrary)
+        if (loadExceptionModule)
             EnqueueStandardModule(queued, diagnostics, standardLibraries, "exception.oxy");
 
         var seen = new HashSet<string>(PathComparer);
@@ -115,6 +127,10 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
                 // An import of std.a.b is the module file a/b.oxy in a standard library folder.
                 if (!import.Name.StartsWith("std.", StringComparison.Ordinal))
                     NeedModule(import.Name);
+                else if (provided.Contains(import.Name))
+                {
+                    // The native library supplies the module, so there is no source to load.
+                }
                 else if (loadStandardLibrary)
                     EnqueueStandardModule(queued, diagnostics, standardLibraries,
                         import.Name["std.".Length..].Replace('.', Path.DirectorySeparatorChar) + ".oxy");

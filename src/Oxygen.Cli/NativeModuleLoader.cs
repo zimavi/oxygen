@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Semantic;
@@ -5,23 +6,67 @@ using Oxygen.Llvm;
 
 namespace Oxygen.Cli;
 
-// A native module's declarations, and a message for each function of it that cannot be imported.
-internal sealed record LoadedNativeModule(ExternalModuleDeclaration Module, IReadOnlyList<string> Warnings);
+// A native module's declarations, a warning for each function of it that cannot be imported, and a note for each part of it that the
+// compiler reads but does not use yet (types and generics), which is information rather than a warning.
+internal sealed record LoadedNativeModule(
+    ExternalModuleDeclaration Module,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Notes);
 
 internal static class NativeModuleLoader
 {
-    // Loads the Oxygen metadata of a native library: the copy embedded in the library when it has one, and otherwise the sidecar
-    // next to it. A library without metadata is opaque, and gives null. Metadata for another target is rejected, since its symbols
+    // Loads the modules of a native library. A library built by oxygenc carries one metadata document per module, in the .oxmeta
+    // section of each object, and each document is a module. An older library has its metadata appended, or in a sidecar, and is one
+    // module. A library without metadata is opaque, and gives no modules. Metadata for another target is rejected, since its symbols
     // belong to a different platform.
-    public static LoadedNativeModule? Load(FileInfo file, OxygenTarget target)
+    public static IReadOnlyList<LoadedNativeModule> Load(FileInfo file, OxygenTarget target)
     {
-        var metadata = ReadMetadata(file);
-        if (metadata is null)
-            return null;
-        if (metadata.TargetTriple != target.Triple)
-            throw new InvalidDataException(
-                $"The native module '{file.FullName}' was built for '{metadata.TargetTriple}', but the target is '{target.Triple}'.");
+        var modules = new List<LoadedNativeModule>();
+        foreach (var metadata in ReadMetadata(file))
+        {
+            if (metadata.TargetTriple != target.Triple)
+                throw new InvalidDataException(
+                    $"The native module '{file.FullName}' was built for '{metadata.TargetTriple}', but the target is '{target.Triple}'.");
+            modules.Add(Decode(file, metadata));
+        }
+        return modules;
+    }
 
+    // The metadata documents of a library: one per object with the .oxmeta section, then the copy that older builds appended, then
+    // the sidecar. A metadata file given directly is read as it is. Malformed metadata is invalid input.
+    private static IReadOnlyList<NativeModuleMetadata> ReadMetadata(FileInfo file)
+    {
+        try
+        {
+            if (file.FullName.EndsWith(".oxmeta", StringComparison.OrdinalIgnoreCase))
+                return [NativeModuleMetadataSerializer.Read(file.FullName)];
+
+            var payloads = ReadSectionPayloads(file.FullName);
+            if (payloads.Count > 0)
+                return payloads.Select(payload => NativeModuleMetadataSerializer.Deserialize(Encoding.UTF8.GetString(payload))).ToList();
+
+            var embedded = NativeModuleMetadataSerializer.ReadEmbedded(file.FullName);
+            if (embedded is not null)
+                return [embedded];
+
+            var sidecar = file.FullName + ".oxmeta";
+            return File.Exists(sidecar) ? [NativeModuleMetadataSerializer.Read(sidecar)] : [];
+        }
+        catch (JsonException exception)
+        {
+            // Malformed metadata is invalid input, reported like any other unusable library rather than as a crash.
+            throw new InvalidDataException(
+                $"The native module metadata for '{file.FullName}' is not valid JSON: {exception.Message}", exception);
+        }
+    }
+
+    // The .oxmeta payloads of a file. A file that is neither an object nor an archive has none, and it may still carry older metadata
+    // or none, so it is not an error here.
+    private static IReadOnlyList<byte[]> ReadSectionPayloads(string path) =>
+        NativeModuleSection.TryReadPayloads(path, out var payloads) ? payloads : [];
+
+    private static LoadedNativeModule Decode(FileInfo file, NativeModuleMetadata metadata)
+    {
         var functions = new List<ExternalFunctionDeclaration>();
         var warnings = new List<string>();
         foreach (var function in metadata.Functions)
@@ -35,34 +80,13 @@ internal static class NativeModuleLoader
                 warnings.Add($"Native function '{function.SourceName}' in '{file.FullName}' is not imported: {exception.Message}");
             }
         }
-        // Types and generics are read and checked, but nothing uses them yet, so the library says so instead of ignoring them.
+        // Types and generics are read and checked, but nothing uses them yet, so the library says so as a note, with --verbose.
+        var notes = new List<string>();
         if (metadata.Types.Count > 0)
-            warnings.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' declares {metadata.Types.Count} type(s), which are not imported yet.");
+            notes.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' declares {metadata.Types.Count} type(s), which are not imported yet.");
         if (metadata.Generics.Count > 0)
-            warnings.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' contains the generic syntax of {metadata.Generics.Count} unit(s), which is not used yet.");
-        return new LoadedNativeModule(new ExternalModuleDeclaration(metadata.ModuleName, functions), warnings);
-    }
-
-    // The metadata of a library: the embedded copy first, then the sidecar. A sidecar that is not valid JSON is invalid input.
-    private static NativeModuleMetadata? ReadMetadata(FileInfo file)
-    {
-        try
-        {
-            var embedded = NativeModuleMetadataSerializer.ReadEmbedded(file.FullName);
-            if (embedded is not null)
-                return embedded;
-
-            var sidecar = file.FullName.EndsWith(".oxmeta", StringComparison.OrdinalIgnoreCase)
-                ? file.FullName
-                : file.FullName + ".oxmeta";
-            return File.Exists(sidecar) ? NativeModuleMetadataSerializer.Read(sidecar) : null;
-        }
-        catch (JsonException exception)
-        {
-            // Malformed metadata is invalid input, reported like any other unusable library rather than as a crash.
-            throw new InvalidDataException(
-                $"The native module metadata for '{file.FullName}' is not valid JSON: {exception.Message}", exception);
-        }
+            notes.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' contains the generic syntax of {metadata.Generics.Count} unit(s), which is not used yet.");
+        return new LoadedNativeModule(new ExternalModuleDeclaration(metadata.ModuleName, functions), warnings, notes);
     }
 
     private static ExternalFunctionDeclaration DecodeFunction(NativeFunctionMetadata function) =>

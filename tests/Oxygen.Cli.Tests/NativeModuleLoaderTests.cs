@@ -68,9 +68,8 @@ public sealed class NativeModuleLoaderTests : IDisposable
         File.WriteAllBytes(library, [1, 2, 3, 4]);
         NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple, [Function("add", "i32")]));
 
-        var loaded = NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64);
+        var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
 
-        Assert.NotNull(loaded);
         Assert.Equal("lib", loaded.Module.ModuleName);
         Assert.Equal("add", Assert.Single(loaded.Module.Functions).Name);
         Assert.Empty(loaded.Warnings);
@@ -85,9 +84,8 @@ public sealed class NativeModuleLoaderTests : IDisposable
         NativeModuleMetadataSerializer.Write(library + ".oxmeta", Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
             [Function("add", "i32", "i32"), Function("move", "v", "S5Point")]));
 
-        var loaded = NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64);
+        var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
 
-        Assert.NotNull(loaded);
         Assert.Equal("add", Assert.Single(loaded.Module.Functions).Name);
         var warning = Assert.Single(loaded.Warnings);
         Assert.Contains("'move'", warning);
@@ -113,7 +111,7 @@ public sealed class NativeModuleLoaderTests : IDisposable
         var library = Path.Combine(_directory, "plain.a");
         File.WriteAllBytes(library, [1, 2, 3, 4]);
 
-        Assert.Null(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
+        Assert.Empty(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
     }
 
     // Types and generics are read and checked, but the loader does not use them yet, so it reports them rather than dropping them.
@@ -134,12 +132,12 @@ public sealed class NativeModuleLoaderTests : IDisposable
         };
         NativeModuleMetadataSerializer.Embed(library, metadata);
 
-        var loaded = NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64);
+        var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
 
-        Assert.NotNull(loaded);
         Assert.Equal("add", Assert.Single(loaded.Module.Functions).Name);
-        Assert.Contains(loaded.Warnings, warning => warning.Contains("declares 1 type(s)"));
-        Assert.Contains(loaded.Warnings, warning => warning.Contains("generic syntax of 1 unit(s)"));
+        Assert.Contains(loaded.Notes, note => note.Contains("declares 1 type(s)"));
+        Assert.Contains(loaded.Notes, note => note.Contains("generic syntax of 1 unit(s)"));
+        Assert.Empty(loaded.Warnings);
     }
 
     private static NativeModuleMetadata Metadata(string moduleName, string triple, NativeFunctionMetadata[] functions) => new()
