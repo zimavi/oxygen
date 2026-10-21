@@ -22,7 +22,7 @@ public sealed class LlvmTests
 
         var mangled = OxygenNameMangler.Mangle("program", model.MainFunction!);
 
-        Assert.Equal("_Ox_v0_m7program_f4main", mangled);
+        Assert.Equal("_Ox_v1_m7program_f4main_p0_", mangled);
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public sealed class LlvmTests
 
         var scale = model.Functions.Values.Single(function => function.Name == "scale");
 
-        Assert.Equal("_Ox_v0_m7program_f5scale_p1_f64", OxygenNameMangler.Mangle("program", scale));
+        Assert.Equal("_Ox_v1_m7program_f5scale_p1_f64", OxygenNameMangler.Mangle("program", scale));
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public sealed class LlvmTests
         var model = Analyze("i32 consume(i32* value) { return *value; } i32 main() { return 0; }");
         var consume = model.Functions.Values.Single(function => function.Name == "consume");
 
-        Assert.Equal("_Ox_v0_m7program_f7consume_p1_pi32", OxygenNameMangler.Mangle("program", consume));
+        Assert.Equal("_Ox_v1_m7program_f7consume_p1_pi32", OxygenNameMangler.Mangle("program", consume));
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public sealed class LlvmTests
             Functions = metadata.Functions.Reverse().ToArray(),
             Dependencies = metadata.Dependencies.Reverse().ToArray()
         }));
-        Assert.Contains("\"formatVersion\": 1", serialized);
+        Assert.Contains($"\"formatVersion\": {NativeModuleMetadata.CurrentFormatVersion}", serialized);
         var roundTripped = NativeModuleMetadataSerializer.Deserialize(serialized);
         Assert.Equal(metadata.ModuleName, roundTripped.ModuleName);
         Assert.Equal(metadata.EntryPoint, roundTripped.EntryPoint);
@@ -277,12 +277,15 @@ public sealed class LlvmTests
         Assert.Equal("c", roundTripped.Functions.Single().CallingConvention);
     }
 
-    [Fact]
-    public void NativeMetadataRejectsUnknownFormatVersions()
+    // Version 1 names symbols with the scheme that version 2 replaced, so its metadata cannot link against this compiler's output.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void NativeMetadataRejectsOtherFormatVersions(int formatVersion)
     {
         var exception = Assert.Throws<InvalidDataException>(() =>
             NativeModuleMetadataSerializer.Deserialize(
-                """{"formatVersion":2,"moduleName":"program","entryPoint":"main"}"""));
+                $$"""{"formatVersion":{{formatVersion}},"moduleName":"program","entryPoint":"main"}"""));
 
         Assert.Contains("Unsupported native metadata format version", exception.Message);
     }
@@ -458,8 +461,8 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("define void @_Ox_v0_m7program_f4main()", ir);
-        Assert.Contains("invoke void @_Ox_v0_m7program_f4main()", ir);
+        Assert.Contains("define void @_Ox_v1_m7program_f4main_p0_()", ir);
+        Assert.Contains("invoke void @_Ox_v1_m7program_f4main_p0_()", ir);
         Assert.DoesNotContain("%call = call void", ir);
         Assert.Contains("define i32 @main(i32 %argc, ptr %argv)", ir);
         Assert.Contains("ret i32 0", ir);
@@ -474,8 +477,8 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("call void @_Ox_v0_m7program_f6notify()", ir);
-        Assert.DoesNotContain("%call = call void @_Ox_v0_m7program_f6notify()", ir);
+        Assert.Contains("call void @_Ox_v1_m7program_f6notify_p0_()", ir);
+        Assert.DoesNotContain("%call = call void @_Ox_v1_m7program_f6notify_p0_()", ir);
     }
 
     [Fact]
@@ -650,7 +653,7 @@ public sealed class LlvmTests
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
-        const string destructor = "call void @_Ox_v0_m7program_d3Box";
+        const string destructor = "call void @_Ox_v1_m7program_c3Box_d";
 
         var first = ir.IndexOf(destructor, StringComparison.Ordinal);
         var second = ir.IndexOf(destructor, first + destructor.Length, StringComparison.Ordinal);
@@ -670,7 +673,7 @@ public sealed class LlvmTests
         const string destructor = "%dispatch.destructor = load";
 
         Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
-        Assert.Contains("@_Ox_v0_m7program_f4make", ir);
+        Assert.Contains("@_Ox_v1_m7program_f4make_p0_", ir);
     }
 
     [Fact]
@@ -684,7 +687,7 @@ public sealed class LlvmTests
         const string destructor = "%dispatch.destructor = load";
 
         Assert.Equal(1, ir.Split(destructor, StringSplitOptions.None).Length - 1);
-        Assert.Contains("define void @_Ox_v0_m7program_f7consume_p1", ir);
+        Assert.Contains("define void @_Ox_v1_m7program_f7consume_p1", ir);
     }
 
     [Fact]
@@ -731,12 +734,12 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("define double @_Ox_v0_m7program_f9calculate_p1_f64", ir);
+        Assert.Contains("define double @_Ox_v1_m7program_f9calculate_p1_f64", ir);
         Assert.Contains("fmul", ir);
         Assert.Contains("declare void @__oxygen_runtime_initialize()", ir);
         Assert.Contains("define i32 @main(i32 %argc, ptr %argv)", ir);
         Assert.Contains("call void @__oxygen_runtime_initialize()", ir);
-        Assert.Contains("invoke i32 @_Ox_v0_m7program_f4main()", ir);
+        Assert.Contains("invoke i32 @_Ox_v1_m7program_f4main_p0_()", ir);
     }
 
     [Fact]
@@ -752,8 +755,8 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("@_Ox_v0_m7program_f3add_p1_i32", ir);
-        Assert.Contains("@_Ox_v0_m7program_f3add_p1_f64", ir);
+        Assert.Contains("@_Ox_v1_m7program_f3add_p1_i32", ir);
+        Assert.Contains("@_Ox_v1_m7program_f3add_p1_f64", ir);
     }
 
     [Fact]
@@ -1149,6 +1152,26 @@ public sealed class LlvmTests
 
         var exception = Assert.Throws<ArgumentException>(() => OxygenTarget.Parse("x86_64-w64-windows-gnu"));
         Assert.Contains("Supported targets are: x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu", exception.Message);
+    }
+
+    [Fact]
+    public void AMethodAndAFunctionOfAModuleNamedLikeTheClassGetDifferentSymbols()
+    {
+        // The module program.A and the class A of module program have the same qualified name. Without the owner segment, the
+        // method A.value and the function value of module program.A would share one symbol, and LLVM would rename one of them.
+        var tokenizer = new Tokenizer(Log.Logger);
+        var nested = new Parser(tokenizer.Tokenize("module program.A; public i32 value() { return 1; }"), Log.Logger).Parse();
+        var main = new Parser(tokenizer.Tokenize(
+            "class A { i32 value() { return 2; } } i32 main() { A a = new A(); return a.value(); }"), Log.Logger).Parse();
+        var standard = new Parser(tokenizer.Tokenize("module std.exception; " + NullReferenceClasses), Log.Logger).Parse();
+        var model = new SemanticAnalyzer(Log.Logger).Analyze([nested, main, standard]);
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("define i32 @_Ox_v1_m9program.A_f5value_p0_()", ir);
+        Assert.Contains("define i32 @_Ox_v1_m7program_c1A_f5value_p0_(", ir);
+        Assert.DoesNotContain(".1(", ir);
     }
 
     private static SemanticModel Analyze(string source)

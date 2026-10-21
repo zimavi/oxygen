@@ -6,7 +6,9 @@ namespace Oxygen.Llvm;
 
 public sealed record NativeModuleMetadata
 {
-    public const int CurrentFormatVersion = 1;
+    // Version 2 names symbols with version 1 of the mangling scheme (_Ox_v1_, see docs/mangling.md). Version 1 metadata names
+    // symbols that this compiler does not produce, so it is rejected.
+    public const int CurrentFormatVersion = 2;
 
     public int FormatVersion { get; init; } = CurrentFormatVersion;
     public string ModuleName { get; init; } = "program";

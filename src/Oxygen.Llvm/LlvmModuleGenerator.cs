@@ -97,8 +97,31 @@ public sealed partial class LlvmModuleGenerator
             _interfaceSlots.Clear();
             var concreteClasses = model.Classes.Values.Where(cls => !cls.IsGeneric).ToArray();
             var concreteInterfaces = model.Interfaces.Values.Where(iface => !iface.IsGeneric).ToArray();
-            var accessorSymbols = concreteClasses.SelectMany(cls => CreatePropertyAccessorSymbols(cls, model))
-                .Concat(concreteInterfaces.SelectMany(iface => CreateInterfaceAccessorSymbols(iface))).ToList();
+            // The class or interface that declares each method and property accessor. Its native name is built from it.
+            var methodOwners = new Dictionary<FunctionSymbol, OxygenNameMangler.MethodOwner>();
+            var accessorSymbols = new List<FunctionSymbol>();
+            foreach (var cls in concreteClasses)
+            {
+                var owner = new OxygenNameMangler.MethodOwner(cls.ModuleName, cls.Name, IsInterface: false);
+                foreach (var method in cls.Methods.Concat(cls.StaticMethods))
+                    methodOwners.TryAdd(method, owner);
+                foreach (var accessor in CreatePropertyAccessorSymbols(cls, model))
+                {
+                    accessorSymbols.Add(accessor);
+                    methodOwners.TryAdd(accessor, owner);
+                }
+            }
+            foreach (var iface in concreteInterfaces)
+            {
+                var owner = new OxygenNameMangler.MethodOwner(iface.ModuleName, iface.Name, IsInterface: true);
+                foreach (var method in iface.Methods)
+                    methodOwners.TryAdd(method, owner);
+                foreach (var accessor in CreateInterfaceAccessorSymbols(iface))
+                {
+                    accessorSymbols.Add(accessor);
+                    methodOwners.TryAdd(accessor, owner);
+                }
+            }
             var symbols = model.Functions.Values
                 .Concat(model.ResolvedCalls.Values)
                 .Concat(concreteClasses.SelectMany(cls => cls.Methods))
@@ -155,7 +178,7 @@ public sealed partial class LlvmModuleGenerator
             foreach (var symbol in symbols)
             {
                 var functionType = ToLlvmFunctionType(symbol, model);
-                var name = OxygenNameMangler.Mangle(symbol.ModuleName, symbol);
+                var name = MangledNameOf(symbol, methodOwners);
                 // Externals that name the same C symbol with the same signature (from_c_string in two stdlib modules)
                 // share one declaration.
                 llvmFunctions[symbol] = DeclareNativeFunction(module, name, functionType);
@@ -284,7 +307,7 @@ public sealed partial class LlvmModuleGenerator
                 {
                     ModuleName = symbol.ModuleName,
                     SourceName = symbol.Name,
-                    NativeName = OxygenNameMangler.Mangle(symbol.ModuleName, symbol),
+                    NativeName = MangledNameOf(symbol, methodOwners),
                     ReturnType = OxygenNameMangler.EncodeType(symbol.ReturnType),
                     Visibility = symbol.Visibility.ToString().ToLowerInvariant(),
                     ParameterTypes = symbol.Parameters
@@ -327,6 +350,14 @@ public sealed partial class LlvmModuleGenerator
 
     private static string ConstructorKey(ClassSymbol cls, ConstructorSymbol ctor) =>
             cls.QualifiedName + "(" + string.Join(",", ctor.Parameters.Select(p => OxygenNameMangler.EncodeType(p.Type))) + ")";
+
+    // The native name of a function. A method is named by the class or interface that declares it, not by its module.
+    private static string MangledNameOf(
+        FunctionSymbol symbol,
+        IReadOnlyDictionary<FunctionSymbol, OxygenNameMangler.MethodOwner> methodOwners) =>
+        methodOwners.TryGetValue(symbol, out var owner)
+            ? OxygenNameMangler.Mangle(owner.ModuleName, symbol, owner)
+            : OxygenNameMangler.Mangle(symbol.ModuleName, symbol);
 
     private static bool IsInterfaceContract(FunctionSymbol symbol, SemanticModel model) =>
         model.Interfaces.Values.Any(iface => iface.Methods.Contains(symbol));

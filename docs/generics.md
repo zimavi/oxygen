@@ -184,8 +184,8 @@ with a length prefix, so different argument groupings cannot collide:
 | `One<Pair<i32, i64>>` | `One__ox_16Pair__ox_i32_i64`  |
 
 These names are a compiler-internal encoding, not a stable ABI. They are
-distinct from the native symbol mangling applied to functions, which is
-documented in `modules.md`.
+distinct from the native symbol names of functions, which are documented in
+[native symbol names](mangling.md).
 
 ## Diagnostics
 

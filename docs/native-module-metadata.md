@@ -2,9 +2,10 @@
 
 Oxygen native builds can emit a sidecar `.oxmeta` file with
 `oxygen build --emit-metadata <path>`. The document is UTF-8 JSON and has a
-versioned `formatVersion` field. Format version `1` contains the source module
-name, the platform entry point, generated function symbols and link
-dependencies.
+versioned `formatVersion` field. Format version `2` contains the source module
+name, the platform entry point, generated function symbols (named as described
+in [native symbol names](mangling.md)) and link dependencies. Format version `1`
+used the earlier symbol scheme, so readers reject it.
 
 `Oxygen.Llvm.NativeModuleMetadataSerializer` provides deterministic
 serialization and read/write helpers. Functions are ordered by generated
