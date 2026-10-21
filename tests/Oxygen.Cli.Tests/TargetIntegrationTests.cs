@@ -46,6 +46,21 @@ public sealed class TargetIntegrationTests : IDisposable
         Assert.False(File.Exists(executable));
     }
 
+    [Fact]
+    public void AMissingRuntimeArchiveIsReportedWithHowToBuildIt()
+    {
+        var source = WriteSource("i32 main() { return 0; }");
+        var executable = Path.Combine(_directory, "program.exe");
+
+        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "-o", executable, "-r", Path.Combine(_directory, "missing.a")]);
+
+        Assert.Equal(1, build.ExitCode);
+        Assert.Contains("No runtime archive for target", build.Error);
+        Assert.Contains("runtime/build.ps1", build.Error);
+        Assert.False(File.Exists(executable));
+    }
+
     private string WriteSource(string text)
     {
         var path = Path.Combine(_directory, "main.oxy");

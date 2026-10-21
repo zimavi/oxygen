@@ -240,9 +240,23 @@ int RunBuild(System.CommandLine.ParseResult result)
             return ExitCodes.Success;
         }
 
+        // The default runtime is the archive that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH
+        // (the repository root, which holds runtime/ and stdlib/).
         var runtimePath = result.GetValue(runtimeOption)?.FullName
-            ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? "./",
+            ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? ".", "runtime", "build", target.Triple,
                 "liboxygenrt.a");
+        if (!File.Exists(runtimePath))
+        {
+            var runtimeDiagnostics = new DiagnosticBag();
+            runtimeDiagnostics.Add(
+                DiagnosticPhase.Toolchain,
+                DiagnosticSeverity.Error,
+                $"No runtime archive for target '{target.Triple}' at '{runtimePath}'. Build it with runtime/build.ps1 or " +
+                "runtime/build.sh, or pass --runtime with an archive built for this target.",
+                new SourceLocation(1, 1));
+            DisplayDiagnostics(runtimeDiagnostics.Diagnostics, sources, formatter, useColor);
+            return ExitCodes.CompilationFailed;
+        }
         var dependencies = new List<NativeDependency>
     {
         new(runtimePath, NativeDependencyKind.Static)

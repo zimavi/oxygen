@@ -95,11 +95,16 @@ On POSIX-compatible platforms, use the shell script:
 ./runtime/build.sh
 ```
 
-Each script builds both exception ABIs and writes platform-specific artifacts,
-including debug symbols:
+Each script builds the host target by default and writes its archive, with debug
+symbols, to a directory named after the target triple:
 
-- `runtime/build/posix/liboxygenrt.a` (Itanium C++ EH)
-- `runtime/build/windows/liboxygenrt.a` (Windows SEH)
+- `runtime/build/x86_64-unknown-linux-gnu/liboxygenrt.a` (Itanium landing pads)
+- `runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a` (Windows SEH)
+
+Pass a triple to build another target: `-Target` for `build.ps1`, or the triple as
+an argument for `build.sh`. The compiler's `--target` selects the archive that
+matches it. A cross build needs the target's C headers, which the host may not
+have. Position-independent code (`-fPIC`) is used for the ELF target only.
 
 The runtime is compiled with `-O2 -g` using an explicit x86_64 target triple.
 Both scripts use Clang for compilation and support overriding the compiler,
@@ -114,8 +119,10 @@ OUTPUT_DIRECTORY=./artifacts/runtime \
 ./runtime/build.sh
 ```
 
-Each script produces both platform libraries in one invocation. The scripts
-require Clang and a compatible archive tool (`llvm-ar`/`ar` or `llvm-lib`).
+Each script requires Clang and a compatible archive tool (`llvm-ar`/`ar` or
+`llvm-lib`). Without `--runtime`, the compiler reads the archive for its target
+from `OXYGEN_PATH/runtime/build/<triple>/`, and reports a missing archive with
+the command that builds it.
 
 The output is a static archive, not a complete executable. The CLI native
 build passes this archive after the LLVM-generated object file and then links

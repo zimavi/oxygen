@@ -25,8 +25,10 @@ internal static class NativeProgram
     }
 
     // runtime/build.ps1 writes the archive into a folder named after the platform.
+    // The archive for the host's default target, which runtime/build.ps1 builds into runtime/build/<triple>/.
     public static string RuntimeLibrary =>
-        Path.Combine(RepositoryRoot, "runtime", "build", OperatingSystem.IsWindows() ? "windows" : "linux", "liboxygenrt.a");
+        Path.Combine(RepositoryRoot, "runtime", "build",
+            OperatingSystem.IsWindows() ? "x86_64-pc-windows-msvc" : "x86_64-unknown-linux-gnu", "liboxygenrt.a");
 
     public static string CompilerExecutable =>
         Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "oxygenc.exe" : "oxygenc");

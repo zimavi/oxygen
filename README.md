@@ -57,7 +57,11 @@ pwsh -File .\runtime\build.ps1
 ./runtime/build.sh
 ```
 
-The runtime build scripts create both POSIX and Windows archives under `runtime/build/` by default.
+The runtime build scripts build the archive for the host platform, at
+`runtime/build/<triple>/liboxygenrt.a`. To build another supported target, pass its
+triple (`-Target x86_64-pc-windows-msvc` or `-Target x86_64-unknown-linux-gnu` for
+`build.ps1`, or the triple as an argument for `build.sh`). A cross build needs the
+target's C headers, which the host may not have.
 You can clean generated runtime artifacts with:
 
 ```powershell
@@ -78,7 +82,7 @@ Example: build a native executable and link against the runtime archive:
 
 ```powershell
 dotnet run --project .\src\Oxygen.Cli -- build .\main.oxy `
-  --runtime .\runtime\build\windows\liboxygenrt.a `
+  --runtime .\runtime\build\x86_64-pc-windows-msvc\liboxygenrt.a `
   --output .\program.exe
 ```
 
