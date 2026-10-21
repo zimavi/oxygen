@@ -35,7 +35,7 @@ public sealed record OxygenTarget
         : OperatingSystem.IsLinux()
             ? LinuxGnuX64
             : throw new PlatformNotSupportedException(
-                "This platform has no default target. Pass --target with one of: " + string.Join(", ", SupportedTriples) + ".");
+                "This platform has no default target. Pass --target with a supported target: " + string.Join(", ", SupportedTriples) + ".");
 
     // The target for a triple, which must be one of SupportedTriples exactly.
     public static OxygenTarget Parse(string triple)
