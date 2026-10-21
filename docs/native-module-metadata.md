@@ -27,7 +27,10 @@ has no comments, formatting or original text. The entry's module and source name
 must match the names inside the form, and the form must hold only generic
 declarations. A damaged form is reported with the source it came from.
 
-Generic methods inside a non-generic class are not in `generics` yet.
+The language has no type parameters on methods, so each entry is a whole
+top-level generic declaration, and nothing else of its unit comes with it. The
+entries of a build are the generic declarations of the module being built, one
+entry per source file, with the file name as the source name.
 
 Both arrays are validated when the document is read, and a native name may
 appear only once in a module, for a function or for a method. Entries are written

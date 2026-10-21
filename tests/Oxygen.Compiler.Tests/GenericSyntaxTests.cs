@@ -43,6 +43,15 @@ public sealed class GenericSyntaxTests
     }
 
     [Fact]
+    public void ANonGenericClassIsLeftOutEvenWhenItHasMethods()
+    {
+        var unit = Parse("module shapes; class Plain { i32 count = 3; public i32 size() { return count; } }");
+
+        Assert.Empty(GenericSyntax.Extract(unit).Classes);
+        Assert.False(GenericSyntax.HasDeclarations(unit));
+    }
+
+    [Fact]
     public void AUnitWithANonGenericDeclarationIsNotGenericOnly()
     {
         Assert.False(GenericSyntax.IsGenericOnly(Parse(Source)));

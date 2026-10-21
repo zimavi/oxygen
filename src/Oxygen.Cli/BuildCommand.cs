@@ -210,7 +210,8 @@ internal static class BuildCommand
         {
             // The program's module is the one its first source file declares, which its metadata names.
             var programModule = resolved.Units.FirstOrDefault()?.ModuleName ?? "program";
-            generated = new LlvmModuleGenerator(target).Generate(programModule, semanticResult.Model!);
+            generated = new LlvmModuleGenerator(target).Generate(programModule, semanticResult.Model!,
+                GenericsOf(resolved.Units, resolved.Sources, programModule));
         }
         catch (LlvmVerificationException exception)
         {
@@ -404,6 +405,25 @@ internal static class BuildCommand
     // --unoptimized means O0. Otherwise --optimization applies, and O2 is the default. The two are rejected together when parsed.
     internal static string OptimizationLevelOf(System.CommandLine.ParseResult result) =>
         result.GetValue(Unoptimized) ? "O0" : NormalizeOptimizationLevel(result.GetValue(Optimization) ?? "O2");
+
+    // The generic declarations of the module being built, with one entry per source file that declares it. A file without a
+    // module header is in the module "program", as the analyzer treats it. Only the file name is recorded, so the metadata
+    // does not depend on where the sources are.
+    private static IReadOnlyList<NativeGenericMetadata> GenericsOf(
+        IReadOnlyList<CompilationUnit> units,
+        IReadOnlyList<SourceText> sources,
+        string moduleName)
+    {
+        var entries = new List<NativeGenericMetadata>();
+        for (var index = 0; index < units.Count; index++)
+        {
+            var unit = units[index] with { ModuleName = units[index].ModuleName ?? "program" };
+            if (unit.ModuleName != moduleName || !GenericSyntax.HasDeclarations(unit))
+                continue;
+            entries.Add(NativeGenericMetadata.Create(unit, Path.GetFileName(sources[index].Name)));
+        }
+        return entries;
+    }
 
     private static string NormalizeOptimizationLevel(string value) =>
         value.StartsWith('O') ? value : "O" + value;

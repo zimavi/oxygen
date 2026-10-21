@@ -73,7 +73,8 @@ public sealed partial class LlvmModuleGenerator
     private LLVMTypeRef ToLlvmStringType() =>
         _context.GetStructType([LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false);
 
-    public GeneratedLlvmModule Generate(string moduleName, SemanticModel model)
+    // The generic entries are the module's generic declarations (see NativeGenericMetadata), which go into the module's metadata.
+    public GeneratedLlvmModule Generate(string moduleName, SemanticModel model, IReadOnlyList<NativeGenericMetadata>? generics = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(moduleName);
         ArgumentNullException.ThrowIfNull(model);
@@ -315,7 +316,8 @@ public sealed partial class LlvmModuleGenerator
                         .ToArray(),
                     ExternalName = symbol.CInterop?.ExternalName,
                     CallingConvention = symbol.CInterop?.CallingConvention ?? "c"
-                }).ToArray()
+                }).ToArray(),
+                Generics = generics ?? []
             };
             return new GeneratedLlvmModule(context, module, builder, metadata);
         }
