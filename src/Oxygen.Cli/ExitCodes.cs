@@ -9,4 +9,7 @@ internal static class ExitCodes
 
     // The compiler failed on a program that passed semantic analysis, or hit an internal error.
     public const int InternalError = 2;
+
+    // The build was interrupted with Ctrl+C. 130 is the conventional exit code for an interrupt.
+    public const int Interrupted = 130;
 }

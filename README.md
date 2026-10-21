@@ -88,7 +88,7 @@ dotnet run --project .\src\Oxygen.Cli -- build .\main.oxy `
 
 Useful CLI options include:
 
-- `--output`, `-o` — output path for the native executable
+- `--output`, `-o` — output path for the native executable. On the Windows target `.exe` is added when the path has no extension
 - `--emit-ir` — write textual LLVM IR instead of building a native executable
 - `--emit-metadata` — write `.oxmeta` native-module metadata
 - `--runtime`, `-r` — static Oxygen runtime archive to link
@@ -99,6 +99,8 @@ Useful CLI options include:
 - `--warnings-as-errors` — treat semantic warnings as errors
 - `--optimization`, `-O` — optimization level passed to native code generation
 - `--jobs`, `-j` — backend worker count / ThinLTO parallelism
+
+The native link uses `lld` (`-fuse-ld=lld`) when `lld-link` (Windows target) or `ld.lld` (other targets) is on `PATH`, and the default linker otherwise. A native tool that runs longer than 10 minutes is stopped, and Ctrl+C stops the build and exits with code 130.
 - `--target` — target, `x86_64_pc_windows_msvc` (triple `x86_64-pc-windows-msvc`) or `x86_64_unknown_linux_gnu` (triple `x86_64-unknown-linux-gnu`); defaults to the host. The shell suggests the names and rejects others. The runtime archive must be built for the same target
 
 Source imports are resolved from the directories containing the supplied source

@@ -264,6 +264,13 @@ int RunBuild(System.CommandLine.ParseResult result)
         dependencies.AddRange((result.GetValue(standardLibraryOption) ?? [])
             .Select(path => new NativeDependency(path.FullName, NativeDependencyKind.Dynamic)));
 
+        using var interrupt = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, eventArguments) =>
+        {
+            // Ctrl+C stops the native tool and the build, rather than ending the process in the middle of the link.
+            eventArguments.Cancel = true;
+            interrupt.Cancel();
+        };
         try
         {
             generated.BuildNative(new NativeBuildOptions
@@ -277,7 +284,12 @@ int RunBuild(System.CommandLine.ParseResult result)
                 MetadataPath = metadataOutput?.FullName
                     ?? (result.GetValue(outputOption)?.FullName ?? "program") + ".oxmeta",
                 Dependencies = dependencies
-            });
+            }, new ProcessNativeToolRunner(cancellation: interrupt.Token));
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("oxygenc: the build was cancelled.");
+            return ExitCodes.Interrupted;
         }
         catch (Exception exception) when (exception is NativeToolException or InvalidOperationException
             or ArgumentException or IOException)

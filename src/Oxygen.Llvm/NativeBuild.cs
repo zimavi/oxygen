@@ -19,6 +19,8 @@ public sealed record NativeBuildOptions
     public string OptimizationLevel { get; init; } = "O2";
     // The target triple passed to clang for both compiling and linking. Null leaves clang to the host.
     public string? Target { get; init; }
+    // Whether to link with lld (-fuse-ld=lld). Null uses lld when it is found on PATH, and the default linker otherwise.
+    public bool? UseLld { get; init; }
     public int Jobs { get; init; } = 1;
     public bool GenerateDebugSymbols { get; init; }
     public string? WorkingDirectory { get; init; }
@@ -40,8 +42,15 @@ public sealed class NativeToolException(string executable, int exitCode, string 
     public string Output { get; } = output;
 }
 
-public sealed class ProcessNativeToolRunner : INativeToolRunner
+// Runs a native tool and waits for it. Both output streams are read while the tool runs: reading one to its end first would block
+// the tool once the other pipe was full. The tool is stopped when it runs longer than the timeout, or when the cancellation
+// token is cancelled, such as by Ctrl+C.
+public sealed class ProcessNativeToolRunner(TimeSpan? timeout = null, CancellationToken cancellation = default) : INativeToolRunner
 {
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(10);
+
+    private readonly TimeSpan _timeout = timeout ?? DefaultTimeout;
+
     public void Run(string executable, IReadOnlyList<string> arguments, string? workingDirectory)
     {
         using var process = new Process
@@ -70,12 +79,28 @@ public sealed class ProcessNativeToolRunner : INativeToolRunner
                 exception);
         }
 
-        var output = process.StandardOutput.ReadToEnd();
-        output += process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var output = process.StandardOutput.ReadToEndAsync();
+        var errors = process.StandardError.ReadToEndAsync();
 
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        stop.CancelAfter(_timeout);
+        try
+        {
+            process.WaitForExitAsync(stop.Token).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            if (cancellation.IsCancellationRequested)
+                throw new OperationCanceledException($"The native tool '{executable}' was cancelled.", cancellation);
+            throw new InvalidOperationException(
+                $"Native tool '{executable}' did not finish within {_timeout.TotalSeconds:0} seconds and was stopped.");
+        }
+
+        var text = output.GetAwaiter().GetResult() + errors.GetAwaiter().GetResult();
         if (process.ExitCode != 0)
-            throw new NativeToolException(executable, process.ExitCode, output);
+            throw new NativeToolException(executable, process.ExitCode, text);
     }
 }
 
@@ -87,6 +112,8 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(options);
+        // The metadata is embedded in the file that the link writes, so the output is named before anything else.
+        options = options with { OutputPath = ExecutablePath(options.OutputPath, options.Target) };
         if (!string.IsNullOrWhiteSpace(options.MetadataPath))
         {
             var metadata = module.Metadata with
@@ -114,11 +141,17 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             NativeModuleMetadataSerializer.Embed(fullPath, metadata);
     }
 
+    // The file that the link writes for an output path. On the Windows target an executable needs the .exe extension, which is
+    // added when the output has none.
+    public static string ExecutablePath(string outputPath, string? target) =>
+        IsWindowsTarget(target) && string.IsNullOrEmpty(Path.GetExtension(outputPath)) ? outputPath + ".exe" : outputPath;
+
     public void Build(string llvmIr, NativeBuildOptions options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(llvmIr);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.OutputPath);
+        options = options with { OutputPath = ExecutablePath(options.OutputPath, options.Target) };
 
         var outputPath = Path.GetFullPath(options.OutputPath);
         var outputDirectory = Path.GetDirectoryName(outputPath)
@@ -190,12 +223,37 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         arguments.AddRange(options.Dependencies
             .Where(dependency => dependency.Kind == NativeDependencyKind.Dynamic)
             .Select(dependency => dependency.Path));
+        // The Itanium exception functions come from the C++ runtime, and the runtime and the standard library call libm. ELF
+        // targets link both, after the objects that need them. The Windows target has them in its own C runtime.
+        if (!IsWindowsTarget(options.Target))
+            arguments.AddRange(["-lm", "-lstdc++"]);
         arguments.AddRange(options.AdditionalLinkerArguments);
         arguments.Add("-o");
         arguments.Add(outputPath);
-        arguments.Add("-v");
-        arguments.Add("-fuse-ld=lld");
+        if (options.UseLld ?? IsLldOnPath(options.Target))
+            arguments.Add("-fuse-ld=lld");
         return arguments;
+    }
+
+    private static bool IsWindowsTarget(string? target) =>
+        target is null ? OperatingSystem.IsWindows() : target.Contains("-windows-", StringComparison.Ordinal);
+
+    // clang finds lld by its program name, so lld is used when that program is on PATH: lld-link for the Windows target, and
+    // ld.lld for the others.
+    private static bool IsLldOnPath(string? target)
+    {
+        var linker = IsWindowsTarget(target) ? "lld-link" : "ld.lld";
+        var fileNames = OperatingSystem.IsWindows() ? new[] { linker + ".exe", linker } : new[] { linker };
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            foreach (var fileName in fileNames)
+            {
+                if (File.Exists(Path.Combine(directory, fileName)))
+                    return true;
+            }
+        }
+        return false;
     }
 
     private static List<string> CreateCodeGenerationArguments(

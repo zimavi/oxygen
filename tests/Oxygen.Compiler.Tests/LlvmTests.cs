@@ -34,6 +34,8 @@ public sealed class LlvmTests
             new NativeBuildOptions
             {
                 OutputPath = "program",
+                Target = "x86_64-pc-windows-msvc",
+                UseLld = true,
                 Dependencies =
                 [
                     new NativeDependency("stdlib.so", NativeDependencyKind.Dynamic),
@@ -44,8 +46,45 @@ public sealed class LlvmTests
             });
 
         Assert.Equal(
-            ["-O2", "program.o", "runtime.a", "support.a", "stdlib.so", "-pthread", "-o", "program", "-v", "-fuse-ld=lld"],
+            ["-O2", "--target=x86_64-pc-windows-msvc", "program.o", "runtime.a", "support.a", "stdlib.so", "-pthread", "-o", "program",
+                "-fuse-ld=lld"],
             arguments);
+    }
+
+    [Fact]
+    public void ElfTargetsLinkTheMathAndCppLibrariesBeforeTheOutputAndWindowsDoesNot()
+    {
+        var elf = NativeBuildPipeline.CreateLinkArguments("program.o", "program",
+            new NativeBuildOptions { OutputPath = "program", Target = "x86_64-unknown-linux-gnu", UseLld = false });
+        var windows = NativeBuildPipeline.CreateLinkArguments("program.o", "program",
+            new NativeBuildOptions { OutputPath = "program", Target = "x86_64-pc-windows-msvc", UseLld = false });
+
+        var linked = elf.ToList();
+        Assert.Equal(["-lm", "-lstdc++"], linked.Skip(linked.IndexOf("-lm")).Take(2));
+        Assert.True(linked.IndexOf("-lm") < linked.IndexOf("-o"));
+        Assert.DoesNotContain("-lstdc++", windows);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void LldIsRequestedExplicitlyOrNotAtAll(bool useLld, bool expectedFlag)
+    {
+        var arguments = NativeBuildPipeline.CreateLinkArguments("program.o", "program",
+            new NativeBuildOptions { OutputPath = "program", Target = "x86_64-unknown-linux-gnu", UseLld = useLld });
+
+        Assert.Equal(expectedFlag, arguments.Contains("-fuse-ld=lld"));
+        Assert.DoesNotContain("-v", arguments);
+    }
+
+    [Theory]
+    [InlineData("program", "x86_64-pc-windows-msvc", "program.exe")]
+    [InlineData("program.exe", "x86_64-pc-windows-msvc", "program.exe")]
+    [InlineData("program", "x86_64-unknown-linux-gnu", "program")]
+    [InlineData("dir.v2/program", "x86_64-pc-windows-msvc", "dir.v2/program.exe")]
+    public void ExecutableNameGetsTheExeSuffixOnlyForWindowsTargets(string output, string target, string expected)
+    {
+        Assert.Equal(expected, NativeBuildPipeline.ExecutablePath(output, target));
     }
 
     [Fact]
@@ -96,6 +135,8 @@ public sealed class LlvmTests
                 {
                     CompilerPath = "clang-test",
                     OutputPath = Path.Combine(outputDirectory, "program"),
+                    Target = "x86_64-pc-windows-msvc",
+                    UseLld = false,
                     Dependencies =
                     [
                         new NativeDependency("runtime.a", NativeDependencyKind.Static),
@@ -105,10 +146,10 @@ public sealed class LlvmTests
 
             Assert.Equal(2, runner.Invocations.Count);
             Assert.Contains("-O2", runner.Invocations[0].Arguments);
-            Assert.Equal(["-x", "ir", "-c"], runner.Invocations[0].Arguments.Skip(1).Take(3));
+            Assert.Equal(["-x", "ir", "-c"], runner.Invocations[0].Arguments.Skip(2).Take(3));
             Assert.Equal(
-                ["runtime.a", "stdlib.so", "-o", Path.Combine(outputDirectory, "program")],
-                runner.Invocations[1].Arguments.Skip(2).Take(4));
+                ["runtime.a", "stdlib.so", "-o", Path.Combine(outputDirectory, "program.exe")],
+                runner.Invocations[1].Arguments.Skip(3).Take(4));
         }
         finally
         {
