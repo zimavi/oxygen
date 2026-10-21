@@ -130,19 +130,14 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
                     })
                     .ToArray()
             };
-            NativeModuleMetadataSerializer.Write(options.MetadataPath, metadata);
+            // The sidecar and the embedded copy are written only once the link has succeeded, so a failed build leaves no metadata
+            // that describes an executable which does not exist.
             Build(module.ToString(), options);
-            EmbedMetadataIfOutputExists(options.OutputPath, metadata);
+            NativeModuleMetadataSerializer.Write(options.MetadataPath, metadata);
+            NativeModuleMetadataSerializer.Embed(options.OutputPath, metadata);
             return;
         }
         Build(module.ToString(), options);
-    }
-
-    private static void EmbedMetadataIfOutputExists(string outputPath, NativeModuleMetadata metadata)
-    {
-        var fullPath = Path.GetFullPath(outputPath);
-        if (File.Exists(fullPath))
-            NativeModuleMetadataSerializer.Embed(fullPath, metadata);
     }
 
     // The file that the link writes for an output path. On the Windows target an executable needs the .exe extension, which is

@@ -159,9 +159,18 @@ internal static class BuildCommand
         {
             try
             {
-                var module = NativeModuleLoader.Load(modulePath);
-                if (module is not null)
-                    externalModules.Add(module);
+                var loaded = NativeModuleLoader.Load(modulePath, target);
+                if (loaded is null)
+                    continue;
+                externalModules.Add(loaded.Module);
+                if (loaded.Warnings.Count > 0)
+                {
+                    var warningBag = new DiagnosticBag();
+                    foreach (var warning in loaded.Warnings)
+                        warningBag.Add(DiagnosticPhase.Metadata, DiagnosticSeverity.Warning, warning, new SourceLocation(1, 1),
+                            sourceName: modulePath.FullName);
+                    Display(warningBag.Diagnostics, sources, formatter, useColor);
+                }
             }
             catch (Exception exception) when (exception is InvalidDataException or IOException)
             {
@@ -195,7 +204,9 @@ internal static class BuildCommand
         GeneratedLlvmModule generated;
         try
         {
-            generated = new LlvmModuleGenerator(target).Generate("program", semanticResult.Model!);
+            // The program's module is the one its first source file declares, which its metadata names.
+            var programModule = resolved.Units.FirstOrDefault()?.ModuleName ?? "program";
+            generated = new LlvmModuleGenerator(target).Generate(programModule, semanticResult.Model!);
         }
         catch (LlvmVerificationException exception)
         {

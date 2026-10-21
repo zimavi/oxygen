@@ -11,16 +11,18 @@ public sealed record NativeModuleMetadata
     public const int CurrentFormatVersion = 2;
 
     public int FormatVersion { get; init; } = CurrentFormatVersion;
-    public string ModuleName { get; init; } = "program";
+    // Every field that names the program is required, so no default such as "program" can stand in for the real name.
+    public required string ModuleName { get; init; }
     public required string EntryPoint { get; init; }
-    public string? TargetTriple { get; init; }
+    // The target that the native module was built for. A module can only be linked into a program for the same target.
+    public required string TargetTriple { get; init; }
     public IReadOnlyList<NativeFunctionMetadata> Functions { get; init; } = [];
     public IReadOnlyList<NativeDependencyMetadata> Dependencies { get; init; } = [];
 }
 
 public sealed record NativeFunctionMetadata
 {
-    public string ModuleName { get; init; } = "program";
+    public required string ModuleName { get; init; }
     public required string SourceName { get; init; }
     public required string NativeName { get; init; }
     public required string ReturnType { get; init; }
@@ -151,6 +153,8 @@ public static class NativeModuleMetadataSerializer
             throw new InvalidDataException("Native metadata must specify a module name.");
         if (string.IsNullOrWhiteSpace(metadata.EntryPoint))
             throw new InvalidDataException("Native metadata must specify an entry point.");
+        if (string.IsNullOrWhiteSpace(metadata.TargetTriple))
+            throw new InvalidDataException("Native metadata must specify a target triple.");
         if (metadata.Functions.Any(function =>
                 string.IsNullOrWhiteSpace(function.SourceName) ||
                 string.IsNullOrWhiteSpace(function.NativeName) ||

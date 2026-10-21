@@ -211,16 +211,19 @@ public sealed class LlvmTests
         {
             ModuleName = "program",
             EntryPoint = "main",
+            TargetTriple = "x86_64-pc-windows-msvc",
             Functions =
             [
                 new NativeFunctionMetadata
                 {
+                    ModuleName = "program",
                     SourceName = "z",
                     NativeName = "_Ox_z",
                     ReturnType = "i32"
                 },
                 new NativeFunctionMetadata
                 {
+                    ModuleName = "program",
                     SourceName = "a",
                     NativeName = "_Ox_a",
                     ReturnType = "void"
@@ -257,10 +260,12 @@ public sealed class LlvmTests
         {
             ModuleName = "program",
             EntryPoint = "main",
+            TargetTriple = "x86_64-pc-windows-msvc",
             Functions =
             [
                 new NativeFunctionMetadata
                 {
+                    ModuleName = "program",
                     SourceName = "puts",
                     NativeName = "_Ox_puts",
                     ExternalName = "puts",
@@ -285,7 +290,7 @@ public sealed class LlvmTests
     {
         var exception = Assert.Throws<InvalidDataException>(() =>
             NativeModuleMetadataSerializer.Deserialize(
-                $$"""{"formatVersion":{{formatVersion}},"moduleName":"program","entryPoint":"main"}"""));
+                $$"""{"formatVersion":{{formatVersion}},"moduleName":"program","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}"""));
 
         Assert.Contains("Unsupported native metadata format version", exception.Message);
     }
@@ -431,10 +436,12 @@ public sealed class LlvmTests
             {
                 ModuleName = "foo.bar",
                 EntryPoint = "main",
+                TargetTriple = "x86_64-pc-windows-msvc",
                 Functions =
                 [
                     new NativeFunctionMetadata
                     {
+                        ModuleName = "program",
                         SourceName = "value",
                         NativeName = "_Ox_native_value",
                         ReturnType = "i32"
@@ -1172,6 +1179,37 @@ public sealed class LlvmTests
         Assert.Contains("define i32 @_Ox_v1_m9program.A_f5value_p0_()", ir);
         Assert.Contains("define i32 @_Ox_v1_m7program_c1A_f5value_p0_(", ir);
         Assert.DoesNotContain(".1(", ir);
+    }
+
+    [Fact]
+    public void AFailedBuildWritesNoMetadataSidecar()
+    {
+        using var generated = new LlvmModuleGenerator().Generate("program", Analyze("i32 main() { return 0; }"));
+        var directory = Path.Combine(Path.GetTempPath(), $"oxygen-test-{Guid.NewGuid():N}");
+        try
+        {
+            var sidecar = Path.Combine(directory, "program.oxmeta");
+
+            Assert.Throws<InvalidOperationException>(() => generated.BuildNative(new NativeBuildOptions
+            {
+                OutputPath = Path.Combine(directory, "program"),
+                MetadataPath = sidecar,
+                Target = "x86_64-pc-windows-msvc"
+            }, new FailingToolRunner()));
+
+            Assert.False(File.Exists(sidecar));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private sealed class FailingToolRunner : INativeToolRunner
+    {
+        public void Run(string executable, IReadOnlyList<string> arguments, string? workingDirectory) =>
+            throw new InvalidOperationException("The native tool failed.");
     }
 
     private static SemanticModel Analyze(string source)
