@@ -32,11 +32,12 @@ public sealed class ImportedStandardLibraryTests : IDisposable
             "The shared runtime is not built. Run runtime/build.ps1 or runtime/build.sh to build it.");
         var library = BuildStandardLibrary();
         var source = Path.Combine(_directory, "main.oxy");
+        // write_stdout is an extern of the library, and print_char and println_char are its functions with bodies.
         File.WriteAllText(source, """
             import std.io;
 
             i32 main() {
-                io.print_char('h');
+                io.write_stdout("h");
                 io.println_char('i');
                 return 0;
             }
@@ -47,33 +48,28 @@ public sealed class ImportedStandardLibraryTests : IDisposable
             ["build", source, "--stdlib", library, "--emit-ir", ir]);
         Assert.True(emit.ExitCode == 0, $"Emitting IR failed with exit code {emit.ExitCode}:\n{emit.Error}");
         var text = File.ReadAllText(ir);
-        // The library defines print_char, so the program declares it, and its own IR has no definition of it.
-        Assert.Matches("declare [^\\n]*print_char", text);
-        Assert.DoesNotMatch("define [^\\n]*print_char", text);
+        // The library defines the functions, so the program declares them, and its own IR has no definition of them.
+        foreach (var name in new[] { "write_stdout", "println_char" })
+        {
+            Assert.Matches($"declare [^\\n]*{name}", text);
+            Assert.DoesNotMatch($"define [^\\n]*{name}", text);
+        }
 
         var executable = Path.Combine(_directory, Windows ? "main.exe" : "main");
         var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
             ["build", source, "--stdlib", library, "-r", runtime, "-o", executable]);
         Assert.True(build.ExitCode == 0, $"Build failed with exit code {build.ExitCode}:\n{build.Error}");
 
-        // The library is built beside the program, and the runtime is copied there too. The program finds both: on Windows through the
-        // DLL search, and on Linux through the library path.
+        // The runtime is copied beside the program, which finds the library there too: on Windows through the DLL search, and on Linux
+        // through the library path, given to the child process only.
         File.Copy(runtimeFile, Path.Combine(_directory, Path.GetFileName(runtimeFile)), overwrite: true);
-        var previousLibraryPath = Environment.GetEnvironmentVariable("LD_LIBRARY_PATH");
-        if (!Windows)
-            Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", _directory);
-        try
-        {
-            var run = NativeProgram.RunProcess(executable, []);
+        var environment = Windows
+            ? null
+            : new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = _directory };
+        var run = NativeProgram.RunProcess(executable, [], environment);
 
-            Assert.Equal(0, run.ExitCode);
-            Assert.Equal("hi\n", run.Output.Replace("\r\n", "\n"));
-        }
-        finally
-        {
-            if (!Windows)
-                Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", previousLibraryPath);
-        }
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("hi\n", run.Output.Replace("\r\n", "\n"));
     }
 
     // Builds the standard library as a shared library in the test's folder, and returns the path of the shared library.

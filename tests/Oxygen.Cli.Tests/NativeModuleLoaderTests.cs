@@ -114,6 +114,19 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.Empty(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
     }
 
+    // An archive that an older build appended metadata to: the section reader stops at the appended record, so the metadata is read.
+    [Fact]
+    public void AnArchiveWithAppendedMetadataGivesItsModule()
+    {
+        var library = Path.Combine(_directory, "lib.a");
+        File.WriteAllBytes(library, "!<arch>\n"u8.ToArray());
+        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple, [Function("add", "i32")]));
+
+        var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
+
+        Assert.Equal("add", Assert.Single(loaded.Module.Functions).Name);
+    }
+
     // Types and generics are read and checked, but the loader does not use them yet, so it reports them rather than dropping them.
     [Fact]
     public void TypesAndGenericsAreNotImportedYetAndTheLibrarySaysSo()

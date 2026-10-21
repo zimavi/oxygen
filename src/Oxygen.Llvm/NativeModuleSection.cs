@@ -113,6 +113,9 @@ public static class NativeModuleSection
         var offset = ArchiveMagic.Length;
         while (offset < file.Length)
         {
+            // Metadata appended by an older build follows the last member, and it is not a member.
+            if (file.AsSpan(offset).StartsWith(NativeModuleMetadataSerializer.EmbeddedMagic))
+                break;
             if (offset + ArchiveHeaderLength > file.Length)
                 throw Malformed(path, "an archive member header is cut short");
             if (file[offset + 58] != (byte)'`' || file[offset + 59] != (byte)'\n')

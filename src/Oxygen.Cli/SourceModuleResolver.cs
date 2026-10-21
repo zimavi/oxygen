@@ -124,13 +124,14 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
             NeedModule(parsed.Unit.ModuleName ?? "program");
             foreach (var import in parsed.Unit.Imports)
             {
-                // An import of std.a.b is the module file a/b.oxy in a standard library folder.
-                if (!import.Name.StartsWith("std.", StringComparison.Ordinal))
-                    NeedModule(import.Name);
-                else if (provided.Contains(import.Name))
+                // A module that a native library provides is not loaded from source, whatever its name, so a file of that name next to the
+                // program is not compiled. An import of std.a.b is the module file a/b.oxy in a standard library folder.
+                if (provided.Contains(import.Name))
                 {
                     // The native library supplies the module, so there is no source to load.
                 }
+                else if (!import.Name.StartsWith("std.", StringComparison.Ordinal))
+                    NeedModule(import.Name);
                 else if (loadStandardLibrary)
                     EnqueueStandardModule(queued, diagnostics, standardLibraries,
                         import.Name["std.".Length..].Replace('.', Path.DirectorySeparatorChar) + ".oxy");
