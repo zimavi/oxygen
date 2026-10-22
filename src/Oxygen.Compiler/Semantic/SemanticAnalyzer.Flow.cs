@@ -31,17 +31,17 @@ public sealed partial class SemanticAnalyzer
 
     // The assignment state at one point: the parts of locals that may be unassigned on some path to it, and whether it is reached at all.
     // A path that returns, throws, breaks or continues does not reach the code after it, so its state is not joined there.
-    // Nulls are the pointer locals that are definitely null at that point. A null pointer is one that holds null on every path to it.
-    private sealed record FlowState(HashSet<UnassignedSlot> Unassigned, bool Reachable, HashSet<VariableSymbol> Nulls);
+    // Pointers are the pointer locals whose nullness is known at that point. See PointerNullness.
+    private sealed record FlowState(HashSet<UnassignedSlot> Unassigned, bool Reachable, Dictionary<VariableSymbol, PointerNullness> Pointers);
 
     private FlowState SnapshotFlow() =>
-        new(new HashSet<UnassignedSlot>(_unassignedParts), _reachable, new HashSet<VariableSymbol>(_definitelyNullVariables));
+        new(new HashSet<UnassignedSlot>(_unassignedParts), _reachable, new Dictionary<VariableSymbol, PointerNullness>(_pointerStates));
 
     // The flow state of a body being analyzed, kept while another body is analyzed inside it.
     private sealed record SavedFlowContext(
         HashSet<UnassignedSlot> Unassigned,
         bool Reachable,
-        HashSet<VariableSymbol> Nulls,
+        Dictionary<VariableSymbol, PointerNullness> Pointers,
         Stack<List<FlowState>> BreakStates,
         Stack<(FlowState Start, List<(int Index, FlowState State)> Ends)> SwitchFlows);
 
@@ -49,9 +49,9 @@ public sealed partial class SemanticAnalyzer
     {
         var saved = new SavedFlowContext(
             new HashSet<UnassignedSlot>(_unassignedParts),
-            _reachable, new HashSet<VariableSymbol>(_definitelyNullVariables), _breakStates, _switchFlows);
+            _reachable, new Dictionary<VariableSymbol, PointerNullness>(_pointerStates), _breakStates, _switchFlows);
         _unassignedParts.Clear();
-        _definitelyNullVariables.Clear();
+        _pointerStates.Clear();
         _reachable = true;
         _breakStates = new();
         _switchFlows = new();
@@ -62,8 +62,9 @@ public sealed partial class SemanticAnalyzer
     {
         _unassignedParts.Clear();
         _unassignedParts.UnionWith(saved.Unassigned);
-        _definitelyNullVariables.Clear();
-        _definitelyNullVariables.UnionWith(saved.Nulls);
+        _pointerStates.Clear();
+        foreach (var (variable, nullness) in saved.Pointers)
+            _pointerStates[variable] = nullness;
         _reachable = saved.Reachable;
         _breakStates = saved.BreakStates;
         _switchFlows = saved.SwitchFlows;
@@ -73,16 +74,17 @@ public sealed partial class SemanticAnalyzer
     {
         _unassignedParts.Clear();
         _unassignedParts.UnionWith(state.Unassigned);
-        _definitelyNullVariables.Clear();
-        _definitelyNullVariables.UnionWith(state.Nulls);
+        _pointerStates.Clear();
+        foreach (var (variable, nullness) in state.Pointers)
+            _pointerStates[variable] = nullness;
         _reachable = state.Reachable;
     }
 
     private static FlowState UnreachableFlow() =>
-        new(new HashSet<UnassignedSlot>(), false, new HashSet<VariableSymbol>());
+        new(new HashSet<UnassignedSlot>(), false, new Dictionary<VariableSymbol, PointerNullness>());
 
-    // Where two paths meet, a part is unassigned if it is unassigned on either path, and a pointer is null only if it is null on
-    // both. An unreachable path adds nothing.
+    // Where two paths meet, a part is unassigned if it is unassigned on either path, and a pointer keeps its nullness only if both paths
+    // agree on it. An unreachable path adds nothing.
     private static FlowState JoinFlows(FlowState first, FlowState second)
     {
         if (!first.Reachable)
@@ -90,17 +92,39 @@ public sealed partial class SemanticAnalyzer
         if (!second.Reachable)
             return first;
         return new FlowState(new HashSet<UnassignedSlot>(first.Unassigned.Concat(second.Unassigned)), true,
-            new HashSet<VariableSymbol>(first.Nulls.Intersect(second.Nulls)));
+            AgreedPointers(first.Pointers, second.Pointers));
+    }
+
+    // The pointers whose nullness both maps give the same value.
+    private static Dictionary<VariableSymbol, PointerNullness> AgreedPointers(
+        Dictionary<VariableSymbol, PointerNullness> first, Dictionary<VariableSymbol, PointerNullness> second)
+    {
+        var agreed = new Dictionary<VariableSymbol, PointerNullness>();
+        foreach (var (variable, nullness) in first)
+        {
+            if (second.TryGetValue(variable, out var other) && other == nullness)
+                agreed[variable] = nullness;
+        }
+        return agreed;
     }
 
     // A loop or try statement may run its body again, or enter a catch or finally from anywhere in its body. A pointer that the
-    // statement assigns is therefore not known to be null when the statement starts, so it is forgotten there.
-    private void ForgetNullsAssignedIn(Statement statement, Scope scope)
+    // statement changes is therefore not known when the statement starts, so it is forgotten there. Changes are assignments and
+    // increments, anywhere in the statement.
+    private void ForgetPointerStatesModifiedIn(Statement statement, Scope scope)
     {
-        foreach (var name in AssignedNames(statement))
+        foreach (var name in ModifiedNames(statement))
             if (TryLookupVariable(scope, name, statement.Location) is { } variable)
-                _definitelyNullVariables.Remove(variable);
+                _pointerStates.Remove(variable);
     }
+
+    // The names of the variables that a statement changes: those it assigns, and those that an increment or decrement changes inside it.
+    private static IEnumerable<string> ModifiedNames(Statement statement) =>
+        AssignedNames(statement).Concat(
+            EnumerateExpressions(statement)
+                .OfType<UnaryExpression>()
+                .Where(item => item.Operator is TokenKind.PlusPlus or TokenKind.MinusMinus && item.Operand is IdentifierExpression)
+                .Select(item => ((IdentifierExpression)item.Operand).Name));
 
     // The names of the variables that a statement assigns, including the statements inside its blocks.
     private static IEnumerable<string> AssignedNames(Statement? statement) => statement switch

@@ -66,15 +66,16 @@ public sealed partial class LlvmModuleGenerator
             stop: _nullPointerFailure, llvmFunctions);
     }
 
-    // The value of a pointer expression that is about to be dereferenced, after its null check. Every dereference uses this, so the
-    // check cannot be missed by a new site.
+    // The value of a pointer expression that is about to be dereferenced. Every dereference uses this, so no site can miss the check. The
+    // analysis decides which operands are proven non-null (SemanticModel.NonNullDereferences), and only those are not checked.
     private LLVMValueRef EmitCheckedPointer(
         LLVMContextRef context, LLVMBuilderRef builder, Expression pointer,
         IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var value = EmitExpression(context, builder, pointer, values, storage, model, llvmFunctions);
-        EmitNullPointerCheck(builder, value, model, llvmFunctions);
+        if (!model.NonNullDereferences.Contains(pointer))
+            EmitNullPointerCheck(builder, value, model, llvmFunctions);
         return value;
     }
 

@@ -14,7 +14,13 @@ public sealed partial class SemanticAnalyzer
 
     private readonly HashSet<VariableSymbol> _usedVariables = [];
 
-    private readonly HashSet<VariableSymbol> _definitelyNullVariables = [];
+    // The nullness of each pointer local at the current point. A pointer that is not in the map is unknown. See SemanticAnalyzer.Pointers.cs.
+    private readonly Dictionary<VariableSymbol, PointerNullness> _pointerStates = new(ReferenceEqualityComparer.Instance);
+
+    // The pointer operands of dereferences that the analysis proved non-null, and those that it could not. A dereference that is proved
+    // non-null needs no runtime check. An operand that is recorded in both is checked, since one of its analyses could not prove it.
+    private readonly HashSet<Expression> _provenNonNullDereferences = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<Expression> _unprovenDereferences = new(ReferenceEqualityComparer.Instance);
 
     private readonly HashSet<FunctionSymbol> _usedFunctions = [];
 
@@ -145,7 +151,9 @@ public sealed partial class SemanticAnalyzer
         ArgumentNullException.ThrowIfNull(compilationUnits);
         _diagnostics = diagnostics;
         _usedVariables.Clear();
-        _definitelyNullVariables.Clear();
+        _pointerStates.Clear();
+        _provenNonNullDereferences.Clear();
+        _unprovenDereferences.Clear();
         _usedFunctions.Clear();
         _declaredVariables.Clear();
         _escapingClassLocals.Clear();
@@ -800,7 +808,11 @@ public sealed partial class SemanticAnalyzer
             new Dictionary<TypeSyntax, SemanticType>(_resolvedTypeSyntax, ReferenceEqualityComparer.Instance),
             new Dictionary<Expression, FunctionSymbol>(_staticPropertyGetters, ReferenceEqualityComparer.Instance),
             new Dictionary<Expression, FunctionSymbol>(_staticPropertySetters, ReferenceEqualityComparer.Instance),
-            libraryModules);
+            libraryModules,
+            // A dereference is unchecked only when every analysis of it proved its operand non-null.
+            new HashSet<Expression>(
+                _provenNonNullDereferences.Where(node => !_unprovenDereferences.Contains(node)),
+                ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

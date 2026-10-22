@@ -60,7 +60,7 @@ public sealed partial class SemanticAnalyzer
         ConstructorDeclaration? constructor)
     {
         _declaredVariables.Clear();
-        _definitelyNullVariables.Clear();
+        _pointerStates.Clear();
         var globals = GlobalScopeOf(moduleName);
         var scope = new Scope(globals, MarkVariableUsed);
         var className = function.ModuleName[(function.ModuleName.LastIndexOf('.') + 1)..];

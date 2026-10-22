@@ -3941,6 +3941,15 @@ public sealed class SemanticTests
         Assert.Contains("must return a class or an interface", exception.Message);
     }
 
+    // Indexing a pointer dereferences it, so a pointer that is null on every path is an error there too, as for `*p`.
+    [Fact]
+    public void IndexingADefinitelyNullPointerIsAnError()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("i32 main() { i32* p = null; return p[0]; }"));
+
+        Assert.Contains("Cannot dereference a null pointer", exception.Message);
+    }
+
     // The dotted form does not dereference a pointer, so it is rejected and names the struct or class value it needs.
     [Fact]
     public void DotDoesNotDereferenceAPointer()

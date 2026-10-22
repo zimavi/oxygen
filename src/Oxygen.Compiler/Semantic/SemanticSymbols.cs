@@ -234,9 +234,11 @@ public sealed class SemanticModel
         IReadOnlyDictionary<TypeSyntax, SemanticType>? resolvedTypeSyntax = null,
         IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertyGetters = null,
         IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertySetters = null,
-        IReadOnlySet<string>? externalModules = null)
+        IReadOnlySet<string>? externalModules = null,
+        IReadOnlySet<Expression>? nonNullDereferences = null)
     {
         ExternalModules = externalModules ?? new HashSet<string>(StringComparer.Ordinal);
+        NonNullDereferences = nonNullDereferences ?? new HashSet<Expression>(ReferenceEqualityComparer.Instance);
         ArgumentOrders = argumentOrders ?? new Dictionary<SyntaxNode, int[]>();
         ResolvedTypeSyntax = resolvedTypeSyntax ?? new Dictionary<TypeSyntax, SemanticType>(ReferenceEqualityComparer.Instance);
         ConstructionCalls = constructionCalls ?? new Dictionary<ClassConstructionExpression, CallExpression>();
@@ -277,6 +279,10 @@ public sealed class SemanticModel
     // The modules that a native library provides. Their functions, constructors, destructors and type information are declared here but
     // defined by the library, so the program does not define them.
     public IReadOnlySet<string> ExternalModules { get; }
+
+    // The pointer operands of dereferences that the analysis proved non-null, so the backend emits them without a null check. Every other
+    // dereference is checked at run time. Compared by reference, since each is a node of the analyzed syntax.
+    public IReadOnlySet<Expression> NonNullDereferences { get; }
 
     public IReadOnlyDictionary<SyntaxNode, int[]> ArgumentOrders { get; }
 
