@@ -32,13 +32,13 @@ jobs:
             throw "Expected clang 22.1.x, found: $version"
           }
 
-      - name: Build the Windows runtime archive
+      - name: Check the .NET SDK, and build the runtime and the standard library
+        # The same scripts that a user runs, so the install below is built from what the tests cover.
         shell: pwsh
         run: |
-          ./runtime/build.ps1
-          if (-not (Test-Path runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a)) {
-            throw "runtime/build/x86_64-pc-windows-msvc/liboxygenrt.a was not produced."
-          }
+          ./scripts/check-dotnet.ps1
+          ./scripts/build-runtime.ps1
+          ./scripts/build-stdlib.ps1
 
       - name: Build solution
         run: dotnet build Oxygen.slnx --configuration Release
@@ -48,6 +48,13 @@ jobs:
         env:
           OXYGEN_REQUIRE_NATIVE_TESTS: '1'
         run: dotnet test Oxygen.slnx --configuration Release --no-build
+
+      - name: Install into a prefix and check it
+        # A program is built and run from a folder of its own, with the installed compiler and no OXYGEN_PATH.
+        shell: pwsh
+        run: |
+          ./scripts/install.ps1 -Prefix "$env:RUNNER_TEMP\oxygen" -SkipBuild
+          ./scripts/check-installed.ps1 -Prefix "$env:RUNNER_TEMP\oxygen"
 
   linux:
     runs-on: ubuntu-24.04
@@ -76,15 +83,12 @@ jobs:
             exit 1
           fi
 
-      - name: Build the Linux runtime archive and shared library
+      - name: Check the .NET SDK, and build the runtime and the standard library
+        # The same scripts that a user runs, so the install below is built from what the tests cover.
         run: |
-          ./runtime/build.sh x86_64-unknown-linux-gnu
-          for file in runtime/build/x86_64-unknown-linux-gnu/liboxygenrt.a runtime/build/x86_64-unknown-linux-gnu/liboxygenrt.so; do
-            if [ ! -f "$file" ]; then
-              echo "$file was not produced." >&2
-              exit 1
-            fi
-          done
+          ./scripts/check-dotnet.sh
+          ./scripts/build-runtime.sh
+          ./scripts/build-stdlib.sh
 
       - name: Build solution
         run: dotnet build Oxygen.slnx --configuration Release
@@ -94,3 +98,9 @@ jobs:
         env:
           OXYGEN_REQUIRE_NATIVE_TESTS: '1'
         run: dotnet test Oxygen.slnx --configuration Release --no-build
+
+      - name: Install into a prefix and check it
+        # A program is built and run from a folder of its own, with the installed compiler, no OXYGEN_PATH and no LD_LIBRARY_PATH.
+        run: |
+          ./scripts/install.sh --prefix "$RUNNER_TEMP/oxygen" --skip-build
+          ./scripts/check-installed.sh --prefix "$RUNNER_TEMP/oxygen"

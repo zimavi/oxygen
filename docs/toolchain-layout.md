@@ -78,9 +78,40 @@ The Linux script takes the same options with two spellings: `--only`, `--skip-bu
 | `build-stdlib` | Runs `stdlib/build.ps1` or `build.sh`, which builds the runtime it links and publishes its own compiler copy. |
 | `bundle` | Replaces the prefix's `bin`, `lib` and `share/oxygen/stdlib` folders with the built files. Other files in the prefix are left alone. |
 | `link-libraries` | Linux only: with sudo, symlinks `liboxygenrt.so` and `liboxygenstd.so` into `/usr/local/lib` and runs `ldconfig`. Runs after `bundle`. |
-| `path` | Windows only: adds `<prefix>\bin` to the user PATH, once. It runs only with `-AddToPath` or when named. |
+| `path` | Windows: adds `<prefix>\bin` to the user PATH, once. Linux: links `oxygenc` into `~/.local/bin` and the two libraries into `~/.local/lib`, without sudo. Either runs only with `-AddToPath` or `--add-to-path`, or when named. |
 
 Each step is also a script of its own in `scripts/`, so any step can be rerun alone.
+
+### Run path on Linux
+
+On Linux the compiler records the prefix's `lib` folder as the run path of every program and
+shared library that it links against a shared library. The program then loads `liboxygenrt.so` and
+`liboxygenstd.so` from there, with no `LD_LIBRARY_PATH`, no sudo links and no copy in a system
+folder. The run path is the folder as it was when the program was built, so moving the prefix
+breaks programs built before the move, and they must be built again. Windows finds the DLLs through
+`PATH` instead, and records nothing.
+
+### Checking an installation
+
+`scripts/check-installed.sh` (or `.ps1`) builds a program with the installed compiler, from a
+folder of its own, with no `OXYGEN_PATH` and no `LD_LIBRARY_PATH`. It checks that the build prints
+no warning, and that the program prints `i` and exits with 7. CI runs it after each install.
+
+## Releases
+
+A release is made by pushing a tag `v<version>`, where `<version>` is the content of `VERSION`.
+`.github/workflows/release.yml` checks the tag against `VERSION` and fails when they differ. It
+then builds an installation on a Windows runner and on a Linux runner, checks it, and packs it:
+
+- `oxygen-<version>-windows-x86_64.zip`
+- `oxygen-<version>-linux-x86_64.tar.gz`
+
+Each archive holds one folder named after the archive, with `bin`, `lib` and `share` inside it. The
+release gets both archives and a `SHA256SUMS` file, which lists the SHA-256 hash of each archive.
+The release notes are generated from the commits since the previous release.
+
+CI (`.github/workflows/ci.yml`) runs the same install scripts on each push to `master` and on each
+pull request into `master`, then the test suites, then the check of the installed prefix.
 
 On Linux, a default run asks whether to link the libraries with sudo, and only when it has a
 terminal:
@@ -103,8 +134,6 @@ set. A default install that answers no exits 0.
 
 What is not done yet:
 
-- **Linux `path` step.** It stops with an error. Without the sudo links, a program built with the
-  installed compiler loads `liboxygenrt.so` and `liboxygenstd.so` from `<prefix>/lib`, which needs
-  `LD_LIBRARY_PATH` until the rpath question in the plan is decided. Put `<prefix>/bin` on `PATH` yourself.
-- **Target.** The scripts build the host target only.
-- **Uninstall, checksums, and the CI and release jobs** are later steps of the plan.
+- **Target.** The scripts build the host target only. The release matrix has two targets, and
+  ARM64 targets need a backend target entry, a runtime and standard library build, and a runner.
+- **Nightly builds and uninstall** are later steps of the plan.
