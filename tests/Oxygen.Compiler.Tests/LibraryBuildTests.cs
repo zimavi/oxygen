@@ -255,6 +255,28 @@ public sealed class LibraryBuildTests : IDisposable
         Assert.Matches(@"@oxygen\.type\.info\.shapes\.Box__ox_[^ ]+ = linkonce_odr global \{", ir);
     }
 
+    // A module-level variable is defined by its library, which exports it, so a generic declaration of the module that a program
+    // instantiates uses the one storage. The program only declares the variable.
+    [Fact]
+    public void AModuleVariableIsDefinedAndExportedByItsLibraryAndOnlyDeclaredByAProgram()
+    {
+        var libraryModel = Analyze("module mylib; i32 count = 3; public i32 current() { return count; }",
+            "module other; public i32 unused() { return 0; }");
+        using var library = new LlvmModuleGenerator().Generate("mylib", libraryModel, library: true);
+        Assert.Matches(@"@mylib\.count = global i32 3", library.ToString());
+
+        var programUnits = new[]
+        {
+            Parse("module mylib; i32 count = 3; public T mark<T>(T value) { count += 1; return value; }"),
+            Parse("import mylib; i32 main() { return mark<i32>(1); }")
+        };
+        var programResult = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics(
+            programUnits, null, [new ExternalModuleDeclaration("mylib", [])]);
+        Assert.DoesNotContain(programResult.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        using var program = new LlvmModuleGenerator().Generate("program", programResult.Model!, library: false);
+        Assert.Matches(@"@mylib\.count = external (dllimport )?global i32", program.ToString());
+    }
+
     private static SemanticModel Analyze(string source, string dependency)
     {
         var tokens = new Tokenizer(Log.Logger);

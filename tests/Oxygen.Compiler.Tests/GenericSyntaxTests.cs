@@ -14,6 +14,7 @@ public sealed class GenericSyntaxTests
         module shapes;
         import std.memory{alloc};
         enum Mode { Read, Write }
+        i32 count = 3;
         i32 plain() { return 0; }
         i32 twice<T>(T value) { return 2; }
         struct Box<T> { T item; }
@@ -40,8 +41,27 @@ public sealed class GenericSyntaxTests
         Assert.Equal(["Named"], generic.Interfaces.Select(declaration => declaration.Name));
         Assert.Equal(["Maybe"], generic.Unions.Select(declaration => declaration.Name));
         Assert.Empty(generic.Enums);
-        Assert.Empty(generic.Globals);
         Assert.True(GenericSyntax.IsGenericOnly(generic));
+    }
+
+    // A generic body of the module may use its module-level variables, so the variables are carried with their initializers.
+    [Fact]
+    public void ExtractCarriesTheModuleVariablesWithTheirInitializers()
+    {
+        var unit = Parse(Source);
+
+        var variable = Assert.Single(GenericSyntax.Extract(unit).Globals);
+        Assert.Equal("count", variable.Name);
+        Assert.NotNull(variable.Initializer);
+    }
+
+    [Fact]
+    public void AUnitWithOnlyVariablesHasDeclarationsToCarry()
+    {
+        var unit = Parse("module shapes; i32 count = 3;");
+
+        Assert.True(GenericSyntax.HasDeclarations(unit));
+        Assert.True(GenericSyntax.IsGenericOnly(GenericSyntax.Extract(unit)));
     }
 
     // A non-generic class is carried with its fields and its method signatures, but without the bodies: its code is in the library.

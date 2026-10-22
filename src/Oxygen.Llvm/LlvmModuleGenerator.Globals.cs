@@ -13,9 +13,11 @@ public sealed partial class LlvmModuleGenerator
 
     // Each module-level variable is an internal LLVM global named by its module and name. The module is part of the name, so two
     // modules can declare variables with the same name.
-    // A static field is named by its class, which is its variable's module name, so its global is `module.Class.field`. A static field of a
-    // class that a library defines is declared here; a library exports its own static fields, so one storage serves every program that uses
-    // them. An instance of a generic class has its own static fields, as its code does.
+    // A static field is named by its class, which is its variable's module name, so its global is `module.Class.field`. A static field's
+    // owner is its class's module, and a module-level variable's owner is its module, so both follow the same rules below.
+    // A variable of a library module is declared here, not defined. A library exports its own variables, so one storage serves every program
+    // whose generic declarations use them. An instance of a generic class has its own static fields, as its code does, so it is owned by
+    // no module.
     private void DeclareGlobalVariables(LLVMModuleRef module, SemanticModel model, string moduleName, bool library)
     {
         _globalVariables.Clear();
@@ -25,7 +27,9 @@ public sealed partial class LlvmModuleGenerator
             var global = module.AddGlobal(type, $"{variable.ModuleName}.{variable.Name}");
             global.IsGlobalConstant = variable.IsConst;
             var owningClass = model.Classes.GetValueOrDefault(variable.ModuleName);
-            if (owningClass is not null && DefinedByLibrary(owningClass.ModuleName, IsInstantiationName(owningClass.Name), model))
+            var owningModule = owningClass?.ModuleName ?? variable.ModuleName;
+            var isInstance = owningClass is not null && IsInstantiationName(owningClass.Name);
+            if (DefinedByLibrary(owningModule, isInstance, model))
             {
                 // Declared only: the library defines the storage, and on Windows a program imports it.
                 global.Linkage = LLVMLinkage.LLVMExternalLinkage;
@@ -34,7 +38,7 @@ public sealed partial class LlvmModuleGenerator
                 _globalVariables[variable] = global;
                 continue;
             }
-            var exported = owningClass is not null && library && owningClass.ModuleName == moduleName && !IsInstantiationName(owningClass.Name);
+            var exported = library && owningModule == moduleName && !isInstance;
             global.Linkage = exported ? LLVMLinkage.LLVMExternalLinkage : LLVMLinkage.LLVMInternalLinkage;
             global.Initializer = GlobalInitializer(type, variable);
             _globalVariables[variable] = global;

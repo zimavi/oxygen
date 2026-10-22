@@ -2,12 +2,12 @@ namespace Oxygen.Compiler.Ast;
 
 // The declarations of a unit that a library carries in the binary form, for an importing program. These are the generic classes, unions and
 // functions, which the program instantiates, with their bodies; the structs, which are data, generic or not; the interfaces, which declare
-// signatures only; and the non-generic classes, without their bodies, which the program declares and whose code is in the library. Each
-// declaration is extracted on its own. The language has no type parameters on methods, so a generic declaration is always top-level.
-// Enums and globals are not carried yet.
+// signatures only; the non-generic classes, without their bodies, which the program declares and whose code is in the library; and the
+// module-level variables, with their constant initializers, since a generic body of the module may use them. Each declaration is extracted
+// on its own. The language has no type parameters on methods, so a generic declaration is always top-level. Enums are not carried yet.
 public static class GenericSyntax
 {
-    // The unit with its module header, its imports and the declarations above. Enums and globals are dropped.
+    // The unit with its module header, its imports and the declarations above. Enums are dropped.
     public static CompilationUnit Extract(CompilationUnit unit) => unit with
     {
         Structs = unit.Structs,
@@ -16,7 +16,7 @@ public static class GenericSyntax
         Interfaces = unit.Interfaces,
         Functions = unit.Functions.Where(IsGeneric).ToArray(),
         Enums = [],
-        Globals = []
+        Globals = unit.Globals
     };
 
     // Whether the unit has a declaration to carry.
@@ -24,15 +24,14 @@ public static class GenericSyntax
     {
         var generic = Extract(unit);
         return generic.Structs.Count > 0 || generic.Unions.Count > 0 || generic.Classes.Count > 0 ||
-            generic.Interfaces.Count > 0 || generic.Functions.Count > 0;
+            generic.Interfaces.Count > 0 || generic.Functions.Count > 0 || generic.Globals.Count > 0;
     }
 
     // Whether every declaration of the unit is one that the binary form carries: structs, unions and functions that are generic where they
-    // have parameters, classes that are generic or have no bodies, and any interface. The unit has no enums and no globals. A unit in the
+    // have parameters, classes that are generic or have no bodies, any interface, and globals. The unit has no enums. A unit in the
     // binary form of a library must pass this check.
     public static bool IsGenericOnly(CompilationUnit unit) =>
         unit.Enums.Count == 0 &&
-        unit.Globals.Count == 0 &&
         unit.Unions.All(IsGeneric) &&
         unit.Classes.All(cls => IsGeneric(cls) || HasNoBodies(cls)) &&
         unit.Functions.All(IsGeneric);
