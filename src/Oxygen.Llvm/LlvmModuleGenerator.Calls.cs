@@ -136,7 +136,7 @@ public sealed partial class LlvmModuleGenerator
             {
                 var slot = slotPair.index;
                 var tableSlot = builder.BuildStructGEP2(_classTypes[receiverClass.QualifiedName], arguments[0],
-                    (uint)slot + 1, "vtable.slot");
+                    (uint)SlotIndex(receiverClass, slot, model), "vtable.slot");
                 var rawTarget = builder.BuildLoad2(
                     LLVMTypeRef.CreatePointer(_context.Int8Type, 0), tableSlot, "vtable.target");
                 return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, rawTarget,

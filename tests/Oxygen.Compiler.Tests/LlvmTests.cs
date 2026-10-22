@@ -433,6 +433,23 @@ public sealed class LlvmTests
         Assert.Contains("invoke i32 %vtable.target", ir);
     }
 
+    // A derived class's layout starts with its base class's layout, so the base class's slots and fields keep their positions in the derived
+    // class. Each class has only its own virtual slots, and what it adds comes after what its base class has.
+    [Fact]
+    public void ADerivedClassLaysOutItsBaseClassAsAPrefix()
+    {
+        var model = AnalyzeWithStdException(
+            "class Base { virtual i32 first() { return 1; } i32 x; } " +
+            "class Derived : Base { virtual i32 second() { return 2; } i32 y; } " +
+            "i32 main() { Derived value = new Derived(); return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Contains("%class.program.Base = type { ptr, ptr, i32 }", ir);
+        Assert.Contains("%class.program.Derived = type { ptr, ptr, i32, ptr, i32 }", ir);
+    }
+
     [Fact]
     public void EmitsArrayElementPassedToAFunction()
     {

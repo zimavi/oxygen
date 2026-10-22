@@ -291,7 +291,7 @@ public sealed partial class LlvmModuleGenerator
                             var slot = GetVirtualMethods(owner, model).Select((candidate, index) => (candidate, index))
                                 .First(pair => pair.candidate == setter).index;
                             var slotAddress = builder.BuildStructGEP2(_classTypes[owner.QualifiedName], values["this"],
-                                (uint)slot + 1, "property.vtable.slot");
+                                (uint)SlotIndex(owner, slot, model), "property.vtable.slot");
                             setterTarget = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                                 slotAddress, "property.vtable.target");
                         }

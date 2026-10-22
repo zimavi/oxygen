@@ -28,7 +28,7 @@ public sealed partial class LlvmModuleGenerator
                 .Select(structure => StructMetadata(structure, model, data)));
             types.AddRange(model.Classes.Values
                 .Where(cls => IsDeclaredType(cls.ModuleName, cls.Name, cls.IsGeneric, moduleName))
-                .Select(cls => ClassMetadata(cls, data, methodOwners)));
+                .Select(cls => ClassMetadata(cls, model, data, methodOwners)));
             types.AddRange(model.Enums.Values
                 .Where(enumeration => enumeration.ModuleName == moduleName)
                 .Select(EnumMetadata));
@@ -69,11 +69,11 @@ public sealed partial class LlvmModuleGenerator
     // The metadata lists the methods of the class, its static methods and its property accessors, each under its native name.
     private NativeTypeMetadata ClassMetadata(
         ClassSymbol cls,
+        SemanticModel model,
         LLVMTargetDataRef data,
         IReadOnlyDictionary<FunctionSymbol, OxygenNameMangler.MethodOwner> methodOwners)
     {
         var layout = _classTypes[cls.QualifiedName];
-        var firstField = cls.IsValue ? 0 : 1 + _virtualSlotCount;
         var methods = methodOwners
             .Where(pair => !pair.Value.IsInterface && pair.Value.ModuleName == cls.ModuleName && pair.Value.TypeName == cls.Name)
             .Select(pair => MethodMetadata(pair.Key, cls, methodOwners))
@@ -92,7 +92,7 @@ public sealed partial class LlvmModuleGenerator
                 {
                     Name = field.Name,
                     Type = OxygenNameMangler.EncodeType(field.Type),
-                    Offset = checked((int)data.OffsetOfElement(layout, (uint)(firstField + index)))
+                    Offset = checked((int)data.OffsetOfElement(layout, (uint)FieldOffset(cls, model, index)))
                 })
                 .ToArray(),
             Methods = methods

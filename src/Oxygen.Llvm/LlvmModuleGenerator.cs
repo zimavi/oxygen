@@ -34,7 +34,6 @@ public sealed partial class LlvmModuleGenerator
     private readonly HashSet<FunctionSymbol> _accessorSymbols = [];
     private readonly Dictionary<(string ClassName, string InterfaceName), LLVMValueRef> _interfaceTables = new();
     private readonly Dictionary<string, IReadOnlyList<FunctionSymbol>> _interfaceSlots = new(StringComparer.Ordinal);
-    private int _virtualSlotCount;
     private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type);
     private Stack<List<OwnedLocal>> _ownedScopes = new();
     private LLVMValueRef _oxygenAlloc;
@@ -158,19 +157,10 @@ public sealed partial class LlvmModuleGenerator
                     LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type], false);
             _constructors.Clear();
             _destructors.Clear();
-            _virtualSlotCount = concreteClasses.Select(cls => GetVirtualMethods(cls, model).Count)
-                .DefaultIfEmpty().Max();
             foreach (var cls in concreteClasses)
                 _classTypes[cls.QualifiedName] = context.CreateNamedStruct($"class.{cls.QualifiedName}");
             foreach (var cls in concreteClasses)
-            {
-                var fields = (cls.IsValue
-                        ? Enumerable.Empty<LLVMTypeRef>()
-                        : new[] { LLVMTypeRef.CreatePointer(_context.Int8Type, 0) }
-                            .Concat(Enumerable.Repeat(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _virtualSlotCount)))
-                    .Concat(cls.Fields.Select(field => ToLlvmType(field.Type, model))).ToArray();
-                _classTypes[cls.QualifiedName].StructSetBody(fields, false);
-            }
+                _classTypes[cls.QualifiedName].StructSetBody(ClassLayout(cls, model), false);
 
             foreach (var cls in concreteClasses)
                 _runtimeTypeInfos[cls.QualifiedName] = AddRuntimeTypeInfoGlobal(module, cls.QualifiedName,

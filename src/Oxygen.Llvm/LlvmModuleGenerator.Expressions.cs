@@ -217,17 +217,11 @@ public sealed partial class LlvmModuleGenerator
         {
             var vtable = builder.BuildStructGEP2(_classTypes[className], instance, 0, "object.vtable");
             builder.BuildStore(GetTypeName(builder, className), vtable);
+            // Every virtual slot of the class is stored, so none is left empty.
             var virtualMethods = GetVirtualMethods(cls, model);
-            for (var slot = 0; slot < _virtualSlotCount; slot++)
-            {
-                var slotAddress = builder.BuildStructGEP2(_classTypes[className], instance, (uint)slot + 1,
-                    "object.vtable.slot");
-                builder.BuildStore(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
-                    slotAddress);
-            }
             for (var slot = 0; slot < virtualMethods.Count; slot++)
             {
-                var slotAddress = builder.BuildStructGEP2(_classTypes[className], instance, (uint)slot + 1,
+                var slotAddress = builder.BuildStructGEP2(_classTypes[className], instance, (uint)SlotIndex(cls, slot, model),
                     "object.vtable.slot");
                 var target = llvmFunctions[virtualMethods[slot]];
                 builder.BuildStore(builder.BuildBitCast(target,
@@ -458,7 +452,7 @@ public sealed partial class LlvmModuleGenerator
                     var slot = GetVirtualMethods(cls, model).Select((candidate, index) => (candidate, index))
                         .First(pair => pair.candidate == getter).index;
                     var slotAddress = builder.BuildStructGEP2(_classTypes[cls.QualifiedName], receiver,
-                        (uint)slot + 1, "property.vtable.slot");
+                        (uint)SlotIndex(cls, slot, model), "property.vtable.slot");
                     targetFunction = builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), slotAddress,
                         "property.vtable.target");
                 }
