@@ -42,6 +42,26 @@ public sealed class SemanticTests
         ]);
 
     // The standard library's Exception, as the module a program imports. A program that throws derives from it.
+    // A catch frees the exception it handles, so a thrown exception must be a heap object, as a stack object would be freed on its own
+    // function's return.
+    [Fact]
+    public void AStackObjectCannotBeThrown()
+    {
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeWithStdException(
+            "class Failure : Exception { } i32 main() { throw Failure(); }"));
+
+        Assert.Contains("A stack object cannot be thrown", exception.Message);
+    }
+
+    [Fact]
+    public void AHeapObjectCanBeThrown()
+    {
+        var model = AnalyzeWithStdException(
+            "class Failure : Exception { } i32 main() { throw new Failure(); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
     private SemanticModel AnalyzeWithStdException(string source) =>
         new SemanticAnalyzer(Log.Logger).Analyze([
             Parse("module std.exception; public class Exception { }"),

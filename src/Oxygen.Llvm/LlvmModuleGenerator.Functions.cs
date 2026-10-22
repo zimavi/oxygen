@@ -468,6 +468,15 @@ public sealed partial class LlvmModuleGenerator
         scope ??= _ownedScopes.Peek();
         foreach (var owned in scope.AsEnumerable().Reverse())
         {
+            if (owned.Catch is not null)
+            {
+                // A caught exception the catch frees: the runtime lets go of it, then its destructor runs and its memory is freed.
+                var caught = values[owned.Name];
+                builder.BuildCall2(_releaseCaughtException.FunctionType, _releaseCaughtException, [caught],
+                    (ReadOnlySpan<char>)string.Empty);
+                EmitDestroyAndFree(builder, caught);
+                continue;
+            }
             // The scope has ended on this path, so an exception from here on must not destroy the local again.
             if (owned.Declaration is { } endingDeclaration)
                 ClearUnwindFlag(builder, endingDeclaration);

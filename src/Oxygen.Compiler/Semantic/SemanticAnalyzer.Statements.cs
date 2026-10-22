@@ -397,6 +397,10 @@ public sealed partial class SemanticAnalyzer
                     if (!IsExceptionType(thrownType))
                         throw Error($"Only exception class values can be thrown, got {thrownType}",
                             throwStatement.Value!.Location);
+                    // The exception outlives the function that throws it, and a catch frees it, so it must be a heap object.
+                    if (IsStackObject(throwStatement.Value!, scope))
+                        throw Error("A stack object cannot be thrown, because it is destroyed when its function returns. " +
+                            "Create it with new to throw it", throwStatement.Value!.Location);
                     _reachable = false;
                     return true;
                 }
@@ -452,6 +456,9 @@ public sealed partial class SemanticAnalyzer
                             _catchDepth--;
                         }
                         allCatchesReturn &= catchReturns;
+                        // The catch frees its exception when its body completes, unless the body keeps the exception in another place.
+                        if (catchClause.BindingName is not null && IsOwnedClass(catchType!) && !CatchBindingEscapes(catchClause))
+                            _freedCatchBindings.Add(catchClause);
                         afterCatches = JoinFlows(afterCatches, SnapshotFlow());
                     }
 

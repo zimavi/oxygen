@@ -814,7 +814,8 @@ public sealed partial class SemanticAnalyzer
             // A dereference is unchecked only when every analysis of it proved its operand non-null.
             new HashSet<Expression>(
                 _provenNonNullDereferences.Where(node => !_unprovenDereferences.Contains(node)),
-                ReferenceEqualityComparer.Instance));
+                ReferenceEqualityComparer.Instance),
+            new HashSet<CatchClause>(_freedCatchBindings, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

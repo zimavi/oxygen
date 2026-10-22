@@ -35,7 +35,9 @@ public sealed partial class LlvmModuleGenerator
     private readonly HashSet<FunctionSymbol> _accessorSymbols = [];
     private readonly Dictionary<(string ClassName, string InterfaceName), LLVMValueRef> _interfaceTables = new();
     private readonly Dictionary<string, IReadOnlyList<FunctionSymbol>> _interfaceSlots = new(StringComparer.Ordinal);
-    private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type);
+    // An owned local of a scope. A catch binding that the catch frees has no declaration: its clause is kept instead, and its scope end releases
+    // the exception (EmitCatchBody).
+    private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type, CatchClause? Catch = null);
     private Stack<List<OwnedLocal>> _ownedScopes = new();
     private LLVMValueRef _oxygenAlloc;
     private LLVMValueRef _oxygenFree;
@@ -54,6 +56,8 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef _traceDepth;
     private LLVMValueRef _traceRestore;
     private LLVMValueRef _releaseExceptionTrace;
+    private LLVMValueRef _releaseCaughtException;
+    private LLVMValueRef _adoptFailureText;
     private LLVMValueRef _exceptionPointer;
     private LLVMModuleRef _module;
     private LLVMValueRef _personality;
@@ -250,6 +254,12 @@ public sealed partial class LlvmModuleGenerator
             _releaseExceptionTrace = DeclareNativeFunction(module, "__oxygen_runtime_release_exception_trace",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
+            _releaseCaughtException = DeclareNativeFunction(module, "__oxygen_runtime_release_caught_exception",
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
+            _adoptFailureText = DeclareNativeFunction(module, "__oxygen_runtime_adopt_failure_text",
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
             foreach (var cls in concreteClasses)
             {
                 foreach (var ctor in cls.Constructors)

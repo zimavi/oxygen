@@ -48,6 +48,42 @@ public sealed partial class LlvmModuleGenerator
     private void EmitReleaseCaughtTrace(LLVMBuilderRef builder, LLVMValueRef caught) =>
         builder.BuildCall2(_releaseExceptionTrace.FunctionType, _releaseExceptionTrace, [caught], (ReadOnlySpan<char>)string.Empty);
 
+    // The body of a catch clause, which handles `caught`. A binding that the analysis frees (SemanticModel.FreedCatchBindings) is an owned
+    // local of the body, so every exit of the body releases it: a return, break or continue, or the end of the body. Otherwise the body
+    // releases only the trace of the exception, when it ends normally. Returns whether the body returns on every path.
+    private bool EmitCatchBody(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        LLVMValueRef function,
+        CatchClause clause,
+        LLVMValueRef caught,
+        Dictionary<string, LLVMValueRef> values,
+        Dictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions,
+        SemanticType emittedReturnType,
+        Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)> loops)
+    {
+        var freed = clause.BindingName is not null && clause.ExceptionType is not null && model.FreedCatchBindings.Contains(clause);
+        if (freed)
+            _ownedScopes.Push([new OwnedLocal(null, clause.BindingName!, FromTypeSyntax(clause.ExceptionType!, model), clause)]);
+        _caughtObjects.Push(caught);
+        var returned = EmitStatement(context, builder, function, clause.Body, values, storage, model, llvmFunctions,
+            emittedReturnType, loops);
+        _caughtObjects.Pop();
+        if (freed)
+        {
+            if (!returned)
+                CleanupOwnedScope(builder, values, storage, model);
+            _ownedScopes.Pop();
+        }
+        else if (!returned)
+        {
+            EmitReleaseCaughtTrace(builder, caught);
+        }
+        return returned;
+    }
+
     private LLVMValueRef BuildEntryAlloca(LLVMBuilderRef builder, LLVMTypeRef type, string name)
     {
         var entry = builder.InsertBlock.Parent.EntryBasicBlock;

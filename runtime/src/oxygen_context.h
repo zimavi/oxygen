@@ -19,6 +19,14 @@ typedef struct oxygen_exception_trace_record
     struct oxygen_exception_trace_record *next;
 } oxygen_exception_trace_record;
 
+/* The text of a runtime failure, which its exception object holds. The text was allocated for the object, so releasing the object frees it. */
+typedef struct oxygen_failure_text_record
+{
+    void *object;
+    void *text;
+    struct oxygen_failure_text_record *next;
+} oxygen_failure_text_record;
+
 typedef struct oxygen_context
 {
     /* The trace stack of the thread: each function pushes a frame when it starts and pops it when it returns. */
@@ -32,6 +40,8 @@ typedef struct oxygen_context
     void *current_seh_object;
     uint32_t current_seh_flags;
     void *in_flight_seh_object;
+    /* The texts of the runtime failures whose exception objects are alive. */
+    oxygen_failure_text_record *failure_texts;
 } oxygen_context;
 
 /* The context of the calling thread. It is created on first use. */

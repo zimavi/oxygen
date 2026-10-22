@@ -149,6 +149,22 @@ public sealed partial class SemanticAnalyzer
                 _autoFreedLocals.Add(declaration);
     }
 
+    // The catch clauses whose exception object the catch frees when its body completes. See CatchBindingEscapes.
+    private readonly HashSet<CatchClause> _freedCatchBindings = new(ReferenceEqualityComparer.Instance);
+
+    // Whether a catch body keeps its exception object in another place, which makes the catch leave the object to that place. A body that
+    // only reads a member of the exception, or calls a method on it, does not keep it. Any other use of the binding keeps it: assigning it,
+    // returning it, passing it, or storing it in a field.
+    private static bool CatchBindingEscapes(CatchClause clause)
+    {
+        var expressions = EnumerateExpressions(clause.Body).ToList();
+        var allowedReceivers = expressions.OfType<MemberAccessExpression>().Select(member => member.Target)
+            .Concat(expressions.OfType<CallExpression>().Where(call => call.Receiver is not null).Select(call => call.Receiver!))
+            .ToHashSet(ReferenceEqualityComparer.Instance);
+        return expressions.OfType<IdentifierExpression>()
+            .Any(identifier => identifier.Name == clause.BindingName && !allowedReceivers.Contains(identifier));
+    }
+
     // Only manual functions warn: an automatic function frees its objects itself, so a missing `delete` is not a leak there.
     private void WarnAboutUnfreedAllocations(FunctionSymbol function)
     {

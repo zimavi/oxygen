@@ -131,6 +131,53 @@ void __oxygen_runtime_release_exception_trace(void *object)
     oxygen_release_trace(object);
 }
 
+/* A runtime failure's text is allocated for its exception object, which holds it. The object's release frees the text. */
+void __oxygen_runtime_adopt_failure_text(void *object, void *text)
+{
+    oxygen_context *context = oxygen_context_current();
+    oxygen_failure_text_record *record = malloc(sizeof(*record));
+    if (record == NULL)
+        oxygen_runtime_abort();
+    record->object = object;
+    record->text = text;
+    record->next = context->failure_texts;
+    context->failure_texts = record;
+}
+
+/* Releases a caught exception once the catch that handled it has finished with it. The backend runs the object's destructor and frees it
+ * after this call. The runtime lets go of the object first: the references to it that the native exception handling keeps, its trace, and
+ * the text of a runtime failure. */
+void __oxygen_runtime_release_caught_exception(void *object)
+{
+    oxygen_context *context = oxygen_context_current();
+    if (context->in_flight_seh_object == object)
+        context->in_flight_seh_object = NULL;
+    if (context->current_seh_object == object)
+    {
+        context->current_seh_object = NULL;
+        context->current_seh_flags = 0;
+    }
+    if (context->current_posix_object == object)
+        context->current_posix_object = NULL;
+    oxygen_release_trace(object);
+
+    oxygen_failure_text_record **link = &context->failure_texts;
+    while (*link != NULL)
+    {
+        if ((*link)->object == object)
+        {
+            oxygen_failure_text_record *record = *link;
+            *link = record->next;
+            free(record->text);
+            free(record);
+        }
+        else
+        {
+            link = &(*link)->next;
+        }
+    }
+}
+
 const char *__oxygen_runtime_trace_frame_function_name(void *frame)
 {
     const oxygen_runtime_trace_frame *value =
