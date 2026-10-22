@@ -56,6 +56,38 @@ public sealed class LibraryDependencyTests : IDisposable
     }
 
     // A static field of a library's class has one storage, which the library owns: the program's call changes the value that the program reads.
+    // A generic struct and a struct that it holds are declared by the library, and a program instantiates the generic struct with its own type
+    // arguments and reads its fields.
+    [SkippableFact]
+    public void AProgramUsesAGenericStructOfAnotherLibrary()
+    {
+        const string shapesLibrary = """
+            module mylib;
+
+            public struct Pair {
+                i32 first;
+                i32 second;
+            }
+
+            public struct Box<T> {
+                T item;
+                Pair pair;
+            }
+            """;
+
+        var run = BuildAndRunProgram(
+            """
+            import mylib;
+
+            i32 main() {
+                Box<i32> box = Box { item: 5, pair: Pair { first: 1, second: 2 } };
+                return box.item + box.pair.second;
+            }
+            """, shapesLibrary);
+
+        Assert.Equal(7, run.ExitCode);
+    }
+
     [SkippableFact]
     public void AProgramAndAnotherLibraryShareTheStaticFieldsOfAClass()
     {

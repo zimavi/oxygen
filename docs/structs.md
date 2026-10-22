@@ -66,3 +66,11 @@ layout effect is not emitted yet, so it currently has no effect on generated cod
 
 By-value recursive layouts are rejected. Recursive data structures must use a
 pointer field instead.
+
+## Generic structs
+
+A struct can declare type parameters, as in `struct Box<T> { T item; }`. A field's
+type is the type it has in the use: in `Box<i32>`, `item` is an `i32`. A literal
+names no type arguments, so it takes them from the type it initializes, as in
+`Box<i32> box = Box { item: 5 };`. A literal with no declared type cannot take
+them, so it is an error.

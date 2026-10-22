@@ -165,10 +165,10 @@ public sealed class NativeModuleLoaderTests : IDisposable
 
         Assert.Equal("add", Assert.Single(loaded.Module.Functions).Name);
         Assert.Contains(loaded.Notes, note => note.Contains("declares 1 type(s)"));
-        // The generic struct is not imported, so it is noted, and the unit that it was in is still imported without it.
-        Assert.Contains(loaded.Notes, note => note.Contains("has 1 generic struct(s)"));
+        // The generic struct is imported with the unit that declares it, so no note says that it is left out.
+        Assert.DoesNotContain(loaded.Notes, note => note.Contains("generic struct"));
         Assert.Single(loaded.GenericUnits);
-        Assert.Empty(loaded.GenericUnits[0].Unit.Structs);
+        Assert.Equal(["Box"], loaded.GenericUnits[0].Unit.Structs.Select(structure => structure.Name));
         Assert.Empty(loaded.Warnings);
     }
 
