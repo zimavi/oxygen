@@ -56,13 +56,13 @@ public sealed class InstalledToolchainTests : IClassFixture<InstalledToolchainTe
         var windows = OxygenTarget.WindowsMsvcX64;
         Assert.Equal(Path.Combine(prefix, "lib", "oxygenrt.lib"), toolchain.RuntimePath(windows, shared: true));
         Assert.Equal(Path.Combine(prefix, "lib", "liboxygenrt.a"), toolchain.RuntimePath(windows, shared: false));
-        Assert.Equal(Path.Combine(prefix, "bin", "std.dll"), toolchain.StandardLibraryPath(windows));
-        Assert.Equal(Path.Combine(prefix, "lib", "std.lib"), toolchain.StandardLibraryLinkPath(windows));
+        Assert.Equal(Path.Combine(prefix, "bin", "oxygenstd.dll"), toolchain.StandardLibraryPath(windows));
+        Assert.Equal(Path.Combine(prefix, "lib", "oxygenstd.lib"), toolchain.StandardLibraryLinkPath(windows));
 
         var linux = OxygenTarget.LinuxGnuX64;
         Assert.Equal(Path.Combine(prefix, "lib", "liboxygenrt.so"), toolchain.RuntimePath(linux, shared: true));
-        Assert.Equal(Path.Combine(prefix, "lib", "std.so"), toolchain.StandardLibraryPath(linux));
-        Assert.Equal(Path.Combine(prefix, "lib", "std.so"), toolchain.StandardLibraryLinkPath(linux));
+        Assert.Equal(Path.Combine(prefix, "lib", "liboxygenstd.so"), toolchain.StandardLibraryPath(linux));
+        Assert.Equal(Path.Combine(prefix, "lib", "liboxygenstd.so"), toolchain.StandardLibraryLinkPath(linux));
     }
 
     // The installed compiler gets no OXYGEN_PATH and no --runtime or --stdlib. It links the installation's shared runtime and its std, and
@@ -106,7 +106,7 @@ public sealed class InstalledToolchainTests : IClassFixture<InstalledToolchainTe
         var source = Path.Combine(_directory, "main.oxy");
         File.WriteAllText(source, "i32 main() { return 0; }");
         var foreignTarget = Windows ? "x86_64_unknown_linux_gnu" : "x86_64_pc_windows_msvc";
-        var missingFile = Windows ? Path.Combine(prefix, "lib", "std.so") : Path.Combine(prefix, "bin", "std.dll");
+        var missingFile = Windows ? Path.Combine(prefix, "lib", "liboxygenstd.so") : Path.Combine(prefix, "bin", "oxygenstd.dll");
 
         var run = Run(prefix, ["build", source, "--target", foreignTarget, "-o", Path.Combine(_directory, "main.out")]);
 
@@ -192,7 +192,7 @@ public sealed class InstalledToolchainTests : IClassFixture<InstalledToolchainTe
             foreach (var file in standardLibrarySources)
                 File.Copy(file, Path.Combine(sources, Path.GetFileName(file)));
 
-            var built = Path.Combine(_root, "std");
+            var built = Path.Combine(_root, Windows ? "oxygenstd" : "liboxygenstd");
             var arguments = new List<string> { "build" };
             arguments.AddRange(standardLibrarySources);
             arguments.AddRange(["--library", "--dynamic", "--no-std", "-o", built]);
@@ -200,12 +200,12 @@ public sealed class InstalledToolchainTests : IClassFixture<InstalledToolchainTe
             Assert.True(build.ExitCode == 0, $"Building the standard library failed with exit code {build.ExitCode}:\n{build.Error}");
             if (Windows)
             {
-                File.Move(built + ".dll", Path.Combine(bin, "std.dll"));
-                File.Move(built + ".lib", Path.Combine(lib, "std.lib"));
+                File.Move(built + ".dll", Path.Combine(bin, "oxygenstd.dll"));
+                File.Move(built + ".lib", Path.Combine(lib, "oxygenstd.lib"));
             }
             else
             {
-                File.Move(built + ".so", Path.Combine(lib, "std.so"));
+                File.Move(built + ".so", Path.Combine(lib, "liboxygenstd.so"));
             }
             return prefix;
         }

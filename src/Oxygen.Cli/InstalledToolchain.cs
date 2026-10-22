@@ -4,7 +4,7 @@ namespace Oxygen.Cli;
 
 // An installed Oxygen toolchain, found from the folder of the running compiler. The layout is described in docs/toolchain-layout.md:
 //
-//   <prefix>/bin/oxygenc        the compiler (on Windows also oxygenrt.dll and std.dll, which programs find through PATH)
+//   <prefix>/bin/oxygenc        the compiler (on Windows also oxygenrt.dll and oxygenstd.dll, which programs find through PATH)
 //   <prefix>/lib/               the runtime and the standard library to link
 //   <prefix>/share/oxygen/stdlib/   the standard library sources, for reading only
 //
@@ -33,13 +33,14 @@ internal sealed class InstalledToolchain
     public string RuntimePath(OxygenTarget target, bool shared) =>
         Path.Combine(_prefix, "lib", shared ? BuildCommand.SharedRuntimeFileName(target) : "liboxygenrt.a");
 
-    // The standard library has its metadata in a shared library, which is std.dll in bin on Windows, and std.so in lib elsewhere.
+    // The standard library has its metadata in a shared library, which is oxygenstd.dll in bin on Windows, and liboxygenstd.so in lib
+    // elsewhere. The lib prefix matters on Linux: ldconfig caches only lib*.so names, so the loader finds the library through the cache.
     public string StandardLibraryPath(OxygenTarget target) =>
-        IsWindows(target) ? Path.Combine(_prefix, "bin", "std.dll") : Path.Combine(_prefix, "lib", "std.so");
+        IsWindows(target) ? Path.Combine(_prefix, "bin", "oxygenstd.dll") : Path.Combine(_prefix, "lib", "liboxygenstd.so");
 
-    // The file the linker takes for the standard library: the import library std.lib on Windows, and the shared library elsewhere.
+    // The file the linker takes for the standard library: the import library oxygenstd.lib on Windows, and the shared library elsewhere.
     public string StandardLibraryLinkPath(OxygenTarget target) =>
-        IsWindows(target) ? Path.Combine(_prefix, "lib", "std.lib") : StandardLibraryPath(target);
+        IsWindows(target) ? Path.Combine(_prefix, "lib", "oxygenstd.lib") : StandardLibraryPath(target);
 
     private static bool IsWindows(OxygenTarget target) => target.Triple.Contains("-windows-", StringComparison.Ordinal);
 }

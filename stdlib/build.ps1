@@ -7,7 +7,7 @@ param(
 )
 
 # Builds the shared runtime, then the standard library as one shared library, into build/<triple>/ next to these sources:
-#   std.dll and its import library std.lib on Windows, std.so elsewhere.
+#   oxygenstd.dll and its import library oxygenstd.lib on Windows, liboxygenstd.so elsewhere.
 #
 #   ./build.ps1                          the host target
 #   ./build.ps1 -Target x86_64-pc-windows-msvc
@@ -66,7 +66,7 @@ if ($LASTEXITCODE -ne 0) {
 $compiler = Join-Path $compilerDirectory "oxygenc.exe"
 
 New-Item -ItemType Directory -Force -Path $targetDirectory | Out-Null
-$output = Join-Path $targetDirectory "std"
+$output = Join-Path $targetDirectory "oxygenstd"
 $sources = Get-ChildItem -LiteralPath $PSScriptRoot -Filter "*.oxy" | ForEach-Object FullName
 # --target takes the triple with underscores, as the CLI documents it.
 $cliTarget = $Target.Replace("-", "_")
