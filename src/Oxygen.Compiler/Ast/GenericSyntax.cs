@@ -1,18 +1,18 @@
 namespace Oxygen.Compiler.Ast;
 
-// The generic declarations of a unit: the classes, structs, unions and functions with type parameters. A library carries these in the
-// binary form, since an importing program instantiates them. Each one is extracted on its own, since nothing outside it is generic.
-// The language has no type parameters on methods, so a generic declaration is always top-level.
-// Interfaces are carried whether or not they are generic: they declare signatures only, so they have no body that needs the library's
-// code, and a generic function's constraint may name one. Enums and globals are not carried yet.
+// The declarations of a unit that a library carries in the binary form, for an importing program. These are the generic classes, structs,
+// unions and functions, which the program instantiates, with their bodies; the interfaces, which declare signatures only; and the
+// non-generic classes, without their bodies, which the program declares and whose code is in the library. Each declaration is extracted on
+// its own. The language has no type parameters on methods, so a generic declaration is always top-level.
+// Enums and globals are not carried yet.
 public static class GenericSyntax
 {
-    // The unit with its module header, its imports and its generic declarations and interfaces. Enums and globals are dropped.
+    // The unit with its module header, its imports and the declarations above. Enums and globals are dropped.
     public static CompilationUnit Extract(CompilationUnit unit) => unit with
     {
         Structs = unit.Structs.Where(IsGeneric).ToArray(),
         Unions = unit.Unions.Where(IsGeneric).ToArray(),
-        Classes = unit.Classes.Where(IsGeneric).ToArray(),
+        Classes = unit.Classes.Select(cls => IsGeneric(cls) ? cls : WithoutBodies(cls)).ToArray(),
         Interfaces = unit.Interfaces,
         Functions = unit.Functions.Where(IsGeneric).ToArray(),
         Enums = [],
@@ -27,15 +27,37 @@ public static class GenericSyntax
             generic.Interfaces.Count > 0 || generic.Functions.Count > 0;
     }
 
-    // Whether every declaration of the unit is one that the binary form carries: generic classes, structs, unions and functions, and any
-    // interface. The unit has no enums and no globals. A unit in the binary form of a library must pass this check.
+    // Whether every declaration of the unit is one that the binary form carries: generic structs, unions and functions, generic classes,
+    // non-generic classes without bodies, and any interface. The unit has no enums and no globals. A unit in the binary form of a library
+    // must pass this check.
     public static bool IsGenericOnly(CompilationUnit unit) =>
         unit.Enums.Count == 0 &&
         unit.Globals.Count == 0 &&
         unit.Structs.All(IsGeneric) &&
         unit.Unions.All(IsGeneric) &&
-        unit.Classes.All(IsGeneric) &&
+        unit.Classes.All(cls => IsGeneric(cls) || HasNoBodies(cls)) &&
         unit.Functions.All(IsGeneric);
+
+    // A class's declaration without the bodies of its methods, constructors, destructor and property accessors. Its fields, base and
+    // interfaces are kept, since they are its signature.
+    public static ClassDeclaration WithoutBodies(ClassDeclaration cls) => cls with
+    {
+        Properties = cls.Properties?.Select(property => property with
+        {
+            Accessors = property.Accessors.Select(accessor => accessor with { Body = accessor.Body is null ? null : Empty(accessor.Body) }).ToArray()
+        }).ToArray(),
+        Methods = cls.Methods.Select(method => method with { Body = Empty(method.Body) }).ToArray(),
+        Constructors = cls.Constructors.Select(constructor => constructor with { Body = Empty(constructor.Body) }).ToArray(),
+        Destructor = cls.Destructor is null ? null : cls.Destructor with { Body = Empty(cls.Destructor.Body) }
+    };
+
+    private static bool HasNoBodies(ClassDeclaration cls) =>
+        cls.Methods.All(method => method.Body.Statements.Count == 0) &&
+        cls.Constructors.All(constructor => constructor.Body.Statements.Count == 0) &&
+        (cls.Destructor is null || cls.Destructor.Body.Statements.Count == 0) &&
+        cls.DeclaredProperties.All(property => property.Accessors.All(accessor => accessor.Body is null || accessor.Body.Statements.Count == 0));
+
+    private static BlockStatement Empty(BlockStatement body) => body with { Statements = [] };
 
     private static bool IsGeneric(StructDeclaration declaration) => declaration.DeclaredTypeParameters.Count > 0;
     private static bool IsGeneric(UnionDeclaration declaration) => declaration.DeclaredTypeParameters.Count > 0;

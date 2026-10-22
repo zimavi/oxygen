@@ -22,6 +22,11 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, OxygenNameMangler.MethodOwner> methodOwners) =>
         methodOwners.TryGetValue(symbol, out var owner) ? owner.ModuleName : symbol.ModuleName;
 
+    // Whether a declaration of a native library is defined by that library, so that this object only declares it. An instance of a
+    // generic declaration is not: every object that uses an instance defines its own, which the linker merges.
+    private bool DefinedByLibrary(string owningModule, bool isInstance, SemanticModel model) =>
+        model.ExternalModules.Contains(owningModule) && !isInstance;
+
     // Whether the object owns a type, so that it defines the type's information with external linkage. Only the type's module owns it,
     // and an instance of a generic type is owned by no module, so every object with the instance defines the same copy.
     private static bool OwnsTypeInThisObject(string typeModule, string typeName, string moduleName) =>
@@ -32,9 +37,11 @@ public sealed partial class LlvmModuleGenerator
         cls.ModuleName == moduleName || IsInstantiationName(cls.Name);
 
     // A method of an instantiated class is an instance, and so is a function whose name carries the instantiation suffix.
+    // A function is an instance when it is a generic function specialized with type arguments, or a method of an instantiated class.
     private static bool IsInstance(
         FunctionSymbol symbol,
         IReadOnlyDictionary<FunctionSymbol, OxygenNameMangler.MethodOwner> methodOwners) =>
+        symbol.SpecializationArguments is { Count: > 0 } ||
         IsInstantiationName(symbol.Name) ||
         (methodOwners.TryGetValue(symbol, out var owner) && IsInstantiationName(owner.TypeName));
 

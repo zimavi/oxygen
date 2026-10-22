@@ -277,12 +277,19 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
 
     // On Windows a shared library exports the functions it defines, so that the programs that link it can call them. An instance of a
     // generic declaration is linkonce_odr and stays private to the object, so it is not exported.
+    // Exports the functions and the data of the module with external linkage. Data is exported too, since a program that uses a class of
+    // the library refers to the class's type information, which the library defines.
     private static void ExportDefinitions(LLVMModuleRef module)
     {
         for (var function = module.FirstFunction; function.Handle != IntPtr.Zero; function = function.NextFunction)
         {
             if (!function.IsDeclaration && function.Linkage == LLVMLinkage.LLVMExternalLinkage)
                 function.DLLStorageClass = LLVMDLLStorageClass.LLVMDLLExportStorageClass;
+        }
+        for (var global = module.FirstGlobal; global.Handle != IntPtr.Zero; global = global.NextGlobal)
+        {
+            if (!global.IsDeclaration && global.Linkage == LLVMLinkage.LLVMExternalLinkage)
+                global.DLLStorageClass = LLVMDLLStorageClass.LLVMDLLExportStorageClass;
         }
     }
 

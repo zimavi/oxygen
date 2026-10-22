@@ -164,10 +164,13 @@ public sealed partial class LlvmModuleGenerator
 
             foreach (var cls in concreteClasses)
                 _runtimeTypeInfos[cls.QualifiedName] = AddRuntimeTypeInfoGlobal(module, cls.QualifiedName,
-                    OwnsTypeInThisObject(cls.ModuleName, cls.Name, moduleName));
+                    OwnsTypeInThisObject(cls.ModuleName, cls.Name, moduleName) || DefinedByLibrary(cls.ModuleName, IsInstantiationName(cls.Name), model),
+                    DefinedByLibrary(cls.ModuleName, IsInstantiationName(cls.Name), model));
             foreach (var interfaceSymbol in concreteInterfaces)
                 _runtimeTypeInfos[interfaceSymbol.QualifiedName] = AddRuntimeTypeInfoGlobal(module, interfaceSymbol.QualifiedName,
-                    OwnsTypeInThisObject(interfaceSymbol.ModuleName, interfaceSymbol.Name, moduleName));
+                    OwnsTypeInThisObject(interfaceSymbol.ModuleName, interfaceSymbol.Name, moduleName)
+                    || DefinedByLibrary(interfaceSymbol.ModuleName, IsInstantiationName(interfaceSymbol.Name), model),
+                    DefinedByLibrary(interfaceSymbol.ModuleName, IsInstantiationName(interfaceSymbol.Name), model));
             // The supertype tables refer to the type information above, so they are created after it.
             foreach (var cls in concreteClasses)
                 _runtimeSupertypes[cls.QualifiedName] = AddRuntimeSupertypeTable(module, cls.QualifiedName,
@@ -285,6 +288,8 @@ public sealed partial class LlvmModuleGenerator
             {
                 if (symbol.IsExternal || IsInterfaceContract(symbol, model) || !DefinesInThisObject(symbol, library, moduleName, methodOwners))
                     continue;
+                if (DefinedByLibrary(OwningModuleOf(symbol, methodOwners), IsInstance(symbol, methodOwners), model))
+                    continue;
                 var function = llvmFunctions[symbol];
                 EmitFunction(context, builder, function, symbol, model, llvmFunctions);
                 if (library && IsInstance(symbol, methodOwners))
@@ -293,6 +298,8 @@ public sealed partial class LlvmModuleGenerator
             foreach (var cls in concreteClasses)
             {
                 if (library && !DefinesClassInThisObject(cls, moduleName))
+                    continue;
+                if (DefinedByLibrary(cls.ModuleName, IsInstantiationName(cls.Name), model))
                     continue;
                 foreach (var ctor in cls.Constructors)
                 {
@@ -311,9 +318,10 @@ public sealed partial class LlvmModuleGenerator
             }
 
             // Every type's information is defined here, as a constant, in every object: a library has no startup code of its own.
-            foreach (var cls in concreteClasses)
+            foreach (var cls in concreteClasses.Where(cls => !DefinedByLibrary(cls.ModuleName, IsInstantiationName(cls.Name), model)))
                 DefineRuntimeTypeInfo(module, cls.QualifiedName, RuntimeParentName(cls, model), 1, model);
-            foreach (var interfaceSymbol in concreteInterfaces)
+            foreach (var interfaceSymbol in concreteInterfaces.Where(iface =>
+                         !DefinedByLibrary(iface.ModuleName, IsInstantiationName(iface.Name), model)))
                 DefineRuntimeTypeInfo(module, interfaceSymbol.QualifiedName, null, 2, model);
 
             if (!library)

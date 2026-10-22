@@ -669,12 +669,15 @@ public sealed partial class SemanticAnalyzer
                 : sourceNames[unitIndex];
             _typeScopeModule = moduleName;
             _typeScopeImports = unit.Imports;
+            // The bodies of a class of a native library were checked when the library was built, so they are not analyzed again here.
+            var fromLibrary = libraryModules.Contains(moduleName);
             foreach (var declaration in unit.Classes)
             {
                 var classSymbol = _classesByName[QualifiedTypeName(moduleName, declaration.Name)];
-                AnalyzeAccessorBodies(classSymbol, moduleName, unit.Imports, functionsByName, expressionTypes,
-                    resolvedCalls, diagnostics, SourceNameAt(unitIndex));
-                foreach (var constructor in classSymbol.Constructors)
+                if (!fromLibrary)
+                    AnalyzeAccessorBodies(classSymbol, moduleName, unit.Imports, functionsByName, expressionTypes,
+                        resolvedCalls, diagnostics, SourceNameAt(unitIndex));
+                foreach (var constructor in classSymbol.Constructors.Where(_ => !fromLibrary))
                 {
                     var previousGenericTypes = _genericTypes;
                     var previousConstraints = _typeParameterConstraints;
@@ -717,7 +720,7 @@ public sealed partial class SemanticAnalyzer
                     ? sourceNames[unitIndex]
                     : null);
 
-                if (classSymbol.Destructor is not null)
+                if (classSymbol.Destructor is not null && !fromLibrary)
                 {
                     try
                     {
@@ -796,7 +799,8 @@ public sealed partial class SemanticAnalyzer
             new Dictionary<SyntaxNode, int[]>(_argumentOrders, ReferenceEqualityComparer.Instance),
             new Dictionary<TypeSyntax, SemanticType>(_resolvedTypeSyntax, ReferenceEqualityComparer.Instance),
             new Dictionary<Expression, FunctionSymbol>(_staticPropertyGetters, ReferenceEqualityComparer.Instance),
-            new Dictionary<Expression, FunctionSymbol>(_staticPropertySetters, ReferenceEqualityComparer.Instance));
+            new Dictionary<Expression, FunctionSymbol>(_staticPropertySetters, ReferenceEqualityComparer.Instance),
+            libraryModules);
     }
 
     public SemanticResult AnalyzeWithDiagnostics(
