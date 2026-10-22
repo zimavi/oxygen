@@ -274,6 +274,11 @@ public sealed record TypeSyntax(
     public bool IsPointer => Pointee is not null;
     public bool IsArray => ArrayLength is not null;
     public IReadOnlyList<TypeSyntax> DeclaredTypeArguments => TypeArguments ?? [];
+
+    // A function pointer type, `fn <return> (<types>)`. Its parameters are types only.
+    public bool IsFunction => FunctionReturn is not null;
+    public TypeSyntax? FunctionReturn { get; init; }
+    public IReadOnlyList<TypeSyntax> FunctionParameters { get; init; } = [];
 }
 
 public abstract record Statement(SourceLocation Location) : SyntaxNode(Location);
@@ -496,3 +501,25 @@ public sealed record SwitchStatement(
     Expression Value,
     IReadOnlyList<SwitchCase> Cases,
     SourceLocation Location) : Statement(Location);
+
+// A lambda without captures, `fn <return> (<type> <name>, ...) { <body> }`. Its body cannot name a local of the function it is written in.
+// Its type is the function pointer type of its signature.
+public sealed record LambdaExpression(
+    TypeSyntax ReturnType,
+    IReadOnlyList<ParameterDeclaration> Parameters,
+    BlockStatement Body,
+    SourceLocation Location) : Expression(Location);
+
+// A call of a function pointer that is not a name: an element of an array, the result of a call, or any other expression of a function
+// pointer type. A call through a name is a CallExpression, which the analysis resolves to a function or a function pointer.
+public sealed record IndirectCallExpression(
+    Expression Callee,
+    IReadOnlyList<Expression> Arguments,
+    SourceLocation Location) : Expression(Location);
+
+// The address of a generic function with explicit type arguments, `&name<i32>`. The `&name` form of a function that is not generic is a
+// UnaryExpression of its name, so this node is only for the explicit type arguments.
+public sealed record FunctionAddressExpression(
+    string Name,
+    IReadOnlyList<TypeSyntax> TypeArguments,
+    SourceLocation Location) : Expression(Location);

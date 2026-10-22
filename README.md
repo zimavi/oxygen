@@ -72,7 +72,7 @@ pwsh -File .\runtime\build.ps1 -Clean
 
 `stdlib/build.ps1` (Windows) and `stdlib/build.sh` (Linux) build the shared runtime, then the
 standard library as one shared library, into `stdlib/build/<triple>/`. The Windows build gives
-`std.dll` and its import library `std.lib`; the Linux build gives `std.so`. The compiler is
+`oxygenstd.dll` and its import library `oxygenstd.lib`; the Linux build gives `liboxygenstd.so`. The compiler is
 published into the same folder, since the LLVM library is copied only by a publish. The scripts
 take a target and `clean`, like `runtime/build.ps1` and `build.sh`.
 
@@ -123,7 +123,7 @@ individually.
 
 The `docs/` directory contains language notes for arrays, classes, control flow,
 diagnostics, enums, exceptions, iterators, memory, modules, pointers, strings,
-structs, unions, native-module metadata, and C interop annotations.
+structs, unions, native-module metadata, C interop annotations, and the installed toolchain layout.
 
 Additional runtime details are documented in `runtime/README.md`.
 

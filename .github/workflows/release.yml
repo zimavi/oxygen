@@ -1,0 +1,90 @@
+name: Release
+
+# A release is made when VERSION changes on master, and it can be made again by hand. The release is named v<VERSION>, and it is created
+# with its tag at the commit that is built, only after every archive has built. A version that already has a release is not built again,
+# so a changed VERSION that was released before, or a run that repeats, does nothing.
+
+on:
+  push:
+    branches: [master]
+    paths: [VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Releases run one at a time, so two of them cannot plan the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.plan.outputs.sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Decide whether to release
+        id: plan
+        run: |
+          if [ "$GITHUB_REF_NAME" != "master" ]; then
+            echo "Releases are made from master, not from $GITHUB_REF_NAME." >&2
+            exit 1
+          fi
+          version=$(tr -d '[:space:]' < VERSION)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "The release v$version already exists, so nothing is built."
+            exit 0
+          fi
+          # A tag without a release is left by a run that failed after tagging. The tag's commit is built, so the release matches it.
+          sha="$GITHUB_SHA"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            sha=$(git rev-list -n 1 "v$version")
+            echo "The tag v$version exists at $sha, so that commit is built."
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    uses: ./.github/workflows/build-archives.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      archive_version: ${{ needs.plan.outputs.version }}
+
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: archives
+          merge-multiple: true
+
+      - name: Write SHA256SUMS and create the release
+        # gh creates the tag at the commit it is given, so the tag and the release name the same commit.
+        working-directory: archives
+        run: |
+          sha256sum oxygen-*.zip oxygen-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "v$VERSION" --target "$SHA" --title "Oxygen $VERSION" --generate-notes \
+            oxygen-*.zip oxygen-*.tar.gz SHA256SUMS

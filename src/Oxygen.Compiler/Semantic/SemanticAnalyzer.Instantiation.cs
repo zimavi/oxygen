@@ -435,6 +435,19 @@ public sealed partial class SemanticAnalyzer
                 Fields = item.Fields.Select(field => field with { Value = Expression(field.Value) }).ToArray()
             },
             UnionConstructionExpression item => item with { Arguments = item.Arguments.Select(Expression).ToArray() },
+            // A lambda and a call through a function pointer are copied with their own bodies, so each instance is analysed from its own nodes.
+            LambdaExpression item => item with
+            {
+                ReturnType = Type(item.ReturnType),
+                Parameters = item.Parameters.Select(Parameter).ToArray(),
+                Body = Block(item.Body)
+            },
+            IndirectCallExpression item => item with
+            {
+                Callee = Expression(item.Callee),
+                Arguments = item.Arguments.Select(Expression).ToArray()
+            },
+            FunctionAddressExpression item => item with { TypeArguments = item.TypeArguments.Select(Type).ToArray() },
             _ => source with { }
         };
 

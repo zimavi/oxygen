@@ -282,7 +282,7 @@ public sealed class LibraryBuildTests : IDisposable
         var tokens = new Tokenizer(Log.Logger);
         var units = new[] { new Parser(tokens.Tokenize(dependency), Log.Logger).Parse(), new Parser(tokens.Tokenize(source), Log.Logger).Parse() };
         var result = new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics(units, null, null, requireMain: false);
-        Assert.Empty(result.Diagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
         return result.Model!;
     }
 

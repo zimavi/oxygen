@@ -40,6 +40,9 @@ public sealed partial class SemanticAnalyzer
                 ? SemanticType.PointerTo(ResolveType(syntax.Pointee!))
                 : SemanticType.String;
 
+        if (syntax.IsFunction)
+            return ResolveFunctionPointerType(syntax);
+
         if (syntax.NamedType is not null)
         {
             if (_genericTypes.TryGetValue(syntax.NamedType, out var generic))
@@ -100,6 +103,16 @@ public sealed partial class SemanticAnalyzer
 
         var type = SemanticType.FromPrimitive(syntax.Primitive.Value);
         return syntax.IsPointer ? SemanticType.PointerTo(type) : type;
+    }
+
+    // A function pointer type, `fn <return> (<types>)`. Its return type may be void; a parameter may not, since no value of that type exists.
+    private SemanticType ResolveFunctionPointerType(TypeSyntax syntax)
+    {
+        var returnType = ResolveType(syntax.FunctionReturn!);
+        var parameterTypes = syntax.FunctionParameters
+            .Select(parameter => ResolveValueType(parameter, "A function pointer parameter", parameter.Location))
+            .ToArray();
+        return SemanticType.FunctionPointer(returnType, parameterTypes);
     }
 
     private IReadOnlyList<SemanticType>? ResolveTypeArguments(TypeSyntax syntax) =>

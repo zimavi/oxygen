@@ -12,7 +12,8 @@ internal sealed record LoadedNativeModule(
     ExternalModuleDeclaration Module,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Notes,
-    IReadOnlyList<LoadedGenericUnit> GenericUnits);
+    IReadOnlyList<LoadedGenericUnit> GenericUnits,
+    string SourcePath);
 
 // The generic unions and functions of a native module, as units the program analyzes, and the name of the source they came from.
 internal sealed record LoadedGenericUnit(CompilationUnit Unit, string SourceName);
@@ -25,8 +26,8 @@ internal static class NativeModuleLoader
     // belong to a different platform.
     public static IReadOnlyList<LoadedNativeModule> Load(FileInfo file, OxygenTarget target)
     {
-        var modules = new List<LoadedNativeModule>();
-        foreach (var metadata in ReadMetadata(file))
+        var documents = ReadMetadata(file);
+        foreach (var metadata in documents)
         {
             if (metadata.TargetTriple != target.Triple)
                 throw new InvalidDataException(
@@ -36,9 +37,8 @@ internal static class NativeModuleLoader
                 throw new InvalidDataException(
                     $"The native module '{file.FullName}' was built with object layout {metadata.ObjectLayoutVersion}, but this compiler " +
                     $"lays out objects as layout {NativeModuleMetadata.CurrentObjectLayoutVersion}. Rebuild the library with this compiler.");
-            modules.Add(Decode(file, metadata));
         }
-        return modules;
+        return documents.Select(metadata => Decode(file, metadata)).ToList();
     }
 
     // The metadata documents of a library: one per object with the .oxmeta section, then the copy that older builds appended, then
@@ -76,13 +76,16 @@ internal static class NativeModuleLoader
 
     private static LoadedNativeModule Decode(FileInfo file, NativeModuleMetadata metadata)
     {
+        // A function can use the classes, structs and interfaces that its own module declares, since the module's generic units give them.
+        var genericUnits = metadata.Generics.Select(DecodeGenericUnit).ToList();
+        var declared = DeclaredNamedTypes(genericUnits.Select(unit => unit.Unit));
         var functions = new List<ExternalFunctionDeclaration>();
         var warnings = new List<string>();
         foreach (var function in metadata.Functions)
         {
             try
             {
-                functions.Add(DecodeFunction(function));
+                functions.Add(DecodeFunction(function, declared));
             }
             catch (UnsupportedNativeTypeException exception)
             {
@@ -96,20 +99,40 @@ internal static class NativeModuleLoader
 
         // The structs, the classes (generic ones with their bodies, others as declarations), the generic unions and functions, and the
         // interfaces are all imported.
-        var genericUnits = new List<LoadedGenericUnit>();
-        foreach (var generic in metadata.Generics)
-        {
-            var decoded = SyntaxTreeCodec.Read(generic.Syntax);
-            genericUnits.Add(new LoadedGenericUnit(decoded.Unit, decoded.SourceName));
-        }
-        return new LoadedNativeModule(new ExternalModuleDeclaration(metadata.ModuleName, functions), warnings, notes, genericUnits);
+        return new LoadedNativeModule(new ExternalModuleDeclaration(metadata.ModuleName, functions), warnings, notes, genericUnits, file.FullName);
     }
 
-    private static ExternalFunctionDeclaration DecodeFunction(NativeFunctionMetadata function) =>
+    private static LoadedGenericUnit DecodeGenericUnit(NativeGenericMetadata generic)
+    {
+        var decoded = SyntaxTreeCodec.Read(generic.Syntax);
+        return new LoadedGenericUnit(decoded.Unit, decoded.SourceName);
+    }
+
+    // The named types that the generic units declare without bodies: the non-generic classes, structs and interfaces, keyed by their
+    // qualified name, which is how the mangled encodings name them. Enums and unions are not declared in the units, so they stay unsupported.
+    private static IReadOnlyDictionary<string, SemanticType> DeclaredNamedTypes(IEnumerable<CompilationUnit> units)
+    {
+        var declared = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
+        foreach (var unit in units)
+        {
+            var module = unit.ModuleName ?? "program";
+            foreach (var cls in unit.Classes.Where(cls => cls.TypeParameters is null or { Count: 0 }))
+                declared.TryAdd($"{module}.{cls.Name}", SemanticType.Class($"{module}.{cls.Name}"));
+            foreach (var structure in unit.Structs.Where(structure => structure.TypeParameters is null or { Count: 0 }))
+                declared.TryAdd($"{module}.{structure.Name}", SemanticType.Struct($"{module}.{structure.Name}"));
+            foreach (var iface in unit.Interfaces.Where(iface => iface.TypeParameters is null or { Count: 0 }))
+                declared.TryAdd($"{module}.{iface.Name}", SemanticType.Interface($"{module}.{iface.Name}"));
+        }
+        return declared;
+    }
+
+    private static ExternalFunctionDeclaration DecodeFunction(
+        NativeFunctionMetadata function,
+        IReadOnlyDictionary<string, SemanticType> declared) =>
         new(
             function.SourceName,
-            DecodeType(function.ReturnType),
-            function.ParameterTypes.Select(DecodeType).ToArray(),
+            DecodeType(function.ReturnType, declared),
+            function.ParameterTypes.Select(parameter => DecodeType(parameter, declared)).ToArray(),
             function.NativeName,
             string.Equals(function.Visibility, "public", StringComparison.OrdinalIgnoreCase)
                 ? Visibility.Public
@@ -120,9 +143,9 @@ internal static class NativeModuleLoader
 
     // Decodes a type encoding of the mangling scheme (docs/mangling.md). The encodings of named types and generic parameters
     // need the declarations of their types, which metadata does not carry, so those are reported as unsupported.
-    internal static SemanticType DecodeType(string encoding)
+    internal static SemanticType DecodeType(string encoding, IReadOnlyDictionary<string, SemanticType>? declared = null)
     {
-        var reader = new TypeReader(encoding);
+        var reader = new TypeReader(encoding, declared ?? new Dictionary<string, SemanticType>());
         var type = reader.ReadType();
         if (!reader.AtEnd)
             throw new InvalidDataException($"Unexpected text after the type encoding '{encoding}'.");
@@ -132,7 +155,7 @@ internal static class NativeModuleLoader
     // Raised for a type that the metadata cannot describe. The function that has it is not imported.
     internal sealed class UnsupportedNativeTypeException(string message) : Exception(message);
 
-    private sealed class TypeReader(string encoding)
+    private sealed class TypeReader(string encoding, IReadOnlyDictionary<string, SemanticType> declared)
     {
         // Each code, longest first where one code begins with another.
         private static readonly (string Code, PrimitiveType Primitive)[] PrimitiveCodes =
@@ -157,6 +180,18 @@ internal static class NativeModuleLoader
             }
             if (TryConsume("str"))
                 return SemanticType.String;
+            // A function pointer: its return type, then its parameter types as a counted list, as a function's signature is written.
+            if (TryConsume("F"))
+            {
+                var returnType = ReadType();
+                Expect("_p");
+                var count = ReadNumber();
+                Expect("_");
+                var parameterTypes = new SemanticType[count];
+                for (var index = 0; index < count; index++)
+                    parameterTypes[index] = ReadType();
+                return SemanticType.FunctionPointer(returnType, parameterTypes);
+            }
             if (TryConsume("p"))
                 return SemanticType.PointerTo(ReadType());
             if (TryConsume("a"))
@@ -165,12 +200,37 @@ internal static class NativeModuleLoader
                 Expect("_");
                 return SemanticType.ArrayOf(ReadType(), length);
             }
-            if (!AtEnd && encoding[_position] is 'E' or 'U' or 'S' or 'C' or 'I')
+            if (!AtEnd && encoding[_position] is 'C' or 'S' or 'I')
+                return ReadDeclaredType();
+            if (!AtEnd && encoding[_position] is 'E' or 'U')
                 throw new UnsupportedNativeTypeException(
-                    "it uses a class, struct, enum, union or interface type, which native metadata does not describe yet.");
+                    "it uses an enum or union type, which native metadata does not describe yet.");
             if (!AtEnd && encoding[_position] == 'g')
                 throw new UnsupportedNativeTypeException("it uses a generic parameter, so it is not a single function.");
             throw new InvalidDataException($"Unsupported Oxygen metadata type '{encoding}'.");
+        }
+
+        // A class ('C'), struct ('S') or interface ('I') by its qualified name. It decodes only when the library declares it without type
+        // arguments; a generic instance, or a type of another library, is reported as unsupported.
+        private SemanticType ReadDeclaredType()
+        {
+            var tag = encoding[_position++];
+            var length = ReadNumber();
+            if (_position + length > encoding.Length)
+                throw new InvalidDataException($"Malformed Oxygen metadata type '{encoding}'.");
+            var name = encoding.Substring(_position, length);
+            _position += length;
+            var (kind, word) = tag switch
+            {
+                'C' => (SemanticTypeKind.Class, "class"),
+                'S' => (SemanticTypeKind.Struct, "struct"),
+                _ => (SemanticTypeKind.Interface, "interface")
+            };
+            if (TryConsume("_a"))
+                throw new UnsupportedNativeTypeException($"it uses a generic instance of the {word} '{name}', which is not imported yet.");
+            if (declared.TryGetValue(name, out var type) && type.Kind == kind)
+                return type;
+            throw new UnsupportedNativeTypeException($"it uses the {word} '{name}', which the library does not declare.");
         }
 
         private bool TryConsume(string code)

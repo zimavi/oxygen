@@ -572,12 +572,12 @@ public sealed partial class SemanticAnalyzer
                 $"Cannot initialize '{declaration.Name}' with {initializerType}; expected {type}",
                 declaration.Initializer!.Location);
         }
-        if (declaration.Initializer is NullLiteralExpression && type.IsPointer)
+        if (declaration.Initializer is NullLiteralExpression && (type.IsPointer || type.IsFunctionPointer))
             expressionTypes[declaration.Initializer] = type;
 
         // A pointer local starts with the nullness of its initializer, read before the local is declared, so a name in the initializer
         // refers to what it referred to before. A pointer whose address is taken is not tracked.
-        var initialNullness = type.IsPointer && declaration.Initializer is not null && !IsAddressTaken(function, declaration.Name)
+        var initialNullness = (type.IsPointer || type.IsFunctionPointer) && declaration.Initializer is not null && !IsAddressTaken(function, declaration.Name)
             ? PointerNullnessOf(declaration.Initializer, scope)
             : PointerNullness.Unknown;
         var variable = new VariableSymbol(type, declaration.IsConst, declaration, false);
@@ -824,7 +824,7 @@ public sealed partial class SemanticAnalyzer
                     _escapingClassLocals.Add(sourceDeclaration);
             }
             // A plain assignment gives the pointer the nullness of its value. A compound one (`p += n`) moves it to an unknown address.
-            if (variable.Type.IsPointer && !IsAddressTaken(function, assignedIdentifier.Name))
+            if ((variable.Type.IsPointer || variable.Type.IsFunctionPointer) && !IsAddressTaken(function, assignedIdentifier.Name))
                 SetPointerNullness(variable, assignment.Operator == TokenKind.Equals
                     ? PointerNullnessOf(value, scope)
                     : PointerNullness.Unknown);
@@ -868,7 +868,7 @@ public sealed partial class SemanticAnalyzer
                 $"Cannot return {valueType} from function '{function.Name}'; expected {function.ReturnType}",
                 returnStatement.Value.Location);
         }
-        if (returnStatement.Value is NullLiteralExpression && function.ReturnType.IsPointer)
+        if (returnStatement.Value is NullLiteralExpression && (function.ReturnType.IsPointer || function.ReturnType.IsFunctionPointer))
             expressionTypes[returnStatement.Value] = function.ReturnType;
     }
 

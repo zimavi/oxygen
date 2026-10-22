@@ -155,7 +155,7 @@ public sealed partial class LlvmModuleGenerator
             var packed = type.Kind == SemanticTypeKind.Struct && model.Structs[type.StructName!].IsPacked;
             return LLVMValueRef.CreateConstStruct(fields, packed);
         }
-        if (type.IsPointer || type.IsClass || type.IsInterface)
+        if (type.IsPointer || type.IsFunctionPointer || type.IsClass || type.IsInterface)
             return LLVMValueRef.CreateConstNull(ToLlvmType(type, model));
         return LLVMValueRef.CreateConstInt(ToLlvmType(type, model), 0, false);
     }

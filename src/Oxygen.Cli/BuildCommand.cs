@@ -175,11 +175,13 @@ internal static class BuildCommand
             Display(targetDiagnostics, input.Sources, formatter, useColor);
             return ExitCodes.ToolchainFailure;
         }
+        if (!TryResolveStandardLibraries(result, target, input.Sources, formatter, useColor, out var standardLibraries))
+            return ExitCodes.ToolchainFailure;
         // The runtime is checked before the sources are analyzed, when the build links it. A shared library, and a program that uses the
         // standard library's shared object, need the shared runtime: a static archive there would give the process two runtimes.
         if (!(library && !dynamic))
         {
-            var shared = dynamic || (result.GetValue(StandardLibrary) ?? []).Length > 0;
+            var shared = dynamic || standardLibraries.Count > 0;
             var runtimePath = RuntimePathOf(result, target, shared);
             var runtimeKind = RuntimeKindOf(runtimePath, target);
             if (runtimeKind is null)
@@ -203,7 +205,7 @@ internal static class BuildCommand
         }
 
         // The native libraries of --stdlib are read before the sources are resolved, since the modules they provide are not loaded from source.
-        if (!TryLoadNativeModules(result, target, input.Sources, formatter, useColor, out var loadedModules))
+        if (!TryLoadNativeModules(standardLibraries, target, input.Sources, formatter, useColor, out var loadedModules))
             return ExitCodes.SourceError;
         var externalModules = loadedModules.Select(loaded => loaded.Module).ToList();
         var providedModules = externalModules.Select(module => module.ModuleName).ToHashSet(StringComparer.Ordinal);
@@ -218,8 +220,14 @@ internal static class BuildCommand
         }
         var sources = resolved.Sources;
 
-        // The generic declarations of the libraries that the program imports are analyzed with the program, so it can instantiate them.
-        var libraryGenerics = ImportedGenerics(loadedModules.SelectMany(loaded => loaded.GenericUnits), resolved.Units);
+        // A library module that the program does not import is not declared to the analyzer, and its warnings are not shown: the program
+        // cannot use its functions, and its classes are not loaded for them. The generic declarations of the imported modules are analyzed
+        // with the program, so it can instantiate them.
+        var importedModules = ImportedModuleNames(loadedModules.SelectMany(loaded => loaded.GenericUnits), resolved.Units);
+        var importedLoaded = loadedModules.Where(loaded => importedModules.Contains(loaded.Module.ModuleName)).ToList();
+        DisplayNativeWarnings(importedLoaded, input.Sources, formatter, useColor);
+        var importedExternalModules = importedLoaded.Select(loaded => loaded.Module).ToList();
+        var libraryGenerics = importedLoaded.SelectMany(loaded => loaded.GenericUnits).ToList();
         var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
             {
                 DefaultMemoryMode = result.GetValue(ManualMemory) ? MemoryMode.Manual : MemoryMode.Automatic
@@ -227,7 +235,7 @@ internal static class BuildCommand
             .AnalyzeWithDiagnostics(
                 resolved.Units.Concat(libraryGenerics.Select(generic => generic.Unit)).ToList(),
                 sources.Select(source => (string?)source.Name).Concat(libraryGenerics.Select(generic => (string?)generic.SourceName)).ToList(),
-                externalModules,
+                importedExternalModules,
                 requireMain: !library);
         if (semanticResult.Diagnostics.Count > 0)
         {
@@ -237,8 +245,8 @@ internal static class BuildCommand
         }
 
         if (library)
-            return BuildLibraryModules(result, input.Sources, resolved.Units, sources, semanticResult.Model!, target,
-                formatter, useColor);
+            return BuildLibraryModules(result, standardLibraries, input.Sources, resolved.Units, sources, semanticResult.Model!,
+                target, formatter, useColor);
 
         GeneratedLlvmModule generated;
         try
@@ -282,18 +290,24 @@ internal static class BuildCommand
                 return ExitCodes.Success;
             }
 
-            return BuildExecutable(result, generated, target, sources, formatter, useColor);
+            return BuildExecutable(result, standardLibraries, generated, target, sources, formatter, useColor);
         }
     }
 
     // The shared runtime's file: the import library on Windows, and the shared object elsewhere.
-    private static string SharedRuntimeFileName(OxygenTarget target) =>
+    internal static string SharedRuntimeFileName(OxygenTarget target) =>
         target.Triple.Contains("-windows-", StringComparison.Ordinal) ? "oxygenrt.lib" : "liboxygenrt.so";
 
-    // The runtime that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH (the repository root): the static archive,
-    // or the shared runtime.
+    // The toolchain installation that this compiler runs from, or null when it runs from a build folder.
+    private static readonly InstalledToolchain? Installed = InstalledToolchain.Find(AppContext.BaseDirectory);
+
+    // A standard library to read and link: the file with its metadata, and the file the linker takes.
+    private sealed record StandardLibraryFile(FileInfo Metadata, string LinkPath);
+
+    // The runtime of the installation, or else the one that runtime/build.ps1 or build.sh builds for the target, under OXYGEN_PATH (the
+    // repository root): the static archive, or the shared runtime.
     private static string DefaultRuntimePath(OxygenTarget target, bool shared) =>
-        Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? ".", "runtime", "build", target.Triple,
+        Installed?.RuntimePath(target, shared) ?? Path.Combine(Environment.GetEnvironmentVariable("OXYGEN_PATH") ?? ".", "runtime", "build", target.Triple,
             shared ? SharedRuntimeFileName(target) : "liboxygenrt.a");
 
     // The runtime that the build links: --runtime, or the default for the target.
@@ -317,6 +331,7 @@ internal static class BuildCommand
     // built: it is declared, and the program that uses the library provides it.
     private static int BuildLibraryModules(
         System.CommandLine.ParseResult result,
+        IReadOnlyList<StandardLibraryFile> standardLibraries,
         IReadOnlyList<SourceText> roots,
         IReadOnlyList<CompilationUnit> units,
         IReadOnlyList<SourceText> sources,
@@ -338,7 +353,7 @@ internal static class BuildCommand
             foreach (var moduleName in moduleNames)
                 modules.Add(new LlvmModuleGenerator(target).Generate(moduleName, model,
                     GenericsOf(units, sources, moduleName), library: true));
-            return BuildLibrary(result, modules, target, sources, formatter, useColor);
+            return BuildLibrary(result, standardLibraries, modules, target, sources, formatter, useColor);
         }
         catch (LlvmVerificationException exception)
         {
@@ -367,6 +382,7 @@ internal static class BuildCommand
 
     private static int BuildLibrary(
         System.CommandLine.ParseResult result,
+        IReadOnlyList<StandardLibraryFile> standardLibraries,
         IReadOnlyList<GeneratedLlvmModule> modules,
         OxygenTarget target,
         IReadOnlyList<SourceText> sources,
@@ -393,7 +409,7 @@ internal static class BuildCommand
             }
             dependencies.Add(new NativeDependency(runtimePath, NativeDependencyKind.Dynamic));
             // A shared library that uses a standard library's classes or functions links that library too.
-            if (!TryAddStandardLibraryDependencies(result, target, sources, formatter, useColor, dependencies))
+            if (!TryAddStandardLibraryDependencies(standardLibraries, sources, formatter, useColor, dependencies))
                 return ExitCodes.ToolchainFailure;
         }
 
@@ -445,35 +461,72 @@ internal static class BuildCommand
         return ExitCodes.Success;
     }
 
-    // Adds the standard libraries that --stdlib names to the link. A shared library is linked through its import library on Windows. The
-    // import library sits beside the DLL, which is the file that --stdlib names, since the DLL holds the metadata.
+    // Adds the standard libraries to the link. A library whose file for the linker is missing is an error.
     private static bool TryAddStandardLibraryDependencies(
-        System.CommandLine.ParseResult result,
-        OxygenTarget target,
+        IReadOnlyList<StandardLibraryFile> standardLibraries,
         IReadOnlyList<SourceText> sources,
         DiagnosticFormatter formatter,
         bool useColor,
         List<NativeDependency> dependencies)
     {
-        foreach (var standardLibrary in result.GetValue(StandardLibrary) ?? [])
+        foreach (var standardLibrary in standardLibraries)
         {
-            var linked = target.Triple.Contains("-windows-", StringComparison.Ordinal) &&
-                standardLibrary.Extension.Equals(".dll", StringComparison.OrdinalIgnoreCase)
-                    ? Path.ChangeExtension(standardLibrary.FullName, ".lib")
-                    : standardLibrary.FullName;
-            if (!File.Exists(linked))
+            if (!File.Exists(standardLibrary.LinkPath))
             {
                 var libraryDiagnostics = new DiagnosticBag();
                 libraryDiagnostics.Add(
                     DiagnosticPhase.Toolchain,
                     DiagnosticSeverity.Error,
-                    $"No library to link for '{standardLibrary.FullName}': '{linked}' was not found. Build the library with " +
-                    "--dynamic, which writes the import library beside a DLL on Windows.",
+                    $"No library to link for '{standardLibrary.Metadata.FullName}': '{standardLibrary.LinkPath}' was not found. Build the " +
+                    "library with --dynamic, which writes the import library beside a DLL on Windows.",
                     new SourceLocation(1, 1));
                 Display(libraryDiagnostics.Diagnostics, sources, formatter, useColor);
                 return false;
             }
-            dependencies.Add(new NativeDependency(linked, NativeDependencyKind.Dynamic));
+            dependencies.Add(new NativeDependency(standardLibrary.LinkPath, NativeDependencyKind.Dynamic));
+        }
+        return true;
+    }
+
+    // The standard libraries of the build: the installed standard library unless --no-std is given, and the ones --stdlib names. A
+    // library is read for its metadata from one file, and linked through another on Windows (the DLL and its import library). The
+    // installed library is not optional: when the installation lacks it, the build stops and names the missing file.
+    private static bool TryResolveStandardLibraries(
+        System.CommandLine.ParseResult result,
+        OxygenTarget target,
+        IReadOnlyList<SourceText> sources,
+        DiagnosticFormatter formatter,
+        bool useColor,
+        out List<StandardLibraryFile> standardLibraries)
+    {
+        standardLibraries = [];
+        if (Installed is not null && !result.GetValue(NoStd))
+        {
+            var metadata = Installed.StandardLibraryPath(target);
+            var link = Installed.StandardLibraryLinkPath(target);
+            var missing = new[] { metadata, link }.FirstOrDefault(path => !File.Exists(path));
+            if (missing is not null)
+            {
+                var diagnostics = new DiagnosticBag();
+                diagnostics.Add(
+                    DiagnosticPhase.Toolchain,
+                    DiagnosticSeverity.Error,
+                    $"The installed standard library for target '{target.Triple}' was not found at '{missing}'. Reinstall Oxygen, " +
+                    "or pass --no-std to build without the standard library.",
+                    new SourceLocation(1, 1));
+                Display(diagnostics.Diagnostics, sources, formatter, useColor);
+                return false;
+            }
+            standardLibraries.Add(new StandardLibraryFile(new FileInfo(metadata), link));
+        }
+        foreach (var file in result.GetValue(StandardLibrary) ?? [])
+        {
+            // A DLL on Windows is linked through the import library beside it.
+            var link = target.Triple.Contains("-windows-", StringComparison.Ordinal) &&
+                file.Extension.Equals(".dll", StringComparison.OrdinalIgnoreCase)
+                    ? Path.ChangeExtension(file.FullName, ".lib")
+                    : file.FullName;
+            standardLibraries.Add(new StandardLibraryFile(file, link));
         }
         return true;
     }
@@ -481,6 +534,7 @@ internal static class BuildCommand
     // Links the generated module into the native executable with the runtime archive and the given dependencies.
     private static int BuildExecutable(
         System.CommandLine.ParseResult result,
+        IReadOnlyList<StandardLibraryFile> standardLibraries,
         GeneratedLlvmModule generated,
         OxygenTarget target,
         IReadOnlyList<SourceText> sources,
@@ -489,7 +543,7 @@ internal static class BuildCommand
     {
         // A program that uses the standard library's shared object links the shared runtime. Run has checked that --runtime is a runtime
         // that can be linked this way.
-        var shared = (result.GetValue(StandardLibrary) ?? []).Length > 0;
+        var shared = standardLibraries.Count > 0;
         var runtimePath = RuntimePathOf(result, target, shared);
         if (!File.Exists(runtimePath))
         {
@@ -507,7 +561,7 @@ internal static class BuildCommand
         var runtimeKind = RuntimeKindOf(runtimePath, target)
             ?? throw new InvalidOperationException($"The runtime '{runtimePath}' was not checked before linking.");
         var dependencies = new List<NativeDependency> { new(runtimePath, runtimeKind) };
-        if (!TryAddStandardLibraryDependencies(result, target, sources, formatter, useColor, dependencies))
+        if (!TryAddStandardLibraryDependencies(standardLibraries, sources, formatter, useColor, dependencies))
             return ExitCodes.ToolchainFailure;
 
         var keepTemporaryFiles = result.GetValue(KeepTemps);
@@ -611,16 +665,15 @@ internal static class BuildCommand
         return (resolved.Sources, resolved.Units, resolved.Diagnostics);
     }
 
-    // The generic units of the libraries that the program imports: each module the program imports, and each module that one of those
-    // imports in turn. A module that nothing imports is not analyzed, so an unused library cannot stop the build.
-    private static List<LoadedGenericUnit> ImportedGenerics(
+    // The library modules that the program imports: each module the program imports, and each module that one of those imports in turn,
+    // through its generic units. A module that nothing imports is not used, so an unused library cannot stop the build.
+    private static HashSet<string> ImportedModuleNames(
         IEnumerable<LoadedGenericUnit> generics,
         IReadOnlyList<CompilationUnit> programUnits)
     {
         var all = generics.ToList();
         var pending = new Queue<string>(programUnits.SelectMany(unit => unit.Imports).Select(import => import.Name));
         var visited = new HashSet<string>(StringComparer.Ordinal);
-        var included = new List<LoadedGenericUnit>();
         while (pending.Count > 0)
         {
             var module = pending.Dequeue();
@@ -628,18 +681,33 @@ internal static class BuildCommand
                 continue;
             foreach (var generic in all.Where(generic => (generic.Unit.ModuleName ?? "program") == module))
             {
-                included.Add(generic);
                 foreach (var import in generic.Unit.Imports)
                     pending.Enqueue(import.Name);
             }
         }
-        return included;
+        return visited;
+    }
+
+    private static void DisplayNativeWarnings(
+        IReadOnlyList<LoadedNativeModule> loadedModules,
+        IReadOnlyList<SourceText> sources,
+        DiagnosticFormatter formatter,
+        bool useColor)
+    {
+        foreach (var loaded in loadedModules.Where(loaded => loaded.Warnings.Count > 0))
+        {
+            var warningBag = new DiagnosticBag();
+            foreach (var warning in loaded.Warnings)
+                warningBag.Add(DiagnosticPhase.Metadata, DiagnosticSeverity.Warning, warning, new SourceLocation(1, 1),
+                    sourceName: loaded.Module.ModuleName);
+            Display(warningBag.Diagnostics, sources, formatter, useColor);
+        }
     }
 
     // Reads the native libraries of --stdlib. Each library gives its modules, whose functions are then declared for the build without
     // their source. Warnings are displayed, and an unusable library is an error, which gives false.
     private static bool TryLoadNativeModules(
-        System.CommandLine.ParseResult result,
+        IReadOnlyList<StandardLibraryFile> standardLibraries,
         OxygenTarget target,
         IReadOnlyList<SourceText> sources,
         DiagnosticFormatter formatter,
@@ -647,7 +715,7 @@ internal static class BuildCommand
         out List<LoadedNativeModule> loadedModules)
     {
         loadedModules = [];
-        foreach (var modulePath in result.GetValue(StandardLibrary) ?? [])
+        foreach (var modulePath in standardLibraries.Select(library => library.Metadata))
         {
             try
             {
@@ -656,14 +724,6 @@ internal static class BuildCommand
                     loadedModules.Add(loaded);
                     foreach (var note in loaded.Notes)
                         Log.Information("{Note}", note);
-                    if (loaded.Warnings.Count > 0)
-                    {
-                        var warningBag = new DiagnosticBag();
-                        foreach (var warning in loaded.Warnings)
-                            warningBag.Add(DiagnosticPhase.Metadata, DiagnosticSeverity.Warning, warning, new SourceLocation(1, 1),
-                                sourceName: modulePath.FullName);
-                        Display(warningBag.Diagnostics, sources, formatter, useColor);
-                    }
                 }
             }
             catch (Exception exception) when (exception is InvalidDataException or IOException)

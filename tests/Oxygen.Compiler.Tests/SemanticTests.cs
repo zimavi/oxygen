@@ -2430,7 +2430,7 @@ public sealed class SemanticTests
         var exception = Assert.Throws<SemanticException>(() =>
             Analyze("string text = \"hi\"; i32 main() { return 0; }"));
 
-        Assert.Contains("only numeric and bool globals are supported", exception.Message);
+        Assert.Contains("only numeric, bool and function pointer globals are supported", exception.Message);
     }
 
     [Fact]
@@ -2494,6 +2494,18 @@ public sealed class SemanticTests
         var warning = Assert.Single(result.Diagnostics, diagnostic =>
             diagnostic.Message == "Function 'unused' is never called");
         Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
+    }
+
+    // A generic function is used through its instance, so the instance's use is what counts, whether the call names the type arguments or not.
+    [Theory]
+    [InlineData("id<i32>(3)")]
+    [InlineData("id(3)")]
+    public void DoesNotReportAGenericFunctionThatIsCalled(string call)
+    {
+        var result = AnalyzeWithDiagnostics(
+            $"T id<T>(T value) {{ return value; }} i32 main() {{ return {call}; }}");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Message == "Function 'id' is never called");
     }
 
     [Fact]
@@ -4073,6 +4085,191 @@ public sealed class SemanticTests
             "import a; import b; i32 main() { Count c = 1; return 0; }"));
 
         Assert.Contains("ambiguous", exception.Message);
+    }
+
+    // A function pointer holds the address of a function with the same signature, and the call goes through it.
+    [Fact]
+    public void AFunctionPointerLocalIsCalledThroughItsValue()
+    {
+        var model = Analyze(
+            "i32 add(i32 a, i32 b) { return a + b; } i32 main() { fn i32 op(i32, i32) = &add; return op(1, 2); }");
+
+        Assert.NotNull(model.MainFunction);
+        Assert.Single(model.FunctionReferences);
+        Assert.Single(model.IndirectCallees);
+    }
+
+    [Fact]
+    public void AFunctionPointerWithADifferentSignatureIsRejected()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 add(i32 a, i32 b) { return a + b; } i32 main() { fn i32 op(i32) = &add; return 0; }"));
+
+        Assert.Contains("No function 'add' with the signature fn i32 (i32)", exception.Message);
+    }
+
+    // Overloads are chosen by the type of the value. Without such a type, an overloaded name is an error.
+    [Fact]
+    public void AnOverloadedNameNeedsAFunctionPointerTypeToChooseItsAddress()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 pick(i32 a) { return a; } i32 pick(bool b) { return 0; } i32 main() { var op = &pick; return 0; }"));
+
+        Assert.Contains("names 2 functions", exception.Message);
+    }
+
+    [Fact]
+    public void AnOverloadIsChosenByTheFunctionPointerTypeItIsGiven()
+    {
+        var model = Analyze(
+            "i32 pick(i32 a) { return a; } i32 pick(bool b) { return 0; } i32 main() { fn i32 op(i32) = &pick; return op(3); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    // An overloaded name passed as an argument is held back until the parameter it goes to is known. No overload matches here.
+    [Fact]
+    public void AnOverloadedAddressArgumentWithNoMatchingOverloadIsAnError()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 pick(i32 a) { return a; } i32 pick(bool b) { return 0; } i32 apply(fn i32 op(f64), f64 value) { return op(value); } " +
+            "i32 main() { return apply(&pick, 1.0); }"));
+
+        Assert.Contains("'pick'", exception.Message);
+    }
+
+    // The type arguments of the generic call are given, so the parameter's signature names i32 and the overload is chosen by it.
+    [Fact]
+    public void AnOverloadedAddressIsChosenForAGenericFunctionWithItsTypeArguments()
+    {
+        var model = Analyze(
+            "i32 pick(i32 a) { return a; } i32 pick(bool b) { return 0; } T twice<T>(T value, fn T step(T)) { return step(step(value)); } " +
+            "i32 main() { return twice<i32>(5, &pick); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    // `&name<i32>` takes the address of a generic function's instance, whose signature is the function pointer type.
+    [Fact]
+    public void AGenericFunctionAddressIsTakenWithItsTypeArguments()
+    {
+        var model = Analyze("T id<T>(T value) { return value; } i32 main() { fn i32 op(i32) = &id<i32>; return op(3); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
+    public void AGenericFunctionAddressNeedsTypeArgumentsOfTheRightCount()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "T id<T>(T value) { return value; } i32 main() { fn i32 op(i32) = &id<i32, bool>; return op(3); }"));
+
+        Assert.Contains("expects 1 type argument", exception.Message);
+    }
+
+    [Fact]
+    public void ANonGenericFunctionTakesNoTypeArgumentsInAnAddress()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 pick(i32 a) { return a; } i32 main() { fn i32 op(i32) = &pick<i32>; return op(3); }"));
+
+        Assert.Contains("not a generic function", exception.Message);
+    }
+
+    // A lambda has no captures, so its body cannot name a local of the function it is written in.
+    [Fact]
+    public void ALambdaCannotNameALocalOfItsFunction()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 main() { i32 outer = 1; fn i32 (i32 x) { return x + outer; }; return 0; }"));
+
+        Assert.Contains("outer", exception.Message);
+    }
+
+    [Fact]
+    public void ALambdaIsAFunctionPointerThatCanBeCalled()
+    {
+        var model = Analyze("i32 main() { fn i32 inc(i32) = fn i32 (i32 x) { return x + 1; }; return inc(4); }");
+
+        Assert.NotNull(model.MainFunction);
+        Assert.Single(model.LambdaFunctions);
+    }
+
+    [Fact]
+    public void AFunctionPointerParameterReceivesAFunction()
+    {
+        var model = Analyze(
+            "i32 twice(i32 x) { return x * 2; } i32 apply(fn i32 op(i32), i32 value) { return op(value); } " +
+            "i32 main() { return apply(&twice, 3); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
+    public void AFunctionPointerFieldOfAClassIsCalledThroughTheReceiver()
+    {
+        var model = Analyze(
+            "i32 add(i32 a, i32 b) { return a + b; } class Calculator { fn i32 op(i32, i32) = &add; } " +
+            "i32 main() { Calculator calc = new Calculator(); return calc.op(1, 2); }");
+
+        Assert.NotNull(model.MainFunction);
+        Assert.Single(model.IndirectCallees);
+    }
+
+    [Fact]
+    public void AnArrayOfFunctionPointersIsCalledByIndex()
+    {
+        var model = Analyze(
+            "i32 add(i32 a, i32 b) { return a + b; } i32 sub(i32 a, i32 b) { return a - b; } " +
+            "i32 main() { fn i32 ops[2](i32, i32) = { &add, &sub }; return ops[1](5, 3); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
+    public void AFunctionPointerCanBeComparedWithNullAndWithAFunction()
+    {
+        var model = Analyze(
+            "i32 add(i32 a, i32 b) { return a + b; } i32 main() { fn i32 op(i32, i32) = &add; " +
+            "if (op == &add) { return 1; } if (op != null) { return 2; } return 0; }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
+    public void AFunctionPointerRejectsOrderingComparison()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 add(i32 a, i32 b) { return a + b; } i32 main() { fn i32 op(i32, i32) = &add; if (op < &add) { return 1; } return 0; }"));
+
+        Assert.Contains("is not valid for function pointer operands", exception.Message);
+    }
+
+    [Fact]
+    public void AGenericFunctionNeedsItsTypeArgumentsToHaveItsAddressTaken()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "T id<T>(T value) { return value; } i32 main() { fn i32 op(i32) = &id; return 0; }"));
+
+        Assert.Contains("is a generic function", exception.Message);
+    }
+
+    [Fact]
+    public void AFunctionWithDefaultParametersHasNoAddress()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 scale(i32 value, i32 factor = 2) { return value * factor; } i32 main() { fn i32 op(i32) = &scale; return 0; }"));
+
+        Assert.Contains("has default parameters", exception.Message);
+    }
+
+    [Fact]
+    public void AVariableAndAFunctionWithOneNameCannotBeCalled()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 add(i32 a, i32 b) { return a + b; } i32 main() { fn i32 add(i32, i32) = null; return add(1, 2); }"));
+
+        Assert.Contains("both a function and a variable of function pointer type", exception.Message);
     }
 
     private SemanticModel AnalyzeModules(params string[] sources)

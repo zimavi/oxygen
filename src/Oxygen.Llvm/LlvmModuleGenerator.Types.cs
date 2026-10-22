@@ -108,6 +108,8 @@ public sealed partial class LlvmModuleGenerator
         PrimitiveType.F64 => _context.DoubleType,
         PrimitiveType.Void => _context.VoidType,
         _ when type.Kind == SemanticTypeKind.Pointer && type.IsOpaquePointer => LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+        // A function pointer is the address of a function.
+        _ when type.IsFunctionPointer => LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
         _ when type.Kind == SemanticTypeKind.Pointer => LLVMTypeRef.CreatePointer(ToLlvmType(type.Pointee!, model), 0),
         _ when type.Kind == SemanticTypeKind.Class && !IsValueClass(type, model) =>
             ClassPointerType(type.StructName!),
@@ -133,7 +135,7 @@ public sealed partial class LlvmModuleGenerator
             return SemanticType.PointerTo(NormalizeAggregateType(type.Pointee!, model));
         if (type.IsArray)
             return SemanticType.ArrayOf(NormalizeAggregateType(type.ElementType!, model), type.ArrayLength);
-        if (type.TypeArguments is not { Count: > 0 })
+        if (type.TypeArguments is not { Count: > 0 } typeArguments)
         {
             var baseName = type.StructName ?? type.EnumName;
             if (baseName is not null)
@@ -159,7 +161,7 @@ public sealed partial class LlvmModuleGenerator
                 : type with { StructName = directSpecialized, TypeArguments = null };
         var normalized = type with
         {
-            TypeArguments = type.TypeArguments.Select(argument => NormalizeAggregateType(argument, model)).ToArray()
+            TypeArguments = typeArguments.Select(argument => NormalizeAggregateType(argument, model)).ToArray()
         };
         var key = $"{normalized.Kind}:{normalized.StructName ?? normalized.EnumName}<{string.Join(", ", (normalized.TypeArguments ?? []).Select(argument => argument.ToQualifiedString()))}>";
         if (!model.AggregateSpecializations.TryGetValue(key, out var specialized))

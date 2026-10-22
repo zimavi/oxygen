@@ -1,0 +1,117 @@
+name: Nightly
+
+# Every night, the archives of master are built and published as a prerelease named nightly-<yyyymmdd>, with a changelog of the commits since
+# the previous nightly. The night is skipped when no commit has come since the previous one, or when its prerelease already exists. The
+# archives are named oxygen-<VERSION>-nightly.<yyyymmdd>-<platform>, so VERSION is not changed by a nightly.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      date: ${{ steps.plan.outputs.date }}
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.plan.outputs.sha }}
+      previous: ${{ steps.plan.outputs.previous }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Decide whether to build
+        id: plan
+        run: |
+          date=$(date -u +%Y%m%d)
+          version=$(tr -d '[:space:]' < VERSION)
+          # The previous nightly is the reference. The first nightly compares with the last release, and the first ever with the whole history.
+          previous=$(git tag --list 'nightly-*' --sort=-creatordate | head -n 1)
+          if [ -z "$previous" ]; then
+            previous=$(git tag --list 'v*' --sort=-creatordate | head -n 1)
+          fi
+          if [ -n "$previous" ]; then
+            commits=$(git rev-list --count "$previous..HEAD")
+          else
+            commits=$(git rev-list --count HEAD)
+          fi
+          build=false
+          if [ "$commits" -eq 0 ]; then
+            echo "No commits since ${previous:-the start of the history}, so there is no nightly build."
+          elif gh release view "nightly-$date" >/dev/null 2>&1; then
+            echo "The prerelease nightly-$date already exists, so there is no nightly build."
+          else
+            build=true
+            echo "$commits commit(s) since ${previous:-the start of the history}, so nightly-$date is built."
+          fi
+          {
+            echo "build=$build"
+            echo "date=$date"
+            echo "version=$version"
+            echo "sha=$GITHUB_SHA"
+            echo "previous=$previous"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    uses: ./.github/workflows/build-archives.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      archive_version: ${{ needs.plan.outputs.version }}-nightly.${{ needs.plan.outputs.date }}
+
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DATE: ${{ needs.plan.outputs.date }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SHA: ${{ needs.plan.outputs.sha }}
+      PREVIOUS: ${{ needs.plan.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: archives
+          merge-multiple: true
+
+      - name: Write the changelog and SHA256SUMS, and publish the prerelease
+        working-directory: archives
+        run: |
+          {
+            echo "Oxygen $VERSION, built from $SHA on $DATE."
+            echo
+            if [ -n "$PREVIOUS" ]; then
+              echo "Commits since $PREVIOUS:"
+            else
+              echo "Commits in the whole history:"
+            fi
+            echo
+            "$GITHUB_WORKSPACE/scripts/changelog.sh" "$PREVIOUS" "$SHA"
+          } > ../notes.md
+          sha256sum oxygen-*.zip oxygen-*.tar.gz > SHA256SUMS
+          cat ../notes.md
+          gh release create "nightly-$DATE" --prerelease --target "$SHA" --title "Nightly $DATE (Oxygen $VERSION)" \
+            --notes-file ../notes.md oxygen-*.zip oxygen-*.tar.gz SHA256SUMS

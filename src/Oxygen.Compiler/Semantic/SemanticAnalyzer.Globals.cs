@@ -58,8 +58,8 @@ public sealed partial class SemanticAnalyzer
         var type = ResolveType(declaration.Type);
         if (type.IsVoid)
             throw Error($"Global variable '{name}' cannot have type void", declaration.Location, name.Length);
-        if (type.Primitive is null)
-            throw Error($"Global variable '{name}' has type {type}; only numeric and bool globals are supported",
+        if (type.Primitive is null && !type.IsFunctionPointer)
+            throw Error($"Global variable '{name}' has type {type}; only numeric, bool and function pointer globals are supported",
                 declaration.Location, name.Length);
 
         object? value = null;
@@ -70,9 +70,16 @@ public sealed partial class SemanticAnalyzer
                     initializer.Location);
             var actual = AnalyzeExpression(initializer, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
                 expectedType: type);
+            // An address in a global's initializer must be the address of a function: `&name` of a variable is not a constant.
+            if (initializer is UnaryExpression { Operator: TokenKind.Ampersand } && !_functionReferences.ContainsKey(initializer))
+                throw Error($"Global variable '{name}' must be initialized with a literal or an integer constant expression",
+                    initializer.Location);
             if (!CanAssign(type, initializer, actual))
                 throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot initialize '{name}' with {actual}; expected {type}", initializer.Location);
-            value = ConstantValueOf(initializer);
+            value = (initializer is UnaryExpression { Operator: TokenKind.Ampersand } or FunctionAddressExpression)
+                && _functionReferences.TryGetValue(initializer, out var address)
+                ? address
+                : ConstantValueOf(initializer);
         }
         else if (declaration.IsConst)
         {
@@ -110,7 +117,9 @@ public sealed partial class SemanticAnalyzer
 
     // An initializer may be a bool literal, a floating-point literal with an optional sign, or an integer constant
     // expression. Anything else, including a name, is not constant.
-    private static bool IsConstantInitializer(Expression expression) =>
+    private bool IsConstantInitializer(Expression expression) =>
+        expression is UnaryExpression { Operator: TokenKind.Ampersand, Operand: IdentifierExpression } ||
+        expression is FunctionAddressExpression ||
         expression is BooleanLiteralExpression or FloatingPointLiteralExpression
         || expression is UnaryExpression { Operator: TokenKind.Minus or TokenKind.Plus, Operand: FloatingPointLiteralExpression }
         || TryGetConstantInteger(expression, out _);

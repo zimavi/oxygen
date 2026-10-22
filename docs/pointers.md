@@ -54,6 +54,11 @@ A proven dereference has no check. Every other one is checked when the program r
   a compound assignment (`p += n`) makes a pointer unknown.
 - A condition does not narrow a pointer, so `if (p != null) { *p }` keeps its check.
 
+A call through a function pointer follows the same rules: a call of a function
+pointer that is null on every path is a compile error, and any other call is
+checked when the program runs. The pointer types and their calls are described in
+[function pointers](functions.md#function-pointers).
+
 Pointer arithmetic supports `pointer + integer` and `pointer - integer`.
 The integer offset is scaled by the size of the pointee type. Prefix and
 postfix `++` and `--`, and compound `+=` and `-=`, apply the same scaled

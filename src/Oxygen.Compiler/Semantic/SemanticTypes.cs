@@ -13,7 +13,8 @@ public enum SemanticTypeKind
     Array,
     Enum,
     Union,
-    GenericParameter
+    GenericParameter,
+    FunctionPointer
 }
 
 public sealed record SemanticType(
@@ -40,6 +41,9 @@ public sealed record SemanticType(
 
     public static SemanticType PointerTo(SemanticType pointee) => new(SemanticTypeKind.Pointer, null, pointee);
 
+    public static SemanticType FunctionPointer(SemanticType returnType, IReadOnlyList<SemanticType> parameterTypes) =>
+        new(SemanticTypeKind.FunctionPointer, null, returnType) { TypeArguments = parameterTypes };
+
     public static SemanticType Struct(string name, IReadOnlyList<SemanticType>? typeArguments = null) =>
         new(SemanticTypeKind.Struct, null, null, name) { TypeArguments = typeArguments };
     public static SemanticType Class(string name, IReadOnlyList<SemanticType>? typeArguments = null) =>
@@ -56,6 +60,11 @@ public sealed record SemanticType(
     public bool IsVoid => Kind == SemanticTypeKind.Primitive && Primitive == PrimitiveType.Void;
 
     public bool IsPointer => Kind == SemanticTypeKind.Pointer;
+
+    // A function pointer: its return type is Pointee, and its parameter types are TypeArguments.
+    public bool IsFunctionPointer => Kind == SemanticTypeKind.FunctionPointer;
+    public SemanticType FunctionReturnType => Pointee!;
+    public IReadOnlyList<SemanticType> FunctionParameterTypes => TypeArguments ?? [];
 
     public bool IsStruct => Kind == SemanticTypeKind.Struct;
     public bool IsClass => Kind == SemanticTypeKind.Class;
@@ -92,6 +101,8 @@ public sealed record SemanticType(
             SemanticTypeKind.Enum => DisplayName(EnumName ?? "enum", qualified),
             SemanticTypeKind.Union => FormatNamed(EnumName ?? "union", qualified),
             SemanticTypeKind.GenericParameter => GenericParameterName ?? "generic",
+            SemanticTypeKind.FunctionPointer =>
+                $"fn {FunctionReturnType.Format(qualified)} ({string.Join(", ", FunctionParameterTypes.Select(parameter => parameter.Format(qualified)))})",
             _ => Primitive?.ToString().ToLowerInvariant() ?? "unknown"
         };
 

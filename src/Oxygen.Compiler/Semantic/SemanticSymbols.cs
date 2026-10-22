@@ -236,9 +236,15 @@ public sealed class SemanticModel
         IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertySetters = null,
         IReadOnlySet<string>? externalModules = null,
         IReadOnlySet<Expression>? nonNullDereferences = null,
-        IReadOnlySet<CatchClause>? freedCatchBindings = null)
+        IReadOnlySet<CatchClause>? freedCatchBindings = null,
+        IReadOnlyDictionary<Expression, Expression>? indirectCallees = null,
+        IReadOnlyDictionary<Expression, FunctionSymbol>? functionReferences = null,
+        IReadOnlyDictionary<LambdaExpression, FunctionSymbol>? lambdaFunctions = null)
     {
         FreedCatchBindings = freedCatchBindings ?? new HashSet<CatchClause>(ReferenceEqualityComparer.Instance);
+        IndirectCallees = indirectCallees ?? new Dictionary<Expression, Expression>(ReferenceEqualityComparer.Instance);
+        FunctionReferences = functionReferences ?? new Dictionary<Expression, FunctionSymbol>(ReferenceEqualityComparer.Instance);
+        LambdaFunctions = lambdaFunctions ?? new Dictionary<LambdaExpression, FunctionSymbol>(ReferenceEqualityComparer.Instance);
         ExternalModules = externalModules ?? new HashSet<string>(StringComparer.Ordinal);
         NonNullDereferences = nonNullDereferences ?? new HashSet<Expression>(ReferenceEqualityComparer.Instance);
         ArgumentOrders = argumentOrders ?? new Dictionary<SyntaxNode, int[]>();
@@ -288,6 +294,15 @@ public sealed class SemanticModel
 
     // The catch clauses whose exception object the catch frees when the body completes (see SemanticAnalyzer.Memory.cs).
     public IReadOnlySet<CatchClause> FreedCatchBindings { get; }
+
+    // The callee of each call through a function pointer, keyed by the call node (a CallExpression or an IndirectCallExpression).
+    public IReadOnlyDictionary<Expression, Expression> IndirectCallees { get; }
+
+    // The function that each `&name` of a function names, keyed by the unary node.
+    public IReadOnlyDictionary<Expression, FunctionSymbol> FunctionReferences { get; }
+
+    // The function that each lambda is compiled to.
+    public IReadOnlyDictionary<LambdaExpression, FunctionSymbol> LambdaFunctions { get; }
 
     public IReadOnlyDictionary<SyntaxNode, int[]> ArgumentOrders { get; }
 

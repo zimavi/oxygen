@@ -71,7 +71,16 @@ public sealed partial class SemanticAnalyzer
             CastExpression cast => AnalyzeCast(cast, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             SizeOfExpression sizeOf => AnalyzeSizeOf(sizeOf, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             UnionConstructionExpression construction => AnalyzeUnionConstruction(construction, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            // `&name` of a function is its address; `&name` of a variable is the variable's address, which AnalyzeUnary handles.
+            UnaryExpression { Operator: TokenKind.Ampersand, Operand: IdentifierExpression name } reference
+                when IsFunctionName(name, scope, moduleName, imports, functions) =>
+                AnalyzeFunctionReference(reference, name, expectedType, moduleName, imports, functions),
+            FunctionAddressExpression address => AnalyzeFunctionAddress(
+                address, scope, moduleName, imports, functions, expressionTypes, resolvedCalls, expectedType),
             UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            LambdaExpression lambda => AnalyzeLambda(lambda, functions, moduleName, imports, expressionTypes, resolvedCalls),
+            IndirectCallExpression indirect => AnalyzeIndirectCallExpression(
+                indirect, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             BinaryExpression binary => AnalyzeBinary(binary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             ConditionalExpression conditional => AnalyzeConditional(
                 conditional, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
@@ -672,7 +681,7 @@ public sealed partial class SemanticAnalyzer
             throw ErrorWithCode(DiagnosticCode.OperandRequirement,
                 "A value class has no identity, so its values cannot be compared with == or !=; compare their fields", expression.Location);
 
-        if (left.IsPointer || right.IsPointer)
+        if ((left.IsPointer || right.IsPointer) && !left.IsFunctionPointer && !right.IsFunctionPointer)
         {
             if (left.IsPointer && right.IsInteger
                 && expression.Operator is TokenKind.Plus or TokenKind.Minus)
@@ -700,6 +709,27 @@ public sealed partial class SemanticAnalyzer
                 return SemanticType.FromPrimitive(PrimitiveType.Bool);
             }
             throw Error($"Operator '{expression.Operator}' is not valid for pointer operands", expression.Location);
+        }
+
+        // Function pointers compare by address, and only for equality. The null literal is compared with any function pointer, and two
+        // function pointers compare when they have the same signature.
+        if (left.IsFunctionPointer || right.IsFunctionPointer)
+        {
+            if (expression.Operator is not (TokenKind.EqualsEquals or TokenKind.BangEquals))
+                throw Error($"Operator '{expression.Operator}' is not valid for function pointer operands", expression.Location);
+            if (left.IsFunctionPointer && expression.Right is NullLiteralExpression)
+            {
+                expressionTypes[expression.Right] = left;
+                return SemanticType.FromPrimitive(PrimitiveType.Bool);
+            }
+            if (right.IsFunctionPointer && expression.Left is NullLiteralExpression)
+            {
+                expressionTypes[expression.Left] = right;
+                return SemanticType.FromPrimitive(PrimitiveType.Bool);
+            }
+            if (left != right)
+                throw Error($"Cannot compare {left} with {right}: the function pointers have different signatures", expression.Location);
+            return SemanticType.FromPrimitive(PrimitiveType.Bool);
         }
 
         // Strings compare for equality by their bytes; ordering is not defined.

@@ -68,6 +68,22 @@ public T unwrap_or<T, E>(Result<T, E> value, T fallback) {
     }
 }
 
+public void map<T>(Option<T> value, fn void some(T), fn void none()) {
+    switch (value) {
+        case Some(item): { some(item); break; }
+        case None: none();
+    }
+}
+
+
+public void map<T, E>(Result<T, E> value, fn void ok(T), fn void err(E)) {
+    switch (value) {
+        case Ok(item): { ok(item); break; }
+        case Err(error): err(error);
+    }
+}
+
+
 interface Iterator<T> {
 	Option<T> next();
 }

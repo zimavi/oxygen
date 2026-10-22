@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Builds the Oxygen runtime, then the standard library as one shared library, into build/<triple>/ next to these sources:
-# std.so on the Linux target.
+# liboxygenstd.so on the Linux target.
 #
 #   ./build.sh                                  the host target
 #   ./build.sh x86_64-unknown-linux-gnu         the named target
@@ -59,6 +59,6 @@ CLI_TARGET=$(printf '%s' "$TARGET" | tr - _)
 mkdir -p -- "$OUTPUT_DIRECTORY/$TARGET"
 set -- "$SCRIPT_DIR"/*.oxy
 "$COMPILER_DIRECTORY/oxygenc" build "$@" --library --dynamic --no-std --target "$CLI_TARGET" -r "$RUNTIME" \
-    -o "$OUTPUT_DIRECTORY/$TARGET/std"
+    -o "$OUTPUT_DIRECTORY/$TARGET/liboxygenstd"
 
-printf '%s\n' "Built the standard library: $OUTPUT_DIRECTORY/$TARGET/std.so"
+printf '%s\n' "Built the standard library: $OUTPUT_DIRECTORY/$TARGET/liboxygenstd.so"

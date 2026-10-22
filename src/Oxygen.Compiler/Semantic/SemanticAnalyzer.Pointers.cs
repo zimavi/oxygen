@@ -25,6 +25,7 @@ public sealed partial class SemanticAnalyzer
     {
         NullLiteralExpression => PointerNullness.Null,
         UnaryExpression { Operator: TokenKind.Ampersand } => PointerNullness.NonNull,
+        LambdaExpression => PointerNullness.NonNull,
         IdentifierExpression identifier when _pointerStates.TryGetValue(scope.Lookup(identifier.Name, identifier.Location), out var nullness) =>
             nullness,
         _ => PointerNullness.Unknown

@@ -125,7 +125,7 @@ public sealed partial class SemanticAnalyzer
             && ((actual.TypeArguments is null || actual.TypeArguments.Count == 0)
                 || SemanticTypeComparer.Instance.Equals(target, actual)))
             return ConversionCost.Exact;
-        if (target.IsPointer && value is NullLiteralExpression)
+        if ((target.IsPointer || target.IsFunctionPointer) && value is NullLiteralExpression)
             return ConversionCost.Exact;
         // The null reference of a class or interface, which is a zero value of that type.
         if (value is NullLiteralExpression && IsReferenceType(target))

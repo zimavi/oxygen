@@ -142,7 +142,7 @@ public sealed partial class LlvmModuleGenerator
             return builder.BuildICmp(identityPredicate, ObjectIdentity(builder, left, leftType),
                 ObjectIdentity(builder, right, rightType), "identity.compare");
         }
-        if ((leftType.IsPointer || rightType.IsPointer)
+        if ((leftType.IsPointer || rightType.IsPointer || leftType.IsFunctionPointer || rightType.IsFunctionPointer)
             && op is TokenKind.EqualsEquals or TokenKind.BangEquals)
         {
             var predicate = op == TokenKind.EqualsEquals

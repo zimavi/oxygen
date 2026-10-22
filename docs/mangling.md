@@ -41,6 +41,7 @@ name(x)        := length(x) x
 | generic parameter `T` | `g` name(`T`) |
 | enum | `E` name(qualified name) |
 | union, struct, class, interface | `U`, `S`, `C`, `I`, then name(qualified name), then `_a` count `_` followed by the type arguments when there are any |
+| function pointer returning `R` with parameters `P1..Pn` | `F` followed by the code of `R`, then the parameter list written as in a signature: `_p` `n` `_` followed by the codes of `P1..Pn` |
 
 The qualified name of a type includes its module, so two types with one name in
 different modules encode differently.

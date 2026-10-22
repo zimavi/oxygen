@@ -18,7 +18,8 @@ public sealed partial class LlvmModuleGenerator
     // A variable of a library module is declared here, not defined. A library exports its own variables, so one storage serves every program
     // whose generic declarations use them. An instance of a generic class has its own static fields, as its code does, so it is owned by
     // no module.
-    private void DeclareGlobalVariables(LLVMModuleRef module, SemanticModel model, string moduleName, bool library)
+    private void DeclareGlobalVariables(LLVMModuleRef module, SemanticModel model, string moduleName, bool library,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         _globalVariables.Clear();
         foreach (var variable in model.Globals)
@@ -40,15 +41,18 @@ public sealed partial class LlvmModuleGenerator
             }
             var exported = library && owningModule == moduleName && !isInstance;
             global.Linkage = exported ? LLVMLinkage.LLVMExternalLinkage : LLVMLinkage.LLVMInternalLinkage;
-            global.Initializer = GlobalInitializer(type, variable);
+            global.Initializer = GlobalInitializer(type, variable, llvmFunctions);
             _globalVariables[variable] = global;
         }
     }
 
     // The constant a variable starts with. The analyzer has already checked that the value converts to the variable's type.
-    private static LLVMValueRef GlobalInitializer(LLVMTypeRef type, GlobalVariableSymbol variable) => variable.Value switch
+    private static LLVMValueRef GlobalInitializer(LLVMTypeRef type, GlobalVariableSymbol variable,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) => variable.Value switch
     {
         null => LLVMValueRef.CreateConstNull(type),
+        // A function pointer starts at the address of its function, which the analysis gave as the value.
+        FunctionSymbol function => llvmFunctions[function],
         bool flag => LLVMValueRef.CreateConstInt(type, flag ? 1UL : 0UL, false),
         double real => LLVMValueRef.CreateConstReal(type, real),
         BigInteger integer when variable.Type.Primitive is PrimitiveType.F32 or PrimitiveType.F64 =>

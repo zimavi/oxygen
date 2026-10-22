@@ -268,6 +268,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
             arguments.Add($"-Wl,-soname,{Path.GetFileName(outputPath)}");
         arguments.AddRange(objectPaths);
         arguments.AddRange(options.Dependencies.Select(dependency => dependency.Path));
+        arguments.AddRange(RunPathArguments(options));
         arguments.Add("-o");
         arguments.Add(outputPath);
         if (options.UseLld ?? IsLldOnPath(options.Target))
@@ -351,6 +352,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         arguments.AddRange(options.Dependencies
             .Where(dependency => dependency.Kind == NativeDependencyKind.Dynamic)
             .Select(dependency => dependency.Path));
+        arguments.AddRange(RunPathArguments(options));
         // The Itanium exception functions come from the C++ runtime, and the runtime and the standard library call libm. ELF
         // targets link both, after the objects that need them. The Windows target has them in its own C runtime.
         if (!IsWindowsTarget(options.Target))
@@ -361,6 +363,24 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
         if (options.UseLld ?? IsLldOnPath(options.Target))
             arguments.Add("-fuse-ld=lld");
         return arguments;
+    }
+
+    // On ELF targets the program and the shared libraries it links record the folders of their shared dependencies as their RUNPATH, so
+    // they load without LD_LIBRARY_PATH or a copy in a system folder. The folder is a separate argument: -Wl, would split a comma in it.
+    // Windows finds the DLLs through PATH, so it records nothing.
+    private static IEnumerable<string> RunPathArguments(NativeBuildOptions options)
+    {
+        if (IsWindowsTarget(options.Target))
+            return [];
+        var folders = options.Dependencies
+            .Where(dependency => dependency.Kind == NativeDependencyKind.Dynamic)
+            .Select(dependency => Path.GetDirectoryName(Path.GetFullPath(dependency.Path)) ?? string.Empty)
+            .Where(folder => folder.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (folders.Any(folder => folder.Contains(',', StringComparison.Ordinal)))
+            throw new ArgumentException("A shared dependency's folder has a comma in its path, so the program cannot record it as a run path.");
+        return folders.SelectMany(folder => new[] { "-Wl,-rpath", $"-Wl,{folder}" });
     }
 
     private static bool IsWindowsTarget(string? target) =>

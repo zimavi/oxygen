@@ -815,7 +815,10 @@ public sealed partial class SemanticAnalyzer
             new HashSet<Expression>(
                 _provenNonNullDereferences.Where(node => !_unprovenDereferences.Contains(node)),
                 ReferenceEqualityComparer.Instance),
-            new HashSet<CatchClause>(_freedCatchBindings, ReferenceEqualityComparer.Instance));
+            new HashSet<CatchClause>(_freedCatchBindings, ReferenceEqualityComparer.Instance),
+            new Dictionary<Expression, Expression>(_indirectCallees, ReferenceEqualityComparer.Instance),
+            new Dictionary<Expression, FunctionSymbol>(_functionReferences, ReferenceEqualityComparer.Instance),
+            new Dictionary<LambdaExpression, FunctionSymbol>(_lambdaFunctions, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

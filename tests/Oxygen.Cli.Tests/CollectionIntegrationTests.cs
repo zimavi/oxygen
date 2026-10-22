@@ -40,6 +40,34 @@ public sealed class CollectionIntegrationTests : IDisposable
         Assert.Equal("true\ntrue\n4\n9\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    // map calls the function of the case that is present, and the function of the other case is not called.
+    [SkippableFact]
+    public void MapCallsTheFunctionOfTheCaseThatIsPresent()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.collection;
+
+            i32 main() {
+                Option<i32> some = Option.Some(4);
+                Option<i32> none = Option.None();
+                collection.map(some, fn void (i32 x) { io.println(x); }, fn void () { io.println("none"); });
+                collection.map(none, fn void (i32 x) { io.println(x); }, fn void () { io.println("none"); });
+                Result<i32, string> ok = Result.Ok(7);
+                Result<i32, string> bad = Result.Err("no");
+                collection.map(ok, fn void (i32 x) { io.println(x); }, fn void (string e) { io.println(e); });
+                collection.map(bad, fn void (i32 x) { io.println(x); }, fn void (string e) { io.println(e); });
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("4\nnone\n7\nno\n", run.Output.Replace("\r\n", "\n"));
+    }
+
     [SkippableFact]
     public void ResultQueriesAndDefaultsReadTheCaseThatIsPresent()
     {

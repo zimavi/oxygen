@@ -55,6 +55,34 @@ public sealed class ImportedStandardLibraryTests : IDisposable
         Assert.Equal("hi\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    // runtime_trace_count takes the library's Exception class, which the library declares, so the program imports the function and the
+    // build reports nothing about it.
+    [SkippableFact]
+    public void AProgramCallsAFunctionThatTakesALibraryClassWithoutAWarning()
+    {
+        var (library, runtime, runtimeFile) = PrepareSharedLibraries();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source, """
+            import std.exception;
+
+            i32 main() {
+                RuntimeException error = new RuntimeException("boom");
+                exception.runtime_trace_count(error);
+                return 0;
+            }
+            """);
+
+        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
+            ["build", source, "--stdlib", library, "-r", runtime, "-o", Path.Combine(_directory, Windows ? "main.exe" : "main")]);
+
+        Assert.True(build.ExitCode == 0, $"Build failed with exit code {build.ExitCode}:\n{build.Error}");
+        Assert.DoesNotContain("warning", build.Error);
+        File.Copy(runtimeFile, Path.Combine(_directory, Path.GetFileName(runtimeFile)), overwrite: true);
+        var run = NativeProgram.RunProcess(Path.Combine(_directory, Windows ? "main.exe" : "main"), [],
+            Windows ? null : new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = _directory });
+        Assert.Equal(0, run.ExitCode);
+    }
+
     // The generic functions of memory and io are instantiated in the program, and so is a generic union of collection, whose functions
     // the program uses. Their bodies are checked where they are instantiated, and the library's own check is not repeated.
     [SkippableFact]
