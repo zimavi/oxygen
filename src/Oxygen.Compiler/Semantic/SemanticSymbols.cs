@@ -155,6 +155,15 @@ public sealed record FunctionSymbol(
     MemoryMode Memory = MemoryMode.Automatic)
 {
     public string QualifiedName => $"{ModuleName}.{Name}";
+
+    // A function declared @nothrow promises never to throw (docs/exceptions.md).
+    public bool DeclaresNoThrow => Declaration.DeclaredAnnotations.Any(annotation => annotation.Name == "nothrow");
+
+    // Whether a call to the function cannot throw: a @nothrow function, or a C function (@extern), since C does not throw Oxygen exceptions.
+    public bool NeverThrows => DeclaresNoThrow || CInterop?.ExternalName is not null;
+
+    // A function declared @noreturn never returns to its caller: every path ends in a throw, a call to a @noreturn function, or a loop that never ends.
+    public bool DeclaresNoReturn => Declaration.DeclaredAnnotations.Any(annotation => annotation.Name == "noreturn");
     public IReadOnlyList<string> DeclaredGenericParameters => GenericParameters ?? [];
     public bool IsGeneric => DeclaredGenericParameters.Count != 0;
     public bool IsSpecialized => SpecializationArguments is not null;

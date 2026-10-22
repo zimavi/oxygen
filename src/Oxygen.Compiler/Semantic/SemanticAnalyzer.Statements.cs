@@ -415,6 +415,9 @@ public sealed partial class SemanticAnalyzer
                     var catchAllSeen = false;
                     foreach (var (catchClause, index) in tryStatement.Catches.Select((item, index) => (item, index)))
                     {
+                        if (!ExceptionsEnabled)
+                            ReportWarning("This catch clause never runs, since the program is built without exceptions",
+                                catchClause.Location, "catch".Length);
                         SemanticType? catchType = null;
                         if (catchClause.ExceptionType is not null)
                         {
@@ -497,6 +500,13 @@ public sealed partial class SemanticAnalyzer
                     expressionTypes,
                     resolvedCalls,
                     allowVoid: true);
+                // A call to a @noreturn function ends the path, so the statements after it are unreachable.
+                if (expressionStatement.Expression is CallExpression call && resolvedCalls.TryGetValue(call, out var callee)
+                    && callee.DeclaresNoReturn)
+                {
+                    _reachable = false;
+                    return true;
+                }
                 return false;
             default:
                 throw new InvalidOperationException($"Unsupported statement type {statement.GetType().Name}.");
@@ -841,6 +851,9 @@ public sealed partial class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
+        if (function.DeclaresNoReturn)
+            throw Error($"Function '{function.Name}' is @noreturn, so it cannot return", returnStatement.Location, "return".Length);
+
         if (returnStatement.Value is null)
         {
             if (!function.ReturnType.IsVoid)

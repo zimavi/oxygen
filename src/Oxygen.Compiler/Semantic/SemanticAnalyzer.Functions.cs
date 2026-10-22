@@ -35,6 +35,8 @@ public sealed partial class SemanticAnalyzer
         try
         {
             AnalyzeFunctionBody(function, functions, moduleName, imports, expressionTypes, resolvedCalls, constructor);
+            if (function.DeclaresNoThrow)
+                CheckNoThrowBody(function.Declaration.Body, expressionTypes, resolvedCalls);
         }
         finally
         {
@@ -120,7 +122,12 @@ public sealed partial class SemanticAnalyzer
         AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         // A non-void function must not reach its end. Reachability follows every path, including switch fall-through,
         // breaks and loops that never end, so it decides this rather than whether the last statement returns.
-        if (!function.ReturnType.IsVoid && _reachable && !_statementErrorReported)
+        if (function.DeclaresNoReturn && _reachable && !_statementErrorReported)
+        {
+            throw Error($"Function '{function.Name}' is @noreturn, but it can return: every path must end in a throw, a call to a @noreturn function, or a loop that never ends",
+                function.Declaration.Location, function.Name.Length);
+        }
+        if (!function.ReturnType.IsVoid && !function.DeclaresNoReturn && _reachable && !_statementErrorReported)
         {
             throw ErrorWithCode(DiagnosticCode.MustReturn, $"Function '{function.Name}' must return a value", function.Declaration.Location);
         }

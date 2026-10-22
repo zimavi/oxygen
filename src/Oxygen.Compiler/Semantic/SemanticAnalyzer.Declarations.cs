@@ -129,6 +129,14 @@ public sealed partial class SemanticAnalyzer
                     if (!string.Equals(callingConvention, "c", StringComparison.Ordinal))
                         throw Error($"Unsupported calling convention '{callingConvention}'", annotation.Location);
                     break;
+                case "noreturn":
+                    if (annotation.Arguments.Count != 0)
+                        throw Error("Annotation '@noreturn' does not accept arguments", annotation.Location);
+                    break;
+                case "nothrow":
+                    if (annotation.Arguments.Count != 0)
+                        throw Error("Annotation '@nothrow' does not accept arguments", annotation.Location);
+                    break;
                 case "manual_memory":
                 case "auto_memory":
                     if (annotation.Arguments.Count != 0)

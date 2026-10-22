@@ -292,6 +292,7 @@ public sealed partial class SemanticAnalyzer
                     new InterfaceSymbol(declaration.Name, moduleName, [], declaration, declaration.Visibility,
                         declaration.DeclaredTypeParameters.Select(parameter => parameter.Name).ToArray(), []));
             }
+            ValidateFunctionOnlyAnnotations(unit);
             foreach (var declaration in unit.Classes)
             {
                 ValidateTypeParameters(declaration.DeclaredTypeParameters);
