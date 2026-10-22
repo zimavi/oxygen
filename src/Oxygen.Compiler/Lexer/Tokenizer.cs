@@ -59,6 +59,7 @@ public sealed class Tokenizer
             ["new"] = TokenKind.New,
             ["enum"] = TokenKind.Enum,
             ["union"] = TokenKind.Union,
+            ["type"] = TokenKind.Type,
             ["switch"] = TokenKind.Switch,
             ["case"] = TokenKind.Case,
             ["default"] = TokenKind.Default,

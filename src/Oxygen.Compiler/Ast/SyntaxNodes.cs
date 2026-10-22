@@ -31,7 +31,16 @@ public sealed record CompilationUnit(
     public IReadOnlyList<ClassDeclaration> Classes { get; init; } = [];
     public IReadOnlyList<InterfaceDeclaration> Interfaces { get; init; } = [];
     public IReadOnlyList<GlobalVariableDeclaration> Globals { get; init; } = [];
+    public IReadOnlyList<TypeAliasDeclaration> Aliases { get; init; } = [];
 }
+
+// A type alias, `type Name = Target;`: another name for the type Target, not a new type. Its target may be any type. An alias is
+// declared at module scope, and `public` exports it like the other type declarations.
+public sealed record TypeAliasDeclaration(
+    string Name,
+    TypeSyntax Target,
+    Visibility Visibility,
+    SourceLocation Location) : SyntaxNode(Location);
 
 // A module-level variable. Without an initializer it starts as zero. Its initializer must be a constant.
 public sealed record GlobalVariableDeclaration(

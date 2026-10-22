@@ -60,6 +60,7 @@ public enum TokenKind
     New,
     Enum,
     Union,
+    Type,
     Switch,
     Case,
     Default,

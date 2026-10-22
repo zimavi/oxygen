@@ -10,7 +10,7 @@ namespace Oxygen.Compiler.Ast;
 // a change to either needs a new FormatVersion.
 public static class SyntaxTreeCodec
 {
-    public const int FormatVersion = 1;
+    public const int FormatVersion = 2;
 
     private static readonly byte[] Magic = "OXYAST"u8.ToArray();
 
@@ -101,7 +101,8 @@ public static class SyntaxTreeCodec
         NewExpression,
         ClassConstructionExpression,
         SwitchCase,
-        SwitchStatement
+        SwitchStatement,
+        TypeAliasDeclaration
     }
 
     private sealed class Writer
@@ -213,6 +214,7 @@ public static class SyntaxTreeCodec
             {
                 case CompilationUnit n: Tag(NodeKind.CompilationUnit); Unit(n); break;
                 case GlobalVariableDeclaration n: Tag(NodeKind.GlobalVariableDeclaration); Global(n); break;
+                case TypeAliasDeclaration n: Tag(NodeKind.TypeAliasDeclaration); TypeAlias(n); break;
                 case UnionCaseDeclaration n: Tag(NodeKind.UnionCaseDeclaration); UnionCase(n); break;
                 case UnionDeclaration n: Tag(NodeKind.UnionDeclaration); Union(n); break;
                 case EnumMemberDeclaration n: Tag(NodeKind.EnumMemberDeclaration); EnumMember(n); break;
@@ -292,6 +294,15 @@ public static class SyntaxTreeCodec
             Items(n.Classes, Node);
             Items(n.Interfaces, Node);
             Items(n.Globals, Node);
+            Items(n.Aliases, Node);
+        }
+
+        private void TypeAlias(TypeAliasDeclaration n)
+        {
+            Str(n.Name);
+            Node(n.Target);
+            Enum(n.Visibility);
+            Loc(n.Location);
         }
 
         private void Global(GlobalVariableDeclaration n)
@@ -846,6 +857,7 @@ public static class SyntaxTreeCodec
             {
                 NodeKind.CompilationUnit => ReadUnit(),
                 NodeKind.GlobalVariableDeclaration => ReadGlobal(),
+                NodeKind.TypeAliasDeclaration => ReadTypeAlias(),
                 NodeKind.UnionCaseDeclaration => ReadUnionCase(),
                 NodeKind.UnionDeclaration => ReadUnion(),
                 NodeKind.EnumMemberDeclaration => ReadEnumMember(),
@@ -925,8 +937,17 @@ public static class SyntaxTreeCodec
                 Unions = Items(Typed<UnionDeclaration>),
                 Classes = Items(Typed<ClassDeclaration>),
                 Interfaces = Items(Typed<InterfaceDeclaration>),
-                Globals = Items(Typed<GlobalVariableDeclaration>)
+                Globals = Items(Typed<GlobalVariableDeclaration>),
+                Aliases = Items(Typed<TypeAliasDeclaration>)
             };
+        }
+
+        private TypeAliasDeclaration ReadTypeAlias()
+        {
+            var name = Str();
+            var target = Typed<TypeSyntax>();
+            var visibility = Enum<Visibility>();
+            return new TypeAliasDeclaration(name, target, visibility, Loc());
         }
 
         private GlobalVariableDeclaration ReadGlobal()

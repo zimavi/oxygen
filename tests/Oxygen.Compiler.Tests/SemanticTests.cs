@@ -3982,6 +3982,79 @@ public sealed class SemanticTests
         Assert.Equal(explicitForm, arrow);
     }
 
+    // An alias is the type it names, so a value of the target type passes where the alias is declared, with no conversion.
+    [Fact]
+    public void AnAliasIsTheTypeItNamesInASignature()
+    {
+        var model = Analyze(
+            "type Count = u64; u64 twice(Count value) { return value; } i32 main() { Count count = 1; return cast<i32>(twice(count)); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
+    public void AliasesOfAliasesResolve()
+    {
+        var model = Analyze("type A = B; type B = i32; i32 main() { A value = 3; return value; }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    // The cycle is reported at the alias that the cycle starts from, which is the first one declared in it.
+    [Fact]
+    public void ACycleOfAliasesIsAnErrorAtTheFirstAlias()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("type A = B; type B = A; i32 main() { return 0; }"));
+
+        Assert.Contains("'A' is part of a cycle of type aliases", exception.Message);
+    }
+
+    [Fact]
+    public void AnAliasCannotShareANameWithAType()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("struct Point { i32 x; } type Point = i32; i32 main() { return 0; }"));
+
+        Assert.Contains("already declared", exception.Message);
+    }
+
+    [Fact]
+    public void AnAliasOfAnUndeclaredTypeIsAnError()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze("type A = Missing; i32 main() { return 0; }"));
+
+        Assert.Contains("Missing", exception.Message);
+    }
+
+    // An alias of a struct names that struct, so it builds a value of the struct and reads its fields.
+    [Fact]
+    public void AnAliasOfAStructBuildsAValueOfTheStruct()
+    {
+        var model = Analyze("struct Point { i32 x; } type P = Point; i32 main() { P point = P { x: 3 }; return point.x; }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
+    public void AGenericInstanceCannotBeGivenTypeArgumentsThroughAnAlias()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Box<T> { T item; } type IntBox = Box<i32>; i32 main() { IntBox<i32> box = {0}; return 0; }"));
+
+        Assert.Contains("cannot have type arguments", exception.Message);
+    }
+
+    // Two imports that each provide an alias of one name are an ambiguity at the use, as for any two types of one name.
+    [Fact]
+    public void AnAliasThatTwoImportsProvideIsAmbiguousAtItsUse()
+    {
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeModules(
+            "module a; public type Count = u64;",
+            "module b; public type Count = i32;",
+            "import a; import b; i32 main() { Count c = 1; return 0; }"));
+
+        Assert.Contains("ambiguous", exception.Message);
+    }
+
     private SemanticModel AnalyzeModules(params string[] sources)
     {
         var units = sources.Select(source => new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse()).ToList();

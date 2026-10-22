@@ -66,22 +66,33 @@ public sealed partial class SemanticAnalyzer
     private void InFunctionScopeOf(FunctionDeclaration declaration, Action action) =>
         InFunctionScopeOf(declaration, () => { action(); return 0; });
 
+    // Whether a qualified name is a type or an alias. An alias is a type name too, so it is ambiguous with a type of the same name.
     private bool IsDeclaredType(string qualifiedName) =>
         _classesByName.ContainsKey(qualifiedName) || _interfacesByName.ContainsKey(qualifiedName)
         || _structsByName.ContainsKey(qualifiedName) || _enumsByName.ContainsKey(qualifiedName)
-        || _unionsByName.ContainsKey(qualifiedName);
+        || _unionsByName.ContainsKey(qualifiedName) || _aliasDeclarations.ContainsKey(qualifiedName);
 
-    // The qualified name of the single type that `name` denotes in the current scope, or null when none or several are visible.
+    // The qualified name of the single type or alias that `name` denotes in the current scope, or null when none or several are visible.
     // Used where the declaration that names the type has already been checked, so ambiguity is not reported again.
-    private string? TypeNameOrNull(string name)
+    private string? VisibleTypeKeyOrNull(string name)
     {
         var matches = NameCandidates(name, _typeScopeModule, _typeScopeImports).Where(IsDeclaredType).ToList();
         return matches.Count == 1 ? matches[0] : null;
     }
 
-    // The qualified name of the type that `name` denotes in the current scope, or null when no type of that name is visible.
+    // The nominal type that `name` denotes in the current scope, or null when no type of that name is visible. An alias is replaced by the
+    // type it names. Used where the declaration that names the type has already been checked, so ambiguity is not reported again.
+    private string? TypeNameOrNull(string name)
+    {
+        var key = VisibleTypeKeyOrNull(name);
+        if (key is null)
+            return null;
+        return _aliasDeclarations.ContainsKey(key) ? NominalNameOf(AliasType(key)) : key;
+    }
+
+    // The qualified name or alias that `name` denotes in the current scope, or null when no type of that name is visible.
     // Two visible types are an error: the name is ambiguous at this use.
-    private string? FindTypeName(string name, SourceLocation location)
+    private string? FindVisibleTypeKey(string name, SourceLocation location)
     {
         var matches = NameCandidates(name, _typeScopeModule, _typeScopeImports)
             .Where(IsDeclaredType)
@@ -93,4 +104,9 @@ public sealed partial class SemanticAnalyzer
                 location, name.Length);
         return matches.Count == 1 ? matches[0] : null;
     }
+
+    // The qualified name of the nominal type that `name` denotes in the current scope, or null when no type of that name is visible. An alias
+    // denotes the type it names (see NominalTypeName).
+    private string? FindTypeName(string name, SourceLocation location) =>
+        NominalTypeName(FindVisibleTypeKey(name, location), name, location);
 }
