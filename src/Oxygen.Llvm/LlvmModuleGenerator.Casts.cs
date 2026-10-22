@@ -238,10 +238,13 @@ public sealed partial class LlvmModuleGenerator
     // The type information of a type. A type's owner module defines it with external linkage, and every other object that has the
     // type (an instance of a generic class, or a class of another module) defines it as linkonce_odr, so the linker keeps one copy.
     // The runtime compares these addresses for `is` and catch, so a type must have one address in the whole program.
-    private LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName, bool ownedByThisObject)
+    // A type that a native library defines is only declared here. On Windows, a shared library's data is imported by its declaration.
+    private LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName, bool ownedByThisObject, bool definedByLibrary)
     {
         var info = module.AddGlobal(_runtimeTypeInfoType, $"oxygen.type.info.{typeName}");
         info.Linkage = ownedByThisObject ? LLVMLinkage.LLVMExternalLinkage : LLVMLinkage.LLVMLinkOnceODRLinkage;
+        if (definedByLibrary && _target.UsesSeh)
+            info.DLLStorageClass = LLVMDLLStorageClass.LLVMDLLImportStorageClass;
         return info;
     }
 

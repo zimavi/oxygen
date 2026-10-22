@@ -233,8 +233,10 @@ public sealed class SemanticModel
         IReadOnlyDictionary<SyntaxNode, int[]>? argumentOrders = null,
         IReadOnlyDictionary<TypeSyntax, SemanticType>? resolvedTypeSyntax = null,
         IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertyGetters = null,
-        IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertySetters = null)
+        IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertySetters = null,
+        IReadOnlySet<string>? externalModules = null)
     {
+        ExternalModules = externalModules ?? new HashSet<string>(StringComparer.Ordinal);
         ArgumentOrders = argumentOrders ?? new Dictionary<SyntaxNode, int[]>();
         ResolvedTypeSyntax = resolvedTypeSyntax ?? new Dictionary<TypeSyntax, SemanticType>(ReferenceEqualityComparer.Instance);
         ConstructionCalls = constructionCalls ?? new Dictionary<ClassConstructionExpression, CallExpression>();
@@ -272,6 +274,10 @@ public sealed class SemanticModel
 
     // How each call, construction, or constructor initializer binds its arguments to parameters: for each parameter, the index
     // of the argument that fills it, or -1 for its default. Calls without named arguments are bound in position.
+    // The modules that a native library provides. Their functions, constructors, destructors and type information are declared here but
+    // defined by the library, so the program does not define them.
+    public IReadOnlySet<string> ExternalModules { get; }
+
     public IReadOnlyDictionary<SyntaxNode, int[]> ArgumentOrders { get; }
 
     // The calls written as base.name(...), which are direct calls to the base class's method.

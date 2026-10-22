@@ -43,13 +43,20 @@ public sealed class GenericSyntaxTests
         Assert.True(GenericSyntax.IsGenericOnly(generic));
     }
 
+    // A non-generic class is carried with its fields and its method signatures, but without the bodies: its code is in the library.
     [Fact]
-    public void ANonGenericClassIsLeftOutEvenWhenItHasMethods()
+    public void ANonGenericClassIsCarriedWithItsSignatureButNotItsBodies()
     {
         var unit = Parse("module shapes; class Plain { i32 count = 3; public i32 size() { return count; } }");
 
-        Assert.Empty(GenericSyntax.Extract(unit).Classes);
-        Assert.False(GenericSyntax.HasDeclarations(unit));
+        var carried = Assert.Single(GenericSyntax.Extract(unit).Classes);
+        Assert.Equal("Plain", carried.Name);
+        Assert.Equal("count", Assert.Single(carried.Fields).Name);
+        var method = Assert.Single(carried.Methods);
+        Assert.Equal("size", method.Name);
+        Assert.Empty(method.Body.Statements);
+        Assert.True(GenericSyntax.HasDeclarations(unit));
+        Assert.True(GenericSyntax.IsGenericOnly(GenericSyntax.Extract(unit)));
     }
 
     [Fact]

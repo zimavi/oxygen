@@ -86,6 +86,53 @@ public sealed class ImportedStandardLibraryTests : IDisposable
         Assert.Equal("7\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    // A class of the library is declared here and defined there, so a program throws and catches the library's RuntimeException.
+    [SkippableFact]
+    public void AProgramThrowsAndCatchesAnExceptionClassOfASharedStandardLibrary()
+    {
+        var (library, runtime, runtimeFile) = PrepareSharedLibraries();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source, """
+            import std.exception;
+
+            i32 main() {
+                try {
+                    throw new RuntimeException("boom");
+                } catch (RuntimeException error) {
+                    return 6;
+                }
+                return 0;
+            }
+            """);
+
+        var run = BuildAndRun(source, library, runtime, runtimeFile);
+
+        Assert.Equal(6, run.ExitCode);
+    }
+
+    // A field that a class inherits is read at its position in the library's layout: the message is Exception's, read through RuntimeException.
+    [SkippableFact]
+    public void AProgramReadsAnInheritedFieldOfAClassOfASharedStandardLibrary()
+    {
+        var (library, runtime, runtimeFile) = PrepareSharedLibraries();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source, """
+            import std.exception;
+
+            i32 main() {
+                RuntimeException error = new RuntimeException("abc");
+                if (error.message.length == 3) {
+                    return 7;
+                }
+                return 8;
+            }
+            """);
+
+        var run = BuildAndRun(source, library, runtime, runtimeFile);
+
+        Assert.Equal(7, run.ExitCode);
+    }
+
     // Builds the standard library and returns it with the runtime that a program links and the runtime file that it needs beside it.
     // The test is skipped when the toolchain or the shared runtime is missing.
     private (string Library, string Runtime, string RuntimeFile) PrepareSharedLibraries()
