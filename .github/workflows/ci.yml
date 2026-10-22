@@ -48,3 +48,49 @@ jobs:
         env:
           OXYGEN_REQUIRE_NATIVE_TESTS: '1'
         run: dotnet test Oxygen.slnx --configuration Release --no-build
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install LLVM 22 (clang, llvm-ar) and check the version
+        # The same reason as the Windows job: the try/catch lowering depends on the clang that matches the LLVM libraries. The apt.llvm.org
+        # script installs LLVM 22 under /usr/lib/llvm-22, which is put first on PATH, so clang and llvm-ar are that version.
+        run: |
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          sudo apt-get install -y llvm-22
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+          version=$(/usr/lib/llvm-22/bin/clang --version | head -n 1)
+          echo "$version"
+          case "$version" in
+            *"clang version 22.1."*) ;;
+            *) echo "Expected clang 22.1.x, found: $version" >&2; exit 1 ;;
+          esac
+          if [ ! -x /usr/lib/llvm-22/bin/llvm-ar ]; then
+            echo "llvm-ar was not installed with LLVM 22." >&2
+            exit 1
+          fi
+
+      - name: Build the Linux runtime archive and shared library
+        run: |
+          ./runtime/build.sh x86_64-unknown-linux-gnu
+          for file in runtime/build/x86_64-unknown-linux-gnu/liboxygenrt.a runtime/build/x86_64-unknown-linux-gnu/liboxygenrt.so; do
+            if [ ! -f "$file" ]; then
+              echo "$file was not produced." >&2
+              exit 1
+            fi
+          done
+
+      - name: Build solution
+        run: dotnet build Oxygen.slnx --configuration Release
+
+      - name: Run tests
+        # The same rule as the Windows job: a missing toolchain fails, and the native tests do not skip.
+        env:
+          OXYGEN_REQUIRE_NATIVE_TESTS: '1'
+        run: dotnet test Oxygen.slnx --configuration Release --no-build
