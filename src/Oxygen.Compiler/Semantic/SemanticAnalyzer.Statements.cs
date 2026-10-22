@@ -74,7 +74,7 @@ public sealed partial class SemanticAnalyzer
                 var whileType = AnalyzeExpression(whileStatement.Condition, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 RequireBoolean(whileType, whileStatement.Condition.Location);
                 var beforeWhile = BeginLoopDeletes();
-                ForgetNullsAssignedIn(whileStatement, scope);
+                ForgetPointerStatesModifiedIn(whileStatement, scope);
                 var flowBeforeWhile = SnapshotFlow();
                 _breakStates.Push([]);
                 _loopDepth++;
@@ -96,7 +96,7 @@ public sealed partial class SemanticAnalyzer
                     RequireBoolean(forType, forStatement.Condition.Location);
                 }
                 var beforeFor = BeginLoopDeletes();
-                ForgetNullsAssignedIn(forStatement, scope);
+                ForgetPointerStatesModifiedIn(forStatement, scope);
                 var flowBeforeFor = SnapshotFlow();
                 _breakStates.Push([]);
                 _loopDepth++;
@@ -203,7 +203,7 @@ public sealed partial class SemanticAnalyzer
                     forInScope.Declare(forInStatement.VariableName, variable);
                     _declaredVariables.Add(variable);
                     var beforeForIn = BeginLoopDeletes();
-                    ForgetNullsAssignedIn(forInStatement, scope);
+                    ForgetPointerStatesModifiedIn(forInStatement, scope);
                     var flowBeforeForIn = SnapshotFlow();
                     _breakStates.Push([]);
                     _loopDepth++;
@@ -367,12 +367,12 @@ public sealed partial class SemanticAnalyzer
                 _reachable = false;
                 return false;
             case VariableDeclarationStatement declaration:
-                AnalyzeVariableDeclaration(declaration, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                AnalyzeVariableDeclaration(declaration, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 if (declaration.Initializer is null)
                     AddUnassignedParts(declaration, scope.Lookup(declaration.Name, declaration.Location).Type);
                 return false;
             case AssignmentStatement assignment:
-                AnalyzeAssignment(assignment, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
+                AnalyzeAssignment(assignment, scope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return false;
             case ReturnStatement returnStatement:
                 AnalyzeReturn(returnStatement, function, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
@@ -402,7 +402,7 @@ public sealed partial class SemanticAnalyzer
                 }
             case TryStatement tryStatement:
                 {
-                    ForgetNullsAssignedIn(tryStatement, scope);
+                    ForgetPointerStatesModifiedIn(tryStatement, scope);
                     var beforeTry = SnapshotFlow();
                     var tryReturns = AnalyzeBlock(tryStatement.Body, scope, function, functions, moduleName, imports,
                         expressionTypes, resolvedCalls);
@@ -465,7 +465,8 @@ public sealed partial class SemanticAnalyzer
                         // The finally block also runs on the exceptional paths, so it starts from every state the try can leave.
                         // Code after the try is reached only if the normal paths reach it.
                         var finallyStart = new HashSet<UnassignedSlot>(beforeTry.Unassigned.Concat(afterCatches.Unassigned));
-                        RestoreFlow(new FlowState(finallyStart, beforeTry.Reachable, new HashSet<VariableSymbol>(beforeTry.Nulls)));
+                        RestoreFlow(new FlowState(finallyStart, beforeTry.Reachable,
+                            new Dictionary<VariableSymbol, PointerNullness>(beforeTry.Pointers)));
                         finallyReturns = AnalyzeBlock(tryStatement.Finally, scope, function, functions, moduleName, imports,
                             expressionTypes, resolvedCalls);
                         var afterFinally = SnapshotFlow();
@@ -475,7 +476,7 @@ public sealed partial class SemanticAnalyzer
                         RestoreFlow(new FlowState(
                             new HashSet<UnassignedSlot>(normalAfter),
                             afterCatches.Reachable && afterFinally.Reachable,
-                            new HashSet<VariableSymbol>(afterCatches.Nulls.Intersect(afterFinally.Nulls))));
+                            AgreedPointers(afterCatches.Pointers, afterFinally.Pointers)));
                     }
                     return finallyReturns || (tryReturns && allCatchesReturn);
                 }
@@ -518,6 +519,7 @@ public sealed partial class SemanticAnalyzer
     private void AnalyzeVariableDeclaration(
         VariableDeclarationStatement declaration,
         Scope scope,
+        FunctionSymbol function,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
         string moduleName,
         IReadOnlyList<ImportDeclaration> imports,
@@ -566,18 +568,23 @@ public sealed partial class SemanticAnalyzer
         if (declaration.Initializer is NullLiteralExpression && type.IsPointer)
             expressionTypes[declaration.Initializer] = type;
 
+        // A pointer local starts with the nullness of its initializer, read before the local is declared, so a name in the initializer
+        // refers to what it referred to before. A pointer whose address is taken is not tracked.
+        var initialNullness = type.IsPointer && declaration.Initializer is not null && !IsAddressTaken(function, declaration.Name)
+            ? PointerNullnessOf(declaration.Initializer, scope)
+            : PointerNullness.Unknown;
         var variable = new VariableSymbol(type, declaration.IsConst, declaration, false);
         scope.Declare(declaration.Name, variable);
         if (declaration.Initializer is not null && IsStackObject(declaration.Initializer, scope))
             _stackObjectLocals.Add(declaration);
         _declaredVariables.Add(variable);
-        if (type.IsPointer && declaration.Initializer is NullLiteralExpression)
-            _definitelyNullVariables.Add(variable);
+        SetPointerNullness(variable, initialNullness);
     }
 
     private void AnalyzeAssignment(
         AssignmentStatement assignment,
         Scope scope,
+        FunctionSymbol function,
         IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
         string moduleName,
         IReadOnlyList<ImportDeclaration> imports,
@@ -637,7 +644,7 @@ public sealed partial class SemanticAnalyzer
 
         ValidateWritableTarget(assignment.Target, scope, expressionTypes);
         RequireStackObjectStaysInFunction(assignment, scope);
-        TrackPointerAssignment(assignment, assignment.Value, valueType, scope);
+        TrackPointerAssignment(assignment, function, assignment.Value, valueType, scope);
     }
 
     // A compound assignment to a member needs the member's current value: a field, or a property of a class with a getter.
@@ -793,6 +800,7 @@ public sealed partial class SemanticAnalyzer
 
     private void TrackPointerAssignment(
         AssignmentStatement assignment,
+        FunctionSymbol function,
         Expression value,
         SemanticType valueType,
         Scope scope)
@@ -808,13 +816,11 @@ public sealed partial class SemanticAnalyzer
                     > scope.LookupDepth(sourceIdentifier.Name, sourceIdentifier.Location))
                     _escapingClassLocals.Add(sourceDeclaration);
             }
-            if (variable.Type.IsPointer && assignment.Operator == TokenKind.Equals)
-            {
-                if (value is NullLiteralExpression)
-                    _definitelyNullVariables.Add(variable);
-                else
-                    _definitelyNullVariables.Remove(variable);
-            }
+            // A plain assignment gives the pointer the nullness of its value. A compound one (`p += n`) moves it to an unknown address.
+            if (variable.Type.IsPointer && !IsAddressTaken(function, assignedIdentifier.Name))
+                SetPointerNullness(variable, assignment.Operator == TokenKind.Equals
+                    ? PointerNullnessOf(value, scope)
+                    : PointerNullness.Unknown);
         }
     }
 

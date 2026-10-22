@@ -208,6 +208,9 @@ public sealed partial class SemanticAnalyzer
         if (target.IsOpaquePointer)
             throw Error("Cannot dereference an opaque void pointer; cast it to a typed pointer first",
                 index.Target.Location);
+        // Indexing a pointer reads or writes the element it addresses, so the pointer is a dereference.
+        if (target.IsPointer)
+            ClassifyDereference(index.Target, scope, index.Location);
         if (index.Index is IntegerLiteralExpression constant && long.TryParse(constant.Lexeme, out var value)
             && target.IsArray && (value < 0 || value >= target.ArrayLength))
             throw Error($"Array index {value} is out of bounds for length {target.ArrayLength}", index.Index.Location);
@@ -558,14 +561,13 @@ public sealed partial class SemanticAnalyzer
 
         if (expression.Operator == TokenKind.Star)
         {
-            if (expression.Operand is NullLiteralExpression
-                || expression.Operand is IdentifierExpression identifier
-                    && _definitelyNullVariables.Contains(scope.Lookup(identifier.Name, identifier.Location)))
+            if (expression.Operand is NullLiteralExpression)
                 throw Error("Cannot dereference a null pointer", expression.Location);
             if (!operandType.IsPointer)
                 throw ErrorWithCode(DiagnosticCode.OperandRequirement, "The '*' operator requires a pointer operand", expression.Location);
             if (operandType.IsOpaquePointer)
                 throw Error("Cannot dereference an opaque void pointer; cast it to a typed pointer first", expression.Location);
+            ClassifyDereference(expression.Operand, scope, expression.Location);
             return operandType.Pointee!;
         }
 
@@ -597,6 +599,9 @@ public sealed partial class SemanticAnalyzer
             ValidateWritableTarget(expression.Operand, scope, expressionTypes);
             if (!operandType.IsInteger && !operandType.IsPointer)
                 throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"The '{expression.Operator}' operator requires an integer or pointer operand", expression.Location);
+            // Moving a pointer by one element gives it an address that is not known, so its nullness is forgotten.
+            if (operandType.IsPointer && expression.Operand is IdentifierExpression moved)
+                SetPointerNullness(scope.Lookup(moved.Name, moved.Location), PointerNullness.Unknown);
             return operandType;
         }
 

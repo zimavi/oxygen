@@ -133,6 +133,33 @@ public sealed class NullPointerIntegrationTests : IDisposable
         Assert.Equal(11, run.ExitCode);
     }
 
+    // `pp` writes `p` through its address, so `p` is not known to be non-null, though it was assigned the address of a local. The check
+    // is kept, and the write through `pp` makes it fail at run time.
+    [SkippableFact]
+    public void APointerWrittenThroughAnotherPointerIsCheckedAtRunTime()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.exception;
+
+            i32 main() {
+                i32 value = 1;
+                i32* p = &value;
+                i32** pp = &p;
+                *pp = null;
+                try {
+                    return *p;
+                } catch (NullReferenceException error) {
+                    return 9;
+                }
+            }
+            """);
+
+        Assert.Equal(9, run.ExitCode);
+    }
+
     // Without std.exception there is no exception to throw, so the program stops, as a null class reference stops it.
     [SkippableFact]
     public void AnUncaughtNullPointerWithoutStdStopsTheProgramWithExitCode101()

@@ -37,9 +37,22 @@ which a `catch` can handle, as it does for a null class reference. Without
 `std.exception` (a build with `--no-std`), there is no exception to throw, so the
 program stops with exit code 101, as a null class reference does.
 
-The check is made when the program runs. The compiler rejects the dereference of the
-null literal, and of a pointer that is null on every path, as before. A pointer that
-is null on only some paths is checked at run time.
+The analysis decides, for each dereference, whether the pointer is proven non-null.
+A proven dereference has no check. Every other one is checked when the program runs.
+
+- The address of anything (`&x`, `&s.field`, `&a[i]`) is non-null. A local that is
+  given such a value, or a copy of a non-null local, is non-null too.
+- A local that is given the null literal is null. A dereference of a pointer that is
+  null on every path to it is a compile error, as is indexing one (`p[i]`).
+- Everything else is unknown and is checked at run time: parameters, fields, call
+  results, casts, pointer arithmetic, and a local that is null on only some paths
+  to the dereference.
+- A pointer whose address is taken anywhere in its function is never tracked, since
+  another pointer can write it through that address.
+- A loop or a `try` statement forgets the nullness of the pointers that it changes,
+  because it may run again or be entered from anywhere in its body. An increment or
+  a compound assignment (`p += n`) makes a pointer unknown.
+- A condition does not narrow a pointer, so `if (p != null) { *p }` keeps its check.
 
 Pointer arithmetic supports `pointer + integer` and `pointer - integer`.
 The integer offset is scaled by the size of the pointee type. Prefix and

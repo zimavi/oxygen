@@ -339,6 +339,61 @@ public sealed class LlvmTests
         Assert.Contains("call void @__oxygen_runtime_null_pointer_failure()", ir);
     }
 
+    // The analysis proves a pointer non-null when it is the address of something, and keeps that across copies and joins. Such a dereference
+    // has no check, and any other dereference keeps its check.
+    [Fact]
+    public void ANonNullLocalAddressIsNotChecked()
+    {
+        var ir = IrOf("i32 local() { i32 value = 1; i32* p = &value; i32* q = p; return *q; } i32 main() { return 0; }");
+
+        Assert.Equal(0, CountNullPointerChecks(ir));
+    }
+
+    [Fact]
+    public void APointerThatIsNullOnOnePathIsChecked()
+    {
+        var ir = IrOf("i32 joined(bool c) { i32 value = 1; i32* p = &value; if (c) { p = null; } return *p; } i32 main() { return 0; }");
+
+        Assert.Equal(1, CountNullPointerChecks(ir));
+    }
+
+    // A pointer whose address is taken can be written through another pointer, so its nullness is not tracked.
+    [Fact]
+    public void AnAddressTakenPointerIsCheckedEvenAfterItLooksNonNull()
+    {
+        var ir = IrOf("i32 aliased() { i32 value = 1; i32* p = &value; i32** pp = &p; *pp = null; return *p; } i32 main() { return 0; }");
+
+        Assert.Equal(1, CountNullPointerChecks(ir));
+    }
+
+    // Moving a pointer gives it an address that is not known.
+    [Fact]
+    public void AnIncrementedPointerIsChecked()
+    {
+        var ir = IrOf("i32 stepped() { i32 value = 1; i32* p = &value; p++; return *p; } i32 main() { return 0; }");
+
+        Assert.Equal(1, CountNullPointerChecks(ir));
+    }
+
+    // A loop that changes the pointer forgets its nullness, and a loop that does not keeps it.
+    [Fact]
+    public void ALoopThatChangesAPointerForgetsItsNullness()
+    {
+        var changed = IrOf("i32 looped() { i32 value = 1; i32* p = &value; while (value < 3) { p = null; value++; } return *p; } i32 main() { return 0; }");
+        var unchanged = IrOf("i32 looped() { i32 value = 1; i32* p = &value; while (value < 3) { value++; } return *p; } i32 main() { return 0; }");
+
+        Assert.Equal(1, CountNullPointerChecks(changed));
+        Assert.Equal(0, CountNullPointerChecks(unchanged));
+    }
+
+    private static string IrOf(string source)
+    {
+        using var generated = new LlvmModuleGenerator().Generate("program", Analyze(source));
+        return generated.ToString();
+    }
+
+    private static int CountNullPointerChecks(string ir) => Regex.Matches(ir, @"^null\.pointer\.failure:", RegexOptions.Multiline).Count;
+
     [Fact]
     public void EmitsImmutableStringAsPointerAndLengthAggregate()
     {

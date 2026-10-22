@@ -114,7 +114,7 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyDictionary<ClassFieldDeclaration, Expression>? fieldInitializers = null)
     {
         var declaredVariables = _declaredVariables.ToList();
-        var definitelyNullVariables = _definitelyNullVariables.ToList();
+        var pointerStates = new Dictionary<VariableSymbol, PointerNullness>(_pointerStates);
         var ownerClass = _currentOwnerClass;
         var isConstructor = _currentIsConstructor;
         var isStaticMethod = _currentIsStaticMethod;
@@ -147,8 +147,9 @@ public sealed partial class SemanticAnalyzer
         {
             _declaredVariables.Clear();
             _declaredVariables.AddRange(declaredVariables);
-            _definitelyNullVariables.Clear();
-            _definitelyNullVariables.UnionWith(definitelyNullVariables);
+            _pointerStates.Clear();
+            foreach (var (variable, nullness) in pointerStates)
+                _pointerStates[variable] = nullness;
             _currentOwnerClass = ownerClass;
             _currentIsConstructor = isConstructor;
             _currentIsStaticMethod = isStaticMethod;
