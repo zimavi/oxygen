@@ -76,7 +76,8 @@ public sealed partial class SemanticAnalyzer
                     initializer.Location);
             if (!CanAssign(type, initializer, actual))
                 throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot initialize '{name}' with {actual}; expected {type}", initializer.Location);
-            value = initializer is UnaryExpression { Operator: TokenKind.Ampersand } && _functionReferences.TryGetValue(initializer, out var address)
+            value = (initializer is UnaryExpression { Operator: TokenKind.Ampersand } or FunctionAddressExpression)
+                && _functionReferences.TryGetValue(initializer, out var address)
                 ? address
                 : ConstantValueOf(initializer);
         }
@@ -118,6 +119,7 @@ public sealed partial class SemanticAnalyzer
     // expression. Anything else, including a name, is not constant.
     private bool IsConstantInitializer(Expression expression) =>
         expression is UnaryExpression { Operator: TokenKind.Ampersand, Operand: IdentifierExpression } ||
+        expression is FunctionAddressExpression ||
         expression is BooleanLiteralExpression or FloatingPointLiteralExpression
         || expression is UnaryExpression { Operator: TokenKind.Minus or TokenKind.Plus, Operand: FloatingPointLiteralExpression }
         || TryGetConstantInteger(expression, out _);

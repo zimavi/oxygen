@@ -167,8 +167,8 @@ module metadata. See [mangling](mangling.md).
   result of a call (`make()(1, 2)`). A field call is a call of the field, not a method
   call.
 - **Addresses.** `&name` takes the address of a free function or of an `@extern`
-  function. A generic function's address needs explicit type arguments, but the syntax
-  for giving them in `&name` is not implemented yet (see below). The address of a class
+  function. `&name<T>` takes the address of a generic function's instance with the type
+  arguments `T`, for example `fn i32 op(i32, i32) = &add<i32>;`. The address of a class
   method is rejected. The address of a function with default
   parameters is rejected, since a function pointer type has no defaults; the call must
   pass every argument.
@@ -177,7 +177,6 @@ module metadata. See [mangling](mangling.md).
 - **Name clashes.** A call `f(...)` where `f` is both a function and a variable of function
   pointer type in scope is an error. The program renames one of them.
 - **Generic addresses.** A generic function's address is taken only with explicit type
-  arguments; they are not inferred from the target type, so a bare generic name is an
-  error. The syntax for the type arguments inside `&name` is not decided yet, so a generic
-  function cannot be made into a function pointer value for now. A generic function can
-  still take function pointer parameters, as in `twice<i32>(5, &inc)`.
+  arguments, `&name<T>`, with as many as the function declares. They are not inferred
+  from the target type, so a bare generic name is an error. `&name<T>` is taken only
+  where no operand can follow its `>`, so `&a < b` is still a comparison.

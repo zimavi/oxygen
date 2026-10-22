@@ -57,21 +57,67 @@ public sealed partial class SemanticAnalyzer
         if (candidates.Any(candidate => candidate.IsGeneric) && candidates.All(candidate => candidate.IsGeneric))
             throw Error($"'{name.Name}' is a generic function; take its address with its type arguments, such as &{name.Name}<i32>", name.Location,
                 name.Name.Length);
-        var usable = candidates.Where(candidate => !candidate.IsGeneric).ToList();
+        return ChooseFunctionAddress(reference, name.Name, name.Location,
+            candidates.Where(candidate => !candidate.IsGeneric).ToList(), expectedType);
+    }
+
+    // `&name<T>` of a generic function. The type arguments specialize the one generic overload of the name, which is then chosen like any other
+    // address. Non-generic overloads of the name are not candidates, as for a call with explicit type arguments.
+    private SemanticType AnalyzeFunctionAddress(
+        FunctionAddressExpression address,
+        Scope scope,
+        string moduleName,
+        IReadOnlyList<ImportDeclaration> imports,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        SemanticType? expectedType)
+    {
+        if (LookupVariableType(scope, address.Name, address.Location) is not null)
+            throw Error($"'{address.Name}' is a variable, not a function", address.Location, address.Name.Length);
+        var candidates = FunctionValueCandidates(address.Name, moduleName, imports, functions);
+        var generics = candidates.Where(candidate => candidate.IsGeneric).ToList();
+        if (generics.Count == 0)
+            throw Error($"'{address.Name}' is not a generic function, so it takes no type arguments", address.Location, address.Name.Length);
+        if (generics.Count > 1)
+            throw Error($"Function '{address.Name}' has ambiguous generic overloads", address.Location, address.Name.Length);
+
+        var generic = generics[0];
+        if (address.TypeArguments.Count != generic.DeclaredGenericParameters.Count)
+            throw Error($"Function '{address.Name}' expects {generic.DeclaredGenericParameters.Count} type argument(s), got {address.TypeArguments.Count}",
+                address.Location, address.Name.Length);
+        var substitutions = generic.DeclaredGenericParameters
+            .Select((typeName, index) => (typeName, type: ResolveType(address.TypeArguments[index])))
+            .ToDictionary(item => item.typeName, item => item.type, StringComparer.Ordinal);
+        var specialized = SpecializeFunction(generic, substitutions, functions, address.Location);
+        AnalyzeSpecialization(specialized, generic, functions, imports, expressionTypes, resolvedCalls);
+        return ChooseFunctionAddress(address, address.Name, address.Location, [specialized], expectedType);
+    }
+
+    // Chooses the function whose address a reference takes, among its usable candidates, and records it for the backend. The overload is the one
+    // whose signature is the function pointer type that the value is given. Without such a type, an overloaded name is an error. A function with
+    // default parameters has no address, since a function pointer type carries no defaults.
+    private SemanticType ChooseFunctionAddress(
+        Expression reference,
+        string name,
+        SourceLocation nameLocation,
+        List<FunctionSymbol> usable,
+        SemanticType? expectedType)
+    {
         if (usable.Count > 0 && usable.All(HasDefaultParameter))
-            throw Error($"'{name.Name}' has default parameters, which a function pointer type cannot carry; pass every argument", name.Location,
-                name.Name.Length);
+            throw Error($"'{name}' has default parameters, which a function pointer type cannot carry; pass every argument", nameLocation,
+                name.Length);
         usable = usable.Where(candidate => !HasDefaultParameter(candidate)).ToList();
         if (expectedType is { IsFunctionPointer: true })
             usable = usable.Where(candidate => FunctionTypeOf(candidate) == expectedType).ToList();
         if (usable.Count == 0)
         {
             var wanted = expectedType is { IsFunctionPointer: true } ? $" with the signature {expectedType}" : string.Empty;
-            throw Error($"No function '{name.Name}'{wanted} can have its address taken here", reference.Location, name.Name.Length);
+            throw Error($"No function '{name}'{wanted} can have its address taken here", reference.Location, name.Length);
         }
         if (usable.Count > 1)
-            throw Error($"'{name.Name}' names {usable.Count} functions; the function pointer type that the value is given must select one",
-                reference.Location, name.Name.Length);
+            throw Error($"'{name}' names {usable.Count} functions; the function pointer type that the value is given must select one",
+                reference.Location, name.Length);
 
         var function = usable[0];
         _usedFunctions.Add(function);

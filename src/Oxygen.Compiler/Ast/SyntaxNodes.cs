@@ -516,3 +516,10 @@ public sealed record IndirectCallExpression(
     Expression Callee,
     IReadOnlyList<Expression> Arguments,
     SourceLocation Location) : Expression(Location);
+
+// The address of a generic function with explicit type arguments, `&name<i32>`. The `&name` form of a function that is not generic is a
+// UnaryExpression of its name, so this node is only for the explicit type arguments.
+public sealed record FunctionAddressExpression(
+    string Name,
+    IReadOnlyList<TypeSyntax> TypeArguments,
+    SourceLocation Location) : Expression(Location);

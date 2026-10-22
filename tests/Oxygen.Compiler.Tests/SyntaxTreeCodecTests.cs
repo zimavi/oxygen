@@ -56,12 +56,14 @@ public sealed class SyntaxTreeCodecTests
     private const string Statements = """
         i32 scale(i32 x, i32 factor = 2) { return x * factor; }
         void note() { return; }
+        T identity<T>(T value) { return value; }
         fn i32 op(i32, i32) = null;
         fn i32 (i32) make() { return null; }
         i32 main() {
             fn i32 (i32 x) { return x + 1; };
             fn i32 ops[2](i32) = null;
             i32 called = ops[0](1);
+            fn i32 generic(i32) = &identity<i32>;
             i32 total = 0;
             i32[2] values = { 1, 2 };
             Child child = new Child(1);

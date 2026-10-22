@@ -279,6 +279,10 @@ public sealed partial class SemanticAnalyzer
             for (var index = 0; index < overloads.Count; index++)
                 if (normalizedFunctions.TryGetValue(overloads[index], out var replacement))
                     overloads[index] = replacement;
+        // The address of a specialized function names its normalized symbol, as a call does, so the backend finds the declaration.
+        foreach (var reference in _functionReferences.ToArray())
+            if (normalizedFunctions.TryGetValue(reference.Value, out var addressed))
+                _functionReferences[reference.Key] = addressed;
         // Covers both the original calls and the calls cloned into specialized bodies; the latter
         // still point at the generic declaration until they are resolved against their receiver.
         foreach (var pair in newResolvedCalls.ToArray())

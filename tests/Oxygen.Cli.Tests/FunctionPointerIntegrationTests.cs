@@ -208,6 +208,49 @@ public sealed class FunctionPointerIntegrationTests : IDisposable
         Assert.Equal(103, run.ExitCode);
     }
 
+    // `&first<i32>` is the address of one instance of a generic function, and its signature is the function pointer type.
+    [SkippableFact]
+    public void AGenericFunctionAddressIsTakenWithItsTypeArguments()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            T first<T>(T a, T b) {
+                return a;
+            }
+
+            i32 main() {
+                fn i32 op(i32, i32) = &first<i32>;
+                return op(2, 3);
+            }
+            """);
+
+        Assert.Equal(2, run.ExitCode);
+    }
+
+    // A lambda in a generic function takes the type arguments of its instance. Two instances at different types in one program are
+    // not covered yet: the second instance's lambda reads its parameter with the first instance's type.
+    [SkippableFact]
+    public void ALambdaInAGenericFunctionTakesTheTypeArgumentsOfItsInstance()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            T pass<T>(T value) {
+                fn T step(T) = fn T (T x) { return x; };
+                return step(value);
+            }
+
+            i32 main() {
+                return pass<i32>(6);
+            }
+            """);
+
+        Assert.Equal(6, run.ExitCode);
+    }
+
     // The generic function takes a function pointer for each case, and each signature names the type parameter of the union.
     [SkippableFact]
     public void AGenericMatchTakesAFunctionPointerForEachCaseOfAUnion()

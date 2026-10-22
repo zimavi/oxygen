@@ -104,7 +104,8 @@ public static class SyntaxTreeCodec
         SwitchStatement,
         TypeAliasDeclaration,
         LambdaExpression,
-        IndirectCallExpression
+        IndirectCallExpression,
+        FunctionAddressExpression
     }
 
     private sealed class Writer
@@ -219,6 +220,7 @@ public static class SyntaxTreeCodec
                 case TypeAliasDeclaration n: Tag(NodeKind.TypeAliasDeclaration); TypeAlias(n); break;
                 case LambdaExpression n: Tag(NodeKind.LambdaExpression); Lambda(n); break;
                 case IndirectCallExpression n: Tag(NodeKind.IndirectCallExpression); Indirect(n); break;
+                case FunctionAddressExpression n: Tag(NodeKind.FunctionAddressExpression); FunctionAddress(n); break;
                 case UnionCaseDeclaration n: Tag(NodeKind.UnionCaseDeclaration); UnionCase(n); break;
                 case UnionDeclaration n: Tag(NodeKind.UnionDeclaration); Union(n); break;
                 case EnumMemberDeclaration n: Tag(NodeKind.EnumMemberDeclaration); EnumMember(n); break;
@@ -528,6 +530,13 @@ public static class SyntaxTreeCodec
         {
             Node(n.Callee);
             Items(n.Arguments, Node);
+            Loc(n.Location);
+        }
+
+        private void FunctionAddress(FunctionAddressExpression n)
+        {
+            Str(n.Name);
+            Items(n.TypeArguments, Node);
             Loc(n.Location);
         }
 
@@ -881,6 +890,7 @@ public static class SyntaxTreeCodec
                 NodeKind.TypeAliasDeclaration => ReadTypeAlias(),
                 NodeKind.LambdaExpression => ReadLambda(),
                 NodeKind.IndirectCallExpression => ReadIndirect(),
+                NodeKind.FunctionAddressExpression => ReadFunctionAddress(),
                 NodeKind.UnionCaseDeclaration => ReadUnionCase(),
                 NodeKind.UnionDeclaration => ReadUnion(),
                 NodeKind.EnumMemberDeclaration => ReadEnumMember(),
@@ -1209,6 +1219,13 @@ public static class SyntaxTreeCodec
             var callee = Typed<Expression>();
             var arguments = Items(Typed<Expression>);
             return new IndirectCallExpression(callee, arguments, Loc());
+        }
+
+        private FunctionAddressExpression ReadFunctionAddress()
+        {
+            var name = Str();
+            var typeArguments = Items(Typed<TypeSyntax>);
+            return new FunctionAddressExpression(name, typeArguments, Loc());
         }
 
         private LambdaExpression ReadLambda()

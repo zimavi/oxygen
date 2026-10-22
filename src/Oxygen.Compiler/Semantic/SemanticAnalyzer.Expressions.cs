@@ -75,6 +75,8 @@ public sealed partial class SemanticAnalyzer
             UnaryExpression { Operator: TokenKind.Ampersand, Operand: IdentifierExpression name } reference
                 when IsFunctionName(name, scope, moduleName, imports, functions) =>
                 AnalyzeFunctionReference(reference, name, expectedType, moduleName, imports, functions),
+            FunctionAddressExpression address => AnalyzeFunctionAddress(
+                address, scope, moduleName, imports, functions, expressionTypes, resolvedCalls, expectedType),
             UnaryExpression unary => AnalyzeUnary(unary, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             LambdaExpression lambda => AnalyzeLambda(lambda, functions, moduleName, imports, expressionTypes, resolvedCalls),
             IndirectCallExpression indirect => AnalyzeIndirectCallExpression(

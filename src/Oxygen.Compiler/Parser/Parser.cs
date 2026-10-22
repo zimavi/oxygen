@@ -1191,6 +1191,13 @@ public sealed partial class Parser
 
     private Expression ParseUnaryExpression()
     {
+        if (Check(TokenKind.Ampersand) && LooksLikeFunctionAddressWithTypeArguments())
+        {
+            var ampersand = Advance();
+            var name = ConsumeIdentifierLike("Expected a function name after '&'.").Lexeme;
+            return new FunctionAddressExpression(name, ParseNamedTypeArguments()!, ampersand.Location);
+        }
+
         if (Check(TokenKind.Bang) || Check(TokenKind.Tilde) || Check(TokenKind.Minus) || Check(TokenKind.Plus)
             || Check(TokenKind.Ampersand) || Check(TokenKind.Star)
             || Check(TokenKind.PlusPlus) || Check(TokenKind.MinusMinus))
@@ -1748,6 +1755,37 @@ public sealed partial class Parser
 
         Consume(TokenKind.GreaterThan, "Expected '>' after generic type arguments.");
         return arguments;
+    }
+
+    // `&name<...>` is the address of a generic function with explicit type arguments. After the closing `>`, the next token must end the
+    // operand: `&a < b` is a comparison, so the form is only taken where no comparison or operand can follow.
+    private bool LooksLikeFunctionAddressWithTypeArguments()
+    {
+        var name = _position + 1;
+        if (name + 1 >= _tokens.Count || _tokens[name].Kind != TokenKind.Identifier || _tokens[name + 1].Kind != TokenKind.LessThan)
+            return false;
+
+        var depth = 0;
+        for (var index = name + 1; index < _tokens.Count; index++)
+        {
+            switch (_tokens[index].Kind)
+            {
+                case TokenKind.LessThan:
+                    depth++;
+                    break;
+                case TokenKind.GreaterThan:
+                    depth--;
+                    if (depth == 0)
+                        return index + 1 < _tokens.Count && _tokens[index + 1].Kind is TokenKind.Semicolon or TokenKind.Comma
+                            or TokenKind.CloseParenthesis or TokenKind.CloseBracket or TokenKind.CloseBrace
+                            or TokenKind.EqualsEquals or TokenKind.BangEquals;
+                    break;
+                case TokenKind.EndOfFile:
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private bool LooksLikeTypeArgumentCall()

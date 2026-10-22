@@ -231,6 +231,27 @@ public sealed partial class SemanticAnalyzer
                 Arguments = item.Arguments.Select(argument =>
                     CloneExpression(argument, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)).ToArray()
             },
+            // A lambda and a call through a function pointer are copied with the type parameters of their generic, so that each instance is
+            // analysed from its own nodes. A shared node would keep the types and functions of the first instance.
+            LambdaExpression item => item with
+            {
+                ReturnType = RewriteTypeSyntax(item.ReturnType, substitutions, aggregateNames),
+                Parameters = item.Parameters.Select(parameter => parameter with
+                {
+                    Type = RewriteTypeSyntax(parameter.Type, substitutions, aggregateNames)
+                }).ToArray(),
+                Body = CloneBlock(item.Body, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)
+            },
+            IndirectCallExpression item => item with
+            {
+                Callee = CloneExpression(item.Callee, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls),
+                Arguments = item.Arguments.Select(argument =>
+                    CloneExpression(argument, substitutions, aggregateNames, expressionTypes, owner, resolvedCalls)).ToArray()
+            },
+            FunctionAddressExpression item => item with
+            {
+                TypeArguments = item.TypeArguments.Select(type => RewriteTypeSyntax(type, substitutions, aggregateNames)).ToArray()
+            },
             _ => source
         };
         if (expressionTypes.TryGetValue(source, out var type))

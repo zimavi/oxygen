@@ -74,9 +74,11 @@ public sealed partial class LlvmModuleGenerator
                 context, builder, binary, values, storage, model, llvmFunctions),
             ConditionalExpression conditional => EmitConditional(
                 context, builder, conditional, values, storage, model, llvmFunctions),
-            // `&name` of a function is the function's address, which the analysis resolved to a function symbol.
+            // `&name` of a function is the function's address, which the analysis resolved to a function symbol. So is `&name<T>`.
             UnaryExpression reference when model.FunctionReferences.ContainsKey(reference) =>
                 llvmFunctions[model.FunctionReferences[reference]],
+            FunctionAddressExpression address when model.FunctionReferences.ContainsKey(address) =>
+                llvmFunctions[model.FunctionReferences[address]],
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
             // `Class<T>.Name` reads a static property of one instance by calling that instance's getter.
             CallExpression bareProperty when model.StaticPropertyGetters.ContainsKey(bareProperty) => EmitStaticPropertyGet(builder,

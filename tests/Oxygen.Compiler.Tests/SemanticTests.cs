@@ -4137,6 +4137,33 @@ public sealed class SemanticTests
         Assert.NotNull(model.MainFunction);
     }
 
+    // `&name<i32>` takes the address of a generic function's instance, whose signature is the function pointer type.
+    [Fact]
+    public void AGenericFunctionAddressIsTakenWithItsTypeArguments()
+    {
+        var model = Analyze("T id<T>(T value) { return value; } i32 main() { fn i32 op(i32) = &id<i32>; return op(3); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    [Fact]
+    public void AGenericFunctionAddressNeedsTypeArgumentsOfTheRightCount()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "T id<T>(T value) { return value; } i32 main() { fn i32 op(i32) = &id<i32, bool>; return op(3); }"));
+
+        Assert.Contains("expects 1 type argument", exception.Message);
+    }
+
+    [Fact]
+    public void ANonGenericFunctionTakesNoTypeArgumentsInAnAddress()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 pick(i32 a) { return a; } i32 main() { fn i32 op(i32) = &pick<i32>; return op(3); }"));
+
+        Assert.Contains("not a generic function", exception.Message);
+    }
+
     // A lambda has no captures, so its body cannot name a local of the function it is written in.
     [Fact]
     public void ALambdaCannotNameALocalOfItsFunction()

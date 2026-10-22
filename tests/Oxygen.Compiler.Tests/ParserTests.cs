@@ -972,6 +972,29 @@ public sealed class ParserTests
         Assert.Equal(PrimitiveType.I32, lambda.ReturnType.Primitive);
     }
 
+    // `&name<i32>` is the address of a generic function. Where no operand can follow its `>`, a comparison is parsed as before.
+    [Fact]
+    public void ParsesTheAddressOfAGenericFunctionWithItsTypeArguments()
+    {
+        var unit = Parse("i32 main() { fn i32 op(i32) = &id<i32>; return 0; }");
+
+        var declaration = Assert.IsType<VariableDeclarationStatement>(unit.Functions[0].Body.Statements[0]);
+        var address = Assert.IsType<FunctionAddressExpression>(declaration.Initializer);
+        Assert.Equal("id", address.Name);
+        Assert.Equal(PrimitiveType.I32, Assert.Single(address.TypeArguments).Primitive);
+    }
+
+    [Fact]
+    public void ParsesAComparisonOfAnAddressAsBeforeAGenericAddress()
+    {
+        var unit = Parse("i32 main() { i32 a = 1; bool c = &a < 2; return 0; }");
+
+        var declaration = Assert.IsType<VariableDeclarationStatement>(unit.Functions[0].Body.Statements[1]);
+        var comparison = Assert.IsType<BinaryExpression>(declaration.Initializer);
+        Assert.Equal(TokenKind.LessThan, comparison.Operator);
+        Assert.IsType<UnaryExpression>(comparison.Left);
+    }
+
     [Theory]
     [InlineData("i32 main() { fn i32 (i32, i32) = null; return 0; }", "Expected a name in a function pointer declaration")]
     [InlineData("i32 apply(fn i32 op(i32 a)) { return 0; } i32 main() { return 0; }", "Expected ')' after the parameter types of a function pointer")]
