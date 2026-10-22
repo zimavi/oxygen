@@ -93,6 +93,44 @@ public sealed class LlvmTests
         Assert.DoesNotContain("-lstdc++", windows);
     }
 
+    // A program records the folder of each shared dependency, so it finds the shared runtime at run time. Static dependencies and the
+    // Windows target record nothing.
+    [Fact]
+    public void ElfProgramsRecordTheFolderOfEachSharedDependency()
+    {
+        var elf = NativeBuildPipeline.CreateLinkArguments("program.o", "program", new NativeBuildOptions
+        {
+            OutputPath = "program",
+            Target = "x86_64-unknown-linux-gnu",
+            UseLld = false,
+            Dependencies =
+            [
+                new NativeDependency(Path.Combine("lib", "liboxygenrt.so"), NativeDependencyKind.Dynamic),
+                new NativeDependency(Path.Combine("lib", "liboxygenstd.so"), NativeDependencyKind.Dynamic),
+                new NativeDependency(Path.Combine("other", "libstatic.a"), NativeDependencyKind.Static)
+            ]
+        }).ToList();
+
+        var folder = Path.GetFullPath("lib");
+        Assert.Equal(["-Wl,-rpath", $"-Wl,{folder}"], elf.Skip(elf.IndexOf("-Wl,-rpath")).Take(2));
+        Assert.Equal(1, elf.Count(argument => argument == "-Wl,-rpath"));
+        Assert.DoesNotContain($"-Wl,{Path.GetFullPath("other")}", elf);
+    }
+
+    [Fact]
+    public void WindowsProgramsRecordNoRunPath()
+    {
+        var windows = NativeBuildPipeline.CreateLinkArguments("program.o", "program", new NativeBuildOptions
+        {
+            OutputPath = "program",
+            Target = "x86_64-pc-windows-msvc",
+            UseLld = false,
+            Dependencies = [new NativeDependency("oxygenrt.lib", NativeDependencyKind.Dynamic)]
+        });
+
+        Assert.DoesNotContain(windows, argument => argument.Contains("rpath"));
+    }
+
     [Theory]
     [InlineData(true, true)]
     [InlineData(false, false)]
