@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using LLVMSharp.Interop;
 using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Lexer;
@@ -321,6 +322,21 @@ public sealed class LlvmTests
                 $$"""{"formatVersion":{{formatVersion}},"moduleName":"program","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}"""));
 
         Assert.Contains("Unsupported native metadata format version", exception.Message);
+    }
+
+    // Every dereference checks its pointer for null before the load: a dereference of a pointer parameter, a write, and an index all
+    // branch to the null pointer failure. Without std.exception the failure is the runtime's stop, which exits with code 101.
+    [Fact]
+    public void ChecksEveryPointerBeforeItIsDereferenced()
+    {
+        var model = Analyze(
+            "i32 read(i32* p) { return *p; } void write(i32* p) { *p = 1; } i32 index(i32* p) { return p[1]; } i32 main() { return 0; }");
+
+        using var generated = new LlvmModuleGenerator().Generate("program", model);
+        var ir = generated.ToString();
+
+        Assert.Equal(3, Regex.Matches(ir, @"br i1 %null\.pointer, label %null\.pointer\.failure").Count);
+        Assert.Contains("call void @__oxygen_runtime_null_pointer_failure()", ir);
     }
 
     [Fact]

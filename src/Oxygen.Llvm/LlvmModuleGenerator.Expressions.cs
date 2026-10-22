@@ -285,7 +285,7 @@ public sealed partial class LlvmModuleGenerator
             return EmitStringByteAddress(context, builder, index, values, storage, model, llvmFunctions);
         if (targetType.IsPointer)
         {
-            var pointerValue = EmitExpression(context, builder, index.Target, values, storage, model, llvmFunctions);
+            var pointerValue = EmitCheckedPointer(context, builder, index.Target, values, storage, model, llvmFunctions);
             var pointerIndex = EmitExpression(context, builder, index.Index, values, storage, model, llvmFunctions);
             pointerIndex = ExtendIndexToInt64(builder, pointerIndex, model.ExpressionTypes[index.Index], "pointer.index");
             return builder.BuildGEP2(ToLlvmType(targetType.Pointee!, model), pointerValue,

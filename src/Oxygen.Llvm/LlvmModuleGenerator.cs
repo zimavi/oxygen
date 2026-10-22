@@ -47,6 +47,7 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef _exceptionEndCatch;
     private LLVMValueRef _exceptionRethrow;
     private LLVMValueRef _nullReferenceFailure;
+    private LLVMValueRef _nullPointerFailure;
     private LLVMValueRef _exceptionUnhandled;
     private LLVMValueRef _tracePush;
     private LLVMValueRef _tracePop;
@@ -228,6 +229,8 @@ public sealed partial class LlvmModuleGenerator
             _exceptionRethrow = DeclareNativeFunction(module, "__oxygen_runtime_rethrow",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             _nullReferenceFailure = DeclareNativeFunction(module, "__oxygen_runtime_null_reference_failure",
+                LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
+            _nullPointerFailure = DeclareNativeFunction(module, "__oxygen_runtime_null_pointer_failure",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             _exceptionUnhandled = DeclareNativeFunction(module, "__oxygen_runtime_unhandled_object",
                 LLVMTypeRef.CreateFunction(_context.VoidType,

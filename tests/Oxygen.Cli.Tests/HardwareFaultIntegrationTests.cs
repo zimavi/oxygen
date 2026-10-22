@@ -16,8 +16,10 @@ public sealed class HardwareFaultIntegrationTests : IDisposable
             Directory.Delete(_directory, recursive: true);
     }
 
+    // A null pointer is checked before it is dereferenced (see NullPointerIntegrationTests), so this write is to an address that is not
+    // null and not mapped, which the hardware reports as a fault.
     [SkippableFact]
-    public void AWriteThroughANullPointerIsNotCaughtAndStopsTheProgram()
+    public void AWriteThroughAnUnmappedPointerIsNotCaughtAndStopsTheProgram()
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "Hardware faults are reported by the Windows fault handler.");
         NativeProgram.RequireNativeToolchain();
@@ -28,7 +30,7 @@ public sealed class HardwareFaultIntegrationTests : IDisposable
 
             i32 main() {
                 try {
-                    i32* p = null;
+                    i32* p = cast<i32*>(cast<usize>(8));
                     p[0] = 5;
                     io.println(0);
                 } catch {

@@ -49,21 +49,54 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var isNull = builder.BuildIsNull(reference, "null.reference");
-        var failure = _currentFunction.AppendBasicBlock("null.reference.failure");
-        var valid = _currentFunction.AppendBasicBlock("null.reference.valid");
+        EmitNullBranch(builder, isNull, "null.reference", model,
+            message: $"The member '{memberName}' was {access} through a null class reference.",
+            stop: _nullReferenceFailure, llvmFunctions);
+    }
+
+    // A pointer that is dereferenced is checked the same way: a null pointer raises a NullReferenceException, and a build without
+    // std.exception stops the program. The access continues in the valid block.
+    private void EmitNullPointerCheck(
+        LLVMBuilderRef builder, LLVMValueRef pointer, SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var isNull = builder.BuildIsNull(pointer, "null.pointer");
+        EmitNullBranch(builder, isNull, "null.pointer", model,
+            message: "A null pointer was dereferenced.",
+            stop: _nullPointerFailure, llvmFunctions);
+    }
+
+    // The value of a pointer expression that is about to be dereferenced, after its null check. Every dereference uses this, so the
+    // check cannot be missed by a new site.
+    private LLVMValueRef EmitCheckedPointer(
+        LLVMContextRef context, LLVMBuilderRef builder, Expression pointer,
+        IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var value = EmitExpression(context, builder, pointer, values, storage, model, llvmFunctions);
+        EmitNullPointerCheck(builder, value, model, llvmFunctions);
+        return value;
+    }
+
+    // Branches to a failure block when `isNull` holds, and continues in a valid block otherwise. The failure block raises a
+    // NullReferenceException with `message` when std.exception is loaded. Without it (a build with --no-std) there is no exception to
+    // throw, so the block calls the `stop` runtime failure, which ends the program.
+    private void EmitNullBranch(
+        LLVMBuilderRef builder, LLVMValueRef isNull, string name, SemanticModel model, string message, LLVMValueRef stop,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var failure = _currentFunction.AppendBasicBlock($"{name}.failure");
+        var valid = _currentFunction.AppendBasicBlock($"{name}.valid");
         builder.BuildCondBr(isNull, failure, valid);
 
         builder.PositionAtEnd(failure);
-        // Without std.exception (a build with --no-std) there is no exception to throw, so the program stops, as a runtime failure does.
         if (!model.Classes.ContainsKey(NullReferenceClassName))
         {
-            builder.BuildCall2(_nullReferenceFailure.FunctionType, _nullReferenceFailure, Array.Empty<LLVMValueRef>(),
-                (ReadOnlySpan<char>)string.Empty);
+            builder.BuildCall2(stop.FunctionType, stop, Array.Empty<LLVMValueRef>(), (ReadOnlySpan<char>)string.Empty);
             builder.BuildUnreachable();
         }
         else
         {
-            var message = $"The member '{memberName}' was {access} through a null class reference.";
             EmitThrowObject(builder, EmitNullReferenceException(builder, message, model, llvmFunctions));
         }
         builder.PositionAtEnd(valid);
