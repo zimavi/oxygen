@@ -257,13 +257,13 @@ public sealed partial class Parser
             {
                 if (isStatic)
                     throw Error("A constructor cannot be static.", Current);
-                RejectMemberAnnotations(memberAnnotations, "constructors");
+                ValidateConstructorAnnotations(memberAnnotations);
                 var constructorLocation = Current.Location;
                 Advance();
                 var parameters = ParseParameters();
                 var initializer = ParseConstructorInitializer();
                 constructors.Add(new ConstructorDeclaration(name, parameters, ParseBlock(), memberVisibility,
-                    constructorLocation) { Initializer = initializer });
+                    constructorLocation) { Initializer = initializer, Annotations = memberAnnotations });
                 continue;
             }
 
@@ -341,6 +341,18 @@ public sealed partial class Parser
         if (type.NamedType is null || type.IsPointer || type.IsArray || type.IsString)
             throw Error(message, Current);
         return type;
+    }
+
+    // A constructor takes @nothrow and nothing else.
+    private void ValidateConstructorAnnotations(IReadOnlyList<AnnotationSyntax> annotations)
+    {
+        foreach (var annotation in annotations)
+        {
+            if (annotation.Name != "nothrow")
+                throw Error($"Annotation '@{annotation.Name}' is not supported on constructors.", Current);
+            if (annotation.Arguments.Count != 0)
+                throw Error("Annotation '@nothrow' does not accept arguments.", Current);
+        }
     }
 
     // Annotations are accepted on methods only. A member that is not a method names the annotation it cannot take.

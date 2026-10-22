@@ -148,6 +148,8 @@ public sealed record ConstructorDeclaration(
     SourceLocation Location) : SyntaxNode(Location)
 {
     public ConstructorInitializer? Initializer { get; init; }
+    public IReadOnlyList<AnnotationSyntax>? Annotations { get; init; }
+    public IReadOnlyList<AnnotationSyntax> DeclaredAnnotations => Annotations ?? [];
 }
 
 public sealed record DestructorDeclaration(

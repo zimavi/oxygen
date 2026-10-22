@@ -41,6 +41,9 @@ public sealed record ConstructorSymbol(
     bool IsSynthesized = false)
 {
     public bool AcceptsArgumentCount(int count) => ParameterCounts.Accepts(Parameters, count);
+
+    // A @nothrow constructor promises that creating an object with it never throws (docs/exceptions.md).
+    public bool DeclaresNoThrow => Declaration.DeclaredAnnotations.Any(annotation => annotation.Name == "nothrow");
 }
 public sealed record ClassSymbol(
     string Name,

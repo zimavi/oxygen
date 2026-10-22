@@ -57,8 +57,8 @@ public sealed partial class SemanticAnalyzer
                     throw Error($"'{callee.Name}' may throw, so a @nothrow function cannot call it", call.Location, call.Name.Length);
                 break;
             case NewExpression or ClassConstructionExpression:
-                if (expressionTypes.TryGetValue(expression, out var created) && HasConstructor(created))
-                    throw Error($"Creating '{created.StructName}' runs its constructor, which may throw", expression.Location);
+                if (expressionTypes.TryGetValue(expression, out var created) && MayThrowOnConstruction(created))
+                    throw Error($"Creating '{created.StructName}' runs a constructor that may throw", expression.Location);
                 break;
             case MemberAccessExpression access:
                 if (expressionTypes.TryGetValue(access.Target, out var target) && IsPropertyOf(target, access.MemberName))
@@ -105,8 +105,65 @@ public sealed partial class SemanticAnalyzer
             && cls.Destructor is not null;
     }
 
-    private bool HasConstructor(SemanticType type) =>
-        type.IsClass && type.StructName is { } name && _classesByName.TryGetValue(name, out var cls) && cls.Constructors.Count > 0;
+    // Creating an object runs the constructors of its class and of its bases, so it may throw unless every one of them is @nothrow.
+    private bool MayThrowOnConstruction(SemanticType type)
+    {
+        if (!type.IsClass || type.StructName is not { } name || !_classesByName.TryGetValue(name, out var cls))
+            return false;
+        return ChainMayThrow(cls);
+    }
+
+    // Creating an object of the class runs the constructors of the whole chain of its bases.
+    private bool ChainMayThrow(ClassSymbol cls)
+    {
+        for (var current = cls; current is not null; current = BaseClassOf(current))
+        {
+            if (ConstructionMayThrow(current))
+                return true;
+        }
+        return false;
+    }
+
+    // The construction of one class by its own constructors may throw when a declared constructor is not @nothrow. A class without declared
+    // constructors has a synthesized one, which runs the field initializers, so it may throw when one of them is not a literal.
+    private bool ConstructionMayThrow(ClassSymbol cls)
+    {
+        if (cls.Constructors.Any(constructor => !constructor.IsSynthesized && !constructor.DeclaresNoThrow))
+            return true;
+        return cls.Constructors.Any(constructor => constructor.IsSynthesized) && HasNonLiteralFieldInitializer(cls);
+    }
+
+    private bool HasNonLiteralFieldInitializer(ClassSymbol cls) =>
+        cls.Fields.Where(field => cls.DeclaresField(field.Name)).Any(field =>
+            (_fieldInitializerOverrides?.GetValueOrDefault(field.Declaration) ?? field.Declaration.Initializer) is { } initializer
+            && initializer is not (IntegerLiteralExpression or FloatingPointLiteralExpression or StringLiteralExpression
+                or BooleanLiteralExpression or NullLiteralExpression));
+
+    // A @nothrow constructor runs its field initializers, which are checked as expressions, and its body, which is checked as a function.
+    // It may not chain to another constructor, and it may not run a base class's constructor, which may throw.
+    private void CheckNoThrowConstructor(
+        ConstructorDeclaration constructor,
+        ClassSymbol owner,
+        IDictionary<Expression, SemanticType> expressionTypes,
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+    {
+        if (constructor.Initializer is not null)
+            throw Error("A @nothrow constructor cannot chain to another constructor, since that one may throw",
+                constructor.Initializer.Location, 1);
+        if (owner.BaseTypeName is not null && BaseClassOf(owner) is { } baseClass && ChainMayThrow(baseClass))
+            throw Error($"A @nothrow constructor cannot run the constructor of its base class '{baseClass.Name}', which may throw",
+                constructor.Location, 1);
+        foreach (var field in owner.Fields.Where(field => owner.DeclaresField(field.Name)))
+        {
+            var initializer = _fieldInitializerOverrides?.GetValueOrDefault(field.Declaration) ?? field.Declaration.Initializer;
+            if (initializer is null)
+                continue;
+            foreach (var expression in EnumerateExpressions(initializer))
+                CheckNoThrowExpression(expression, expressionTypes, resolvedCalls);
+        }
+    }
+
+
 
     private bool IsPropertyOf(SemanticType type, string name) =>
         type.IsClass && type.StructName is { } className && _classesByName.ContainsKey(className)

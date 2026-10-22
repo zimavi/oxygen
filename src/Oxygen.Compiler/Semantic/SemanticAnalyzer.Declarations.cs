@@ -16,7 +16,8 @@ public sealed partial class SemanticAnalyzer
             constructor.Declaration.Parameters,
             constructor.Declaration.Body,
             constructor.Visibility,
-            constructor.Declaration.Location);
+            constructor.Declaration.Location,
+            Annotations: constructor.Declaration.DeclaredAnnotations);
         return new FunctionSymbol(
             constructor.ClassName,
             SemanticType.FromPrimitive(PrimitiveType.Void),

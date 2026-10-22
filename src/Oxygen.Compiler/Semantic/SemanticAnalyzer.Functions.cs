@@ -118,6 +118,8 @@ public sealed partial class SemanticAnalyzer
                 expressionTypes, resolvedCalls);
             AnalyzeConstructorInitializer(constructor, _currentOwnerClass, initializerScope, functions, moduleName,
                 imports, expressionTypes, resolvedCalls);
+            if (constructor.DeclaredAnnotations.Any(annotation => annotation.Name == "nothrow"))
+                CheckNoThrowConstructor(constructor, _currentOwnerClass, expressionTypes, resolvedCalls);
         }
         AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         // A non-void function must not reach its end. Reachability follows every path, including switch fall-through,

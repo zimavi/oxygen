@@ -13,7 +13,8 @@ public sealed partial class LlvmModuleGenerator
             ClassSymbol cls, ConstructorSymbol ctor, SemanticModel model,
             IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        if (_usesExceptions)
+        _noThrowFunction = ctor.DeclaresNoThrow;
+        if (UnwindsHere)
             function.PersonalityFn = _personality;
         var entry = function.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
