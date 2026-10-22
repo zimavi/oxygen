@@ -54,7 +54,8 @@ public sealed partial class LlvmModuleGenerator
         LLVMBuilderRef builder, CatchableFailure failure, SemanticModel model, LLVMValueRef runtimeHook, LLVMValueRef[] runtimeArguments,
         LLVMValueRef first, LLVMValueRef second)
     {
-        if (!model.Classes.ContainsKey(DescribeFailure(failure).ClassName))
+        // Without exceptions, or in a @nothrow function, the failure stops the program: nothing may throw from there.
+        if (!_usesExceptions || _noThrowFunction || !model.Classes.ContainsKey(DescribeFailure(failure).ClassName))
         {
             BuildNoThrowCall(builder, runtimeHook, runtimeArguments);
             return;

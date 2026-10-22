@@ -12,10 +12,13 @@ public sealed partial class LlvmModuleGenerator
 {
     // The target of the module. It is the host's target unless one is given.
     private readonly OxygenTarget _target;
+    // False for a program built with --no-exceptions: no exception machinery is emitted, and a throw ends the program.
+    private readonly bool _exceptionsEnabled;
 
-    public LlvmModuleGenerator(OxygenTarget? target = null)
+    public LlvmModuleGenerator(OxygenTarget? target = null, bool exceptions = true)
     {
         _target = target ?? OxygenTarget.Host;
+        _exceptionsEnabled = exceptions;
     }
 
     private LLVMValueRef _arrayBoundsFailure;
@@ -51,6 +54,7 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef _nullReferenceFailure;
     private LLVMValueRef _nullPointerFailure;
     private LLVMValueRef _exceptionUnhandled;
+    private LLVMValueRef _unhandledInstance;
     private LLVMValueRef _tracePush;
     private LLVMValueRef _tracePop;
     private LLVMValueRef _traceDepth;
@@ -148,8 +152,9 @@ public sealed partial class LlvmModuleGenerator
             var llvmFunctions = new Dictionary<FunctionSymbol, LLVMValueRef>();
 
             // Null-reference checks can raise NullReferenceException from any class member access, and std.exception is always
-            // loaded, so every module needs the exception runtime.
-            _usesExceptions = true;
+            // loaded, so every module of a program with exceptions needs the exception runtime. A program without them has none.
+            _usesExceptions = _exceptionsEnabled;
+            _noThrowFunction = false;
             _usesWindowsSeh = _usesExceptions && _target.UsesSeh;
 
             _classTypes.Clear();
@@ -192,6 +197,9 @@ public sealed partial class LlvmModuleGenerator
                 // Externals that name the same C symbol with the same signature (from_c_string in two stdlib modules)
                 // share one declaration.
                 llvmFunctions[symbol] = DeclareNativeFunction(module, name, functionType);
+                if (symbol.DeclaresNoReturn)
+                    llvmFunctions[symbol].AddAttributeAtIndex(LLVMAttributeIndex.LLVMAttributeFunctionIndex,
+                        CreateEnumAttribute(context, "noreturn"));
             }
             DeclareGlobalVariables(module, model, moduleName, library, llvmFunctions);
             foreach (var iface in concreteInterfaces)
@@ -238,6 +246,9 @@ public sealed partial class LlvmModuleGenerator
             _nullPointerFailure = DeclareNativeFunction(module, "__oxygen_runtime_null_pointer_failure",
                 LLVMTypeRef.CreateFunction(_context.VoidType, [], false));
             _exceptionUnhandled = DeclareNativeFunction(module, "__oxygen_runtime_unhandled_object",
+                LLVMTypeRef.CreateFunction(_context.VoidType,
+                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
+            _unhandledInstance = DeclareNativeFunction(module, "__oxygen_runtime_unhandled_instance",
                 LLVMTypeRef.CreateFunction(_context.VoidType,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false));
             _tracePush = DeclareNativeFunction(module, "__oxygen_runtime_trace_push",
@@ -399,12 +410,16 @@ public sealed partial class LlvmModuleGenerator
 
     // LLVM reads this as an enum attribute, the one clang emits for -fno-delete-null-pointer-checks. A string attribute with the
     // same name is ignored.
-    private static unsafe LLVMAttributeRef CreateNullPointerIsValidAttribute(LLVMContextRef context)
+    private static LLVMAttributeRef CreateNullPointerIsValidAttribute(LLVMContextRef context) =>
+        CreateEnumAttribute(context, "null_pointer_is_valid");
+
+    // An enum attribute by its LLVM name, such as noreturn.
+    private static unsafe LLVMAttributeRef CreateEnumAttribute(LLVMContextRef context, string name)
     {
-        ReadOnlySpan<byte> name = "null_pointer_is_valid"u8;
-        fixed (byte* pointer = name)
+        var bytes = System.Text.Encoding.ASCII.GetBytes(name);
+        fixed (byte* pointer = bytes)
             return context.CreateEnumAttribute(
-                LLVM.GetEnumAttributeKindForName((sbyte*)pointer, (nuint)name.Length), 0);
+                LLVM.GetEnumAttributeKindForName((sbyte*)pointer, (nuint)bytes.Length), 0);
     }
 
     private static string ConstructorKey(ClassSymbol cls, ConstructorSymbol ctor) =>

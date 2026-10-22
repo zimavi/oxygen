@@ -20,7 +20,7 @@ public sealed partial class LlvmModuleGenerator
         _unwindBlock = default;
         _unwindPad = default;
         _unwindLandingPad = default;
-        if (!_usesExceptions || !DeclaresOwnedLocal(body, model))
+        if (!UnwindsHere || !DeclaresOwnedLocal(body, model))
             return;
 
         _unwindBlock = _currentFunction.AppendBasicBlock("unwind.cleanup");

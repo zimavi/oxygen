@@ -226,7 +226,8 @@ public sealed partial class LlvmModuleGenerator
         LLVMValueRef[] arguments,
         string resultName)
     {
-        if (_exceptionContexts.Count == 0)
+        // A call in a @nothrow function is a plain call: nothing it calls can throw, and there is nothing to unwind to.
+        if (_noThrowFunction || _exceptionContexts.Count == 0)
             return builder.BuildCall2(functionType, target, arguments, resultName);
 
         var exceptionContext = _exceptionContexts.Peek();

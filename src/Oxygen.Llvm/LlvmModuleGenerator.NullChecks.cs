@@ -91,7 +91,8 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildCondBr(isNull, failure, valid);
 
         builder.PositionAtEnd(failure);
-        if (!model.Classes.ContainsKey(NullReferenceClassName))
+        // Without exceptions, or in a @nothrow function, the check stops the program: nothing may throw from there.
+        if (!_usesExceptions || _noThrowFunction || !model.Classes.ContainsKey(NullReferenceClassName))
         {
             builder.BuildCall2(stop.FunctionType, stop, Array.Empty<LLVMValueRef>(), (ReadOnlySpan<char>)string.Empty);
             builder.BuildUnreachable();

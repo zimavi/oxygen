@@ -413,6 +413,13 @@ public sealed partial class LlvmModuleGenerator
                 return true;
             case ExpressionStatement expression:
                 EmitExpression(context, builder, expression.Expression, values, storage, model, llvmFunctions);
+                // A call to a @noreturn function never returns, so the block ends at the call.
+                if (expression.Expression is CallExpression call && model.ResolvedCalls.TryGetValue(call, out var callee)
+                    && callee.DeclaresNoReturn)
+                {
+                    builder.BuildUnreachable();
+                    return true;
+                }
                 return false;
             case BlockStatement block:
                 var blockParentDepth = _ownedScopes.Count;
@@ -817,6 +824,10 @@ public sealed partial class LlvmModuleGenerator
                     }
                     return false;
                 }
+            case ThrowStatement { Value: null } when !_usesExceptions:
+                // A catch clause is not emitted without exceptions, so there is no object to continue throwing.
+                builder.BuildUnreachable();
+                return true;
             case ThrowStatement { Value: null }:
                 // `throw;` continues the unwinding of the object of the innermost catch clause. It is the same object, and it keeps the
                 // trace captured at its original throw, so no new exception is created and no trace is captured.
@@ -825,6 +836,8 @@ public sealed partial class LlvmModuleGenerator
             case ThrowStatement throwStatement:
                 {
                     var thrown = EmitExpression(context, builder, throwStatement.Value!, values, storage, model, llvmFunctions);
+                    if (!_usesExceptions)
+                        return EmitUnhandledThrow(builder, thrown);
                     EmitThrowObject(builder, thrown);
                     return true;
                 }
@@ -848,6 +861,11 @@ public sealed partial class LlvmModuleGenerator
         SemanticType emittedReturnType,
         Stack<(LLVMBasicBlockRef Break, LLVMBasicBlockRef Continue, int ScopeDepth, bool IsLoop)> loops)
     {
+        // A try statement in a @nothrow function has nothing to catch, so it is lowered like one without exceptions.
+        if (!UnwindsHere)
+            return EmitTryWithoutExceptions(context, builder, function, statement, values, storage, model, llvmFunctions,
+                emittedReturnType, loops);
+
         if (_usesWindowsSeh)
             return EmitWindowsSehTryStatement(context, builder, function, statement, values, storage,
                 model, llvmFunctions, emittedReturnType, loops);

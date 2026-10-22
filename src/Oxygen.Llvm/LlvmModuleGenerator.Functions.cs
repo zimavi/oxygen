@@ -169,6 +169,7 @@ public sealed partial class LlvmModuleGenerator
         builder.PositionAtEnd(entry);
         EmitTracePush(builder, cls.Name, cls.ModuleName, cls.Destructor!.Location);
         _currentFunction = function;
+        _noThrowFunction = false;
         var values = new Dictionary<string, LLVMValueRef> { ["this"] = function.GetParam(0) };
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         InitializeClassFieldStorage(builder, values, storage, cls, model);
@@ -187,7 +188,7 @@ public sealed partial class LlvmModuleGenerator
         SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        var runtimeInitializeType = LLVMTypeRef.CreateFunction(_context.VoidType, [], false);
+        var runtimeInitializeType = LLVMTypeRef.CreateFunction(_context.VoidType, [_context.Int64Type], false);
         var runtimeInitialize = DeclareNativeFunction(module, "__oxygen_runtime_initialize", runtimeInitializeType);
         var argvType = LLVMTypeRef.CreatePointer(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), 0);
         var nativeMainType = LLVMTypeRef.CreateFunction(_context.Int32Type, [_context.Int32Type, argvType], false);
@@ -199,7 +200,8 @@ public sealed partial class LlvmModuleGenerator
 
         var entry = nativeMain.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
-        builder.BuildCall2(runtimeInitializeType, runtimeInitialize, []);
+        builder.BuildCall2(runtimeInitializeType, runtimeInitialize,
+            [LLVMValueRef.CreateConstInt(_context.Int64Type, _exceptionsEnabled ? ExceptionsEnabledFlag : 0, false)]);
 
         var oxygenMain = model.MainFunction
             ?? throw new InvalidOperationException("Semantic model does not contain a main function.");
@@ -279,7 +281,8 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         _currentFunction = function;
-        if (_usesExceptions)
+        _noThrowFunction = symbol.DeclaresNoThrow;
+        if (UnwindsHere)
             function.PersonalityFn = _personality;
         var entry = function.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
@@ -380,9 +383,10 @@ public sealed partial class LlvmModuleGenerator
         EndUnwindCleanup(model);
     }
 
+    // A @nothrow function has no trace frame: nothing in it can throw, so no exception that is reported can have it on its trace.
     private void EmitTracePush(LLVMBuilderRef builder, string functionName, string fileName, SourceLocation location)
     {
-        if (!_usesExceptions)
+        if (!UnwindsHere)
             return;
         var functionNameValue = builder.BuildGlobalStringPtr(functionName, "oxygen.trace.function");
         var fileNameValue = builder.BuildGlobalStringPtr(fileName, "oxygen.trace.file");
@@ -394,7 +398,7 @@ public sealed partial class LlvmModuleGenerator
 
     private void EmitTracePop(LLVMBuilderRef builder)
     {
-        if (_usesExceptions)
+        if (UnwindsHere)
             builder.BuildCall2(_tracePop.FunctionType, _tracePop, []);
     }
 
