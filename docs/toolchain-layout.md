@@ -99,16 +99,30 @@ no warning, and that the program prints `i` and exits with 7. CI runs it after e
 
 ## Releases
 
-A release is made by pushing a tag `v<version>`, where `<version>` is the content of `VERSION`.
-`.github/workflows/release.yml` checks the tag against `VERSION` and fails when they differ. It
-then builds an installation on a Windows runner and on a Linux runner, checks it, and packs it:
+A release is made when `VERSION` changes on `master`. `.github/workflows/release.yml` then builds
+an installation on a Windows runner and on a Linux runner, checks each one, and packs it:
 
 - `oxygen-<version>-windows-x86_64.zip`
 - `oxygen-<version>-linux-x86_64.tar.gz`
 
 Each archive holds one folder named after the archive, with `bin`, `lib` and `share` inside it. The
-release gets both archives and a `SHA256SUMS` file, which lists the SHA-256 hash of each archive.
-The release notes are generated from the commits since the previous release.
+release is named `v<version>`, and the workflow creates its tag at the commit it built, only after
+every archive has built. The release gets both archives and a `SHA256SUMS` file, which lists the
+SHA-256 hash of each archive. The release notes are generated from the commits since the previous
+release.
+
+A version that already has a release is not built again, so a run that repeats does nothing. A run
+that failed after the tag was made builds the tagged commit, not the one it started from. The
+workflow can also be started by hand from the Actions tab, on `master` only.
+
+Nightly builds (`.github/workflows/nightly.yml`) run every night at 03:17 UTC. They build the same
+archives, named `oxygen-<version>-nightly.<yyyymmdd>-<platform>`, and publish a prerelease named
+`nightly-<yyyymmdd>`. The release notes are a changelog of the commits since the previous nightly,
+grouped by conventional commit type: breaking changes, features, fixes, and other changes. A night
+is skipped when no commit has come since the previous nightly, or when its prerelease exists.
+`VERSION` does not change for a nightly.
+
+Both workflows call `.github/workflows/build-archives.yml`, which holds the matrix.
 
 CI (`.github/workflows/ci.yml`) runs the same install scripts on each push to `master` and on each
 pull request into `master`, then the test suites, then the check of the installed prefix.
@@ -136,4 +150,4 @@ What is not done yet:
 
 - **Target.** The scripts build the host target only. The release matrix has two targets, and
   ARM64 targets need a backend target entry, a runtime and standard library build, and a runner.
-- **Nightly builds and uninstall** are later steps of the plan.
+- **Uninstall** is a later step of the plan.
