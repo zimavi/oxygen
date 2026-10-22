@@ -207,7 +207,11 @@ internal static class BuildCommand
             return ExitCodes.SourceError;
         }
 
-        var resolved = ResolveModules(input.Sources, !result.GetValue(NoStd));
+        // The native libraries of --stdlib are read before the sources are resolved, since the modules they provide are not loaded from source.
+        if (!TryLoadNativeModules(result, target, input.Sources, formatter, useColor, out var externalModules))
+            return ExitCodes.SourceError;
+        var providedModules = externalModules.Select(module => module.ModuleName).ToHashSet(StringComparer.Ordinal);
+        var resolved = ResolveModules(input.Sources, !result.GetValue(NoStd), providedModules);
         if (resolved.Diagnostics.Count > 0)
         {
             Display(resolved.Diagnostics,
@@ -217,38 +221,6 @@ internal static class BuildCommand
             return ExitCodes.SourceError;
         }
         var sources = resolved.Sources;
-
-        var externalModules = new List<ExternalModuleDeclaration>();
-        foreach (var modulePath in result.GetValue(StandardLibrary) ?? [])
-        {
-            try
-            {
-                var loaded = NativeModuleLoader.Load(modulePath, target);
-                if (loaded is null)
-                    continue;
-                externalModules.Add(loaded.Module);
-                if (loaded.Warnings.Count > 0)
-                {
-                    var warningBag = new DiagnosticBag();
-                    foreach (var warning in loaded.Warnings)
-                        warningBag.Add(DiagnosticPhase.Metadata, DiagnosticSeverity.Warning, warning, new SourceLocation(1, 1),
-                            sourceName: modulePath.FullName);
-                    Display(warningBag.Diagnostics, sources, formatter, useColor);
-                }
-            }
-            catch (Exception exception) when (exception is InvalidDataException or IOException)
-            {
-                var diagnostics = new DiagnosticBag();
-                diagnostics.Add(
-                    DiagnosticPhase.Metadata,
-                    DiagnosticSeverity.Error,
-                    exception.Message,
-                    new SourceLocation(1, 1),
-                    sourceName: modulePath.FullName);
-                Display(diagnostics.Diagnostics, sources, formatter, useColor);
-                return ExitCodes.SourceError;
-            }
-        }
 
         var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
             {
@@ -501,8 +473,28 @@ internal static class BuildCommand
         var runtimeKind = RuntimeKindOf(runtimePath, target)
             ?? throw new InvalidOperationException($"The runtime '{runtimePath}' was not checked before linking.");
         var dependencies = new List<NativeDependency> { new(runtimePath, runtimeKind) };
-        dependencies.AddRange((result.GetValue(StandardLibrary) ?? [])
-            .Select(path => new NativeDependency(path.FullName, NativeDependencyKind.Dynamic)));
+        // A shared library is linked through its import library on Windows. The import library sits beside the DLL, which is the file
+        // that --stdlib names, since the DLL holds the metadata.
+        foreach (var standardLibrary in result.GetValue(StandardLibrary) ?? [])
+        {
+            var linked = target.Triple.Contains("-windows-", StringComparison.Ordinal) &&
+                standardLibrary.Extension.Equals(".dll", StringComparison.OrdinalIgnoreCase)
+                    ? Path.ChangeExtension(standardLibrary.FullName, ".lib")
+                    : standardLibrary.FullName;
+            if (!File.Exists(linked))
+            {
+                var libraryDiagnostics = new DiagnosticBag();
+                libraryDiagnostics.Add(
+                    DiagnosticPhase.Toolchain,
+                    DiagnosticSeverity.Error,
+                    $"No library to link for '{standardLibrary.FullName}': '{linked}' was not found. Build the library with " +
+                    "--dynamic, which writes the import library beside a DLL on Windows.",
+                    new SourceLocation(1, 1));
+                Display(libraryDiagnostics.Diagnostics, sources, formatter, useColor);
+                return ExitCodes.ToolchainFailure;
+            }
+            dependencies.Add(new NativeDependency(linked, NativeDependencyKind.Dynamic));
+        }
 
         var keepTemporaryFiles = result.GetValue(KeepTemps);
         var temporaryDirectory = keepTemporaryFiles
@@ -597,12 +589,58 @@ internal static class BuildCommand
     }
 
     private static (IReadOnlyList<SourceText> Sources, IReadOnlyList<CompilationUnit> Units, IReadOnlyList<Diagnostic> Diagnostics)
-        ResolveModules(IReadOnlyList<SourceText> rootSources, bool loadStandardLibrary)
+        ResolveModules(IReadOnlyList<SourceText> rootSources, bool loadStandardLibrary, IReadOnlySet<string> providedModules)
     {
         var tokenizer = new Tokenizer(Log.Logger.ForContext("SourceContext", "Lexer"));
         var resolved = new SourceModuleResolver(tokenizer, Log.Logger.ForContext("SourceContext", "Resolver"))
-            .Resolve(rootSources, loadStandardLibrary);
+            .Resolve(rootSources, loadStandardLibrary, providedModules);
         return (resolved.Sources, resolved.Units, resolved.Diagnostics);
+    }
+
+    // Reads the native libraries of --stdlib. Each library gives its modules, whose functions are then declared for the build without
+    // their source. Warnings are displayed, and an unusable library is an error, which gives false.
+    private static bool TryLoadNativeModules(
+        System.CommandLine.ParseResult result,
+        OxygenTarget target,
+        IReadOnlyList<SourceText> sources,
+        DiagnosticFormatter formatter,
+        bool useColor,
+        out List<ExternalModuleDeclaration> modules)
+    {
+        modules = [];
+        foreach (var modulePath in result.GetValue(StandardLibrary) ?? [])
+        {
+            try
+            {
+                foreach (var loaded in NativeModuleLoader.Load(modulePath, target))
+                {
+                    modules.Add(loaded.Module);
+                    foreach (var note in loaded.Notes)
+                        Log.Information("{Note}", note);
+                    if (loaded.Warnings.Count > 0)
+                    {
+                        var warningBag = new DiagnosticBag();
+                        foreach (var warning in loaded.Warnings)
+                            warningBag.Add(DiagnosticPhase.Metadata, DiagnosticSeverity.Warning, warning, new SourceLocation(1, 1),
+                                sourceName: modulePath.FullName);
+                        Display(warningBag.Diagnostics, sources, formatter, useColor);
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException)
+            {
+                var diagnostics = new DiagnosticBag();
+                diagnostics.Add(
+                    DiagnosticPhase.Metadata,
+                    DiagnosticSeverity.Error,
+                    exception.Message,
+                    new SourceLocation(1, 1),
+                    sourceName: modulePath.FullName);
+                Display(diagnostics.Diagnostics, sources, formatter, useColor);
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void Display(

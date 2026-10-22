@@ -35,6 +35,11 @@ OXYGEN_RUNTIME_API void __oxygen_runtime_initialize(void)
     _setmode(_fileno(stderr), _O_BINARY);
     /* The console shows UTF-8 text only when its output code page is UTF-8. */
     SetConsoleOutputCP(CP_UTF8);
+    /* After a stack overflow the fault handler runs on the stack that the thread's guarantee leaves it. The handler prints a message, which
+     * needs more stack than the default guarantee of nothing, so a fault in the print would stop the process with that second fault, not
+     * with exit code 101. The guarantee is per thread, so it is set on the thread that runs the program. */
+    ULONG stack_guarantee = 64 * 1024;
+    SetThreadStackGuarantee(&stack_guarantee);
     /* The first handler is called before the others, and before any frame is unwound. */
     if (AddVectoredExceptionHandler(1, oxygen_hardware_fault_handler) == NULL)
     {

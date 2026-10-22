@@ -108,7 +108,11 @@ internal static class NativeProgram
         return RunProcess(executable, []);
     }
 
-    public static (int ExitCode, string Output, string Error) RunProcess(string fileName, IEnumerable<string> arguments)
+    // The environment variables in `environment` are set for the child process only, so tests that run in parallel do not see them.
+    public static (int ExitCode, string Output, string Error) RunProcess(
+        string fileName,
+        IEnumerable<string> arguments,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         var startInfo = new ProcessStartInfo(fileName)
         {
@@ -123,6 +127,8 @@ internal static class NativeProgram
             startInfo.ArgumentList.Add(argument);
         // The compiler looks for the standard library under OXYGEN_PATH when the source is outside the repository.
         startInfo.Environment["OXYGEN_PATH"] = RepositoryRoot;
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+            startInfo.Environment[name] = value;
 
         using var process = Process.Start(startInfo)!;
         // Both streams are read concurrently: reading one to the end while the other fills its pipe can deadlock.

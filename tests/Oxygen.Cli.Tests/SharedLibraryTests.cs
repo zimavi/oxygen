@@ -90,15 +90,7 @@ public sealed class SharedLibraryTests : IDisposable
             return;
         }
 
-        var previousLibraryPath = Environment.GetEnvironmentVariable("LD_LIBRARY_PATH");
-        Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", string.Join(':', _directory, runtimeDirectory));
-        try
-        {
-            Assert.Equal(0, NativeProgram.RunProcess(executable, []).ExitCode);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", previousLibraryPath);
-        }
+        var environment = new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = string.Join(':', _directory, runtimeDirectory) };
+        Assert.Equal(0, NativeProgram.RunProcess(executable, [], environment).ExitCode);
     }
 }

@@ -329,10 +329,11 @@ public sealed partial class LlvmModuleGenerator
                 ModuleName = moduleName,
                 TargetTriple = _target.Triple,
                 EntryPoint = "main",
-                // The module's own functions. Methods and property accessors are described under their types, and the functions of
-                // other modules (the standard library) and the externals are not this module's to describe.
+                // The module's own functions, and its externals: an extern is declared here and defined by the C runtime, so the object
+                // does not define it, but a program that imports the module must still declare it to call it. Methods and property
+                // accessors are described under their types, and the functions of other modules are not this module's to describe.
                 Functions = symbols
-                    .Where(symbol => !methodOwners.ContainsKey(symbol) && symbol.ModuleName == moduleName && !symbol.IsExternal)
+                    .Where(symbol => !methodOwners.ContainsKey(symbol) && symbol.ModuleName == moduleName)
                     .Select(symbol => new NativeFunctionMetadata
                 {
                     ModuleName = symbol.ModuleName,

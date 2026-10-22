@@ -144,7 +144,8 @@ internal partial class NativeModuleMetadataJsonContext : JsonSerializerContext;
 
 public static class NativeModuleMetadataSerializer
 {
-    private static readonly byte[] EmbeddedMagic = "OXYGENMETA1"u8.ToArray();
+    // Marks the metadata that older builds appended after an archive or object file. The section reader stops at it.
+    internal static readonly byte[] EmbeddedMagic = "OXYGENMETA1"u8.ToArray();
 
     public static string Serialize(NativeModuleMetadata metadata)
     {

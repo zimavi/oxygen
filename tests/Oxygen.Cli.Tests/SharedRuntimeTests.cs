@@ -49,21 +49,13 @@ public sealed class SharedRuntimeTests : IDisposable
         if (OperatingSystem.IsWindows())
             File.Copy(dll, Path.Combine(_directory, "oxygenrt.dll"));
 
-        var previousLibraryPath = Environment.GetEnvironmentVariable("LD_LIBRARY_PATH");
-        if (!OperatingSystem.IsWindows())
-            Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", TargetDirectory);
-        try
-        {
-            var run = NativeProgram.RunProcess(executable, []);
+        var environment = OperatingSystem.IsWindows()
+            ? null
+            : new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = TargetDirectory };
+        var run = NativeProgram.RunProcess(executable, [], environment);
 
-            // The index is out of range, which is a runtime failure with exit code 101, after the first line was written.
-            Assert.Equal(101, run.ExitCode);
-            Assert.Equal("hello\n", run.Output);
-        }
-        finally
-        {
-            if (!OperatingSystem.IsWindows())
-                Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", previousLibraryPath);
-        }
+        // The index is out of range, which is a runtime failure with exit code 101, after the first line was written.
+        Assert.Equal(101, run.ExitCode);
+        Assert.Equal("hello\n", run.Output);
     }
 }

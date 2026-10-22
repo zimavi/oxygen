@@ -30,6 +30,49 @@ public sealed class SourceModuleResolverTests : IDisposable
         Assert.Contains("standard library", diagnostic.Message);
     }
 
+    // A native library that provides the program's std modules supplies them, so no standard library folder is needed for them.
+    [Fact]
+    public void AProgramWhoseStdImportsAreAllProvidedByALibraryNeedsNoStandardLibrary()
+    {
+        var source = new SourceText(Path.Combine(_directory, "main.oxy"), "import std.io;\ni32 main() { return 0; }");
+
+        var resolved = new SourceModuleResolver(new Tokenizer(Log.Logger), Log.Logger)
+            .Resolve([source], oxygenPath: null, loadStandardLibrary: true, providedModules: new HashSet<string>(["std.io", "std.exception"]));
+
+        Assert.Empty(resolved.Diagnostics);
+        Assert.Equal(["main.oxy"], StandardFileNames(resolved));
+    }
+
+    // A module that the library provides is not loaded from the standard library's source, and the modules it does not provide still are.
+    [Fact]
+    public void AModuleThatALibraryProvidesIsNotLoadedFromSource()
+    {
+        var source = new SourceText(Path.Combine(_directory, "main.oxy"), "import std.io;\nimport std.memory;\ni32 main() { return 0; }");
+
+        var resolved = new SourceModuleResolver(new Tokenizer(Log.Logger), Log.Logger)
+            .Resolve([source], NativeProgram.RepositoryRoot, loadStandardLibrary: true, providedModules: new HashSet<string>(["std.io"]));
+
+        Assert.Empty(resolved.Diagnostics);
+        var names = StandardFileNames(resolved);
+        Assert.DoesNotContain("io.oxy", names);
+        Assert.Contains("memory.oxy", names);
+        Assert.Contains("exception.oxy", names);
+    }
+
+    // A module that a native library provides is not compiled from a file of that name next to the program.
+    [Fact]
+    public void AProvidedModuleIsNotLoadedFromAFileNextToTheProgram()
+    {
+        File.WriteAllText(Path.Combine(_directory, "util.oxy"), "module util; public i32 helper() { return 1; }");
+        var source = new SourceText(Path.Combine(_directory, "main.oxy"), "import util;\ni32 main() { return 0; }");
+
+        var resolved = new SourceModuleResolver(new Tokenizer(Log.Logger), Log.Logger)
+            .Resolve([source], oxygenPath: null, loadStandardLibrary: true, providedModules: new HashSet<string>(["util", "std.exception"]));
+
+        Assert.Empty(resolved.Diagnostics);
+        Assert.Equal(["main.oxy"], StandardFileNames(resolved));
+    }
+
     [Fact]
     public void OxygenPathLocatesTheStandardLibraryThatHoldsStdException()
     {
