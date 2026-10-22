@@ -67,6 +67,45 @@ public sealed class DispatchAndValueIntegrationTests : IDisposable
         Assert.Equal("2", run.Output.Replace("\r\n", "\n"));
     }
 
+    // A derived class with its own virtual slot and its own field: the base class's fields and slot must keep their positions when the
+    // object is seen through the base class, and the derived class's slot and field must be where its own code expects them.
+    [SkippableFact]
+    public void DerivedClassKeepsTheBaseClassFieldsAndSlotsInPlace()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            class Base {
+                i32 first;
+                virtual i32 value() { return first; }
+            }
+
+            class Derived : Base {
+                i32 second;
+                virtual i32 extra() { return second; }
+                override i32 value() { return first + second; }
+            }
+
+            i32 main() {
+                Derived derived = new Derived();
+                derived.first = 3;
+                derived.second = 4;
+                Base item = derived;
+                io.print(item.value());
+                io.print(item.first);
+                io.print(derived.extra());
+                io.print(derived.second);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("7344", run.Output.Replace("\r\n", "\n"));
+    }
+
     [SkippableFact]
     public void InterfaceCallRunsTheImplementingClassMethod()
     {

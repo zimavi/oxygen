@@ -179,8 +179,71 @@ public sealed partial class LlvmModuleGenerator
                 ? new TypeSyntax(null, false, location, IsString: true)
                 : new TypeSyntax(null, false, location, NamedType: type.StructName ?? type.EnumName);
 
-    private int FieldOffset(ClassSymbol cls, SemanticModel model, int fieldIndex) =>
-        cls.IsValue ? fieldIndex : 1 + _virtualSlotCount + fieldIndex;
+    // The struct index of a field of a class, from its index in the class's fields. The layout is the header, then for each class from
+    // the root down its own virtual slots and then its own fields, so a field is after the slots of the class that declares it.
+    private int FieldOffset(ClassSymbol cls, SemanticModel model, int fieldIndex)
+    {
+        if (cls.IsValue)
+            return fieldIndex;
+        return 1 + SlotCount(DeclaringClassOfField(cls, fieldIndex, model), model) + fieldIndex;
+    }
+
+    // The struct index of a virtual slot of a class. The slot is after the fields that the base classes of its declaring class have.
+    private int SlotIndex(ClassSymbol cls, int slot, SemanticModel model) =>
+        1 + slot + InheritedFieldCount(DeclaringClassOfSlot(cls, slot, model), model);
+
+    private int SlotCount(ClassSymbol cls, SemanticModel model) => GetVirtualMethods(cls, model).Count;
+
+    // The number of fields that a class inherits, which are the fields of its base class.
+    private static int InheritedFieldCount(ClassSymbol cls, SemanticModel model) =>
+        cls.BaseTypeName is not null && model.Classes.TryGetValue(cls.BaseTypeName, out var baseClass) ? baseClass.Fields.Count : 0;
+
+    // The class that declares a slot: the class from which the slot is first inherited, so the base class of that class has fewer slots.
+    private ClassSymbol DeclaringClassOfSlot(ClassSymbol cls, int slot, SemanticModel model)
+    {
+        var declaring = cls;
+        while (declaring.BaseTypeName is not null && model.Classes.TryGetValue(declaring.BaseTypeName, out var baseClass)
+               && SlotCount(baseClass, model) > slot)
+            declaring = baseClass;
+        return declaring;
+    }
+
+    // The LLVM fields of a class, in the order that FieldOffset and SlotIndex describe. A value class has its fields only.
+    private LLVMTypeRef[] ClassLayout(ClassSymbol cls, SemanticModel model)
+    {
+        var pointer = LLVMTypeRef.CreatePointer(_context.Int8Type, 0);
+        if (cls.IsValue)
+            return cls.Fields.Select(field => ToLlvmType(field.Type, model)).ToArray();
+
+        // The chain from the root class down to cls, so that each class's slots and fields follow those of its base class.
+        var chain = new List<ClassSymbol>();
+        for (var current = cls; current is not null;
+             current = current.BaseTypeName is not null && model.Classes.TryGetValue(current.BaseTypeName, out var baseClass) ? baseClass : null)
+            chain.Insert(0, current);
+
+        var layout = new List<LLVMTypeRef> { pointer };
+        foreach (var declaring in chain)
+        {
+            var baseSlots = declaring.BaseTypeName is not null && model.Classes.TryGetValue(declaring.BaseTypeName, out var baseClass)
+                ? SlotCount(baseClass, model)
+                : 0;
+            for (var slot = baseSlots; slot < SlotCount(declaring, model); slot++)
+                layout.Add(pointer);
+            for (var field = InheritedFieldCount(declaring, model); field < declaring.Fields.Count; field++)
+                layout.Add(ToLlvmType(declaring.Fields[field].Type, model));
+        }
+        return layout.ToArray();
+    }
+
+    // The class that declares a field: the class from which the field is first inherited, so the base class of that class has fewer fields.
+    private ClassSymbol DeclaringClassOfField(ClassSymbol cls, int fieldIndex, SemanticModel model)
+    {
+        var declaring = cls;
+        while (declaring.BaseTypeName is not null && model.Classes.TryGetValue(declaring.BaseTypeName, out var baseClass)
+               && baseClass.Fields.Count > fieldIndex)
+            declaring = baseClass;
+        return declaring;
+    }
 
     // The data pointer of a reference value: an interface value holds it in its first field.
     private LLVMValueRef ObjectIdentity(LLVMBuilderRef builder, LLVMValueRef value, SemanticType type) =>
