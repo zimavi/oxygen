@@ -27,6 +27,7 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef _currentFunction;
     private readonly Dictionary<string, LLVMTypeRef> _classTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LLVMValueRef> _runtimeTypeInfos = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LLVMValueRef> _runtimeTypeNameStrings = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (LLVMValueRef Table, uint Count)> _runtimeSupertypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LLVMValueRef> _constructors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LLVMValueRef> _destructors = new(StringComparer.Ordinal);
@@ -149,6 +150,7 @@ public sealed partial class LlvmModuleGenerator
             _classTypes.Clear();
             _dropFlags.Clear();
             _runtimeTypeInfos.Clear();
+            _runtimeTypeNameStrings.Clear();
             _runtimeSupertypes.Clear();
             _runtimeTypeInfoType = _context.GetStructType(
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type,
@@ -319,10 +321,10 @@ public sealed partial class LlvmModuleGenerator
 
             // Every type's information is defined here, as a constant, in every object: a library has no startup code of its own.
             foreach (var cls in concreteClasses.Where(cls => !DefinedByLibrary(cls.ModuleName, IsInstantiationName(cls.Name), model)))
-                DefineRuntimeTypeInfo(module, cls.QualifiedName, RuntimeParentName(cls, model), 1, model);
+                DefineRuntimeTypeInfo(module, cls.QualifiedName, 1, model);
             foreach (var interfaceSymbol in concreteInterfaces.Where(iface =>
                          !DefinedByLibrary(iface.ModuleName, IsInstantiationName(iface.Name), model)))
-                DefineRuntimeTypeInfo(module, interfaceSymbol.QualifiedName, null, 2, model);
+                DefineRuntimeTypeInfo(module, interfaceSymbol.QualifiedName, 2, model);
 
             if (!library)
                 EmitNativeMain(context, builder, module, model, llvmFunctions);

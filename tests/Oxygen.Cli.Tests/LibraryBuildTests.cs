@@ -82,16 +82,22 @@ public sealed class LibraryBuildTests : IDisposable
         Assert.Contains("--dynamic builds a shared library, so it needs --library", run.Error);
     }
 
-    [Fact]
-    public void ASharedLibraryDoesNotLinkStandardLibraryDependenciesYet()
+    // A shared library links the import library of each standard library that it names with --stdlib. A library without one is an error,
+    // reported before anything is linked. On Windows the DLL is linked through its import library; elsewhere the shared object is linked
+    // directly, so the case does not arise.
+    [SkippableFact]
+    public void ASharedLibraryNeedsTheImportLibraryOfEachStandardLibraryItNames()
     {
+        Skip.IfNot(OperatingSystem.IsWindows(), "Only a Windows DLL is linked through a separate import library.");
         var source = WriteSource(Library);
+        var standardLibrary = Path.Combine(_directory, "std.dll");
+        File.WriteAllText(standardLibrary, "not a library");
 
         var run = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
-            ["build", source, "--library", "--dynamic", "--stdlib", Path.Combine(_directory, "std.a")]);
+            ["build", source, "--library", "--dynamic", "--stdlib", standardLibrary]);
 
-        Assert.Equal(ExitCodes.SourceError, run.ExitCode);
-        Assert.Contains("--stdlib cannot be used with --library yet", run.Error);
+        Assert.Equal(ExitCodes.ToolchainFailure, run.ExitCode);
+        Assert.Contains("No library to link for", run.Error);
     }
 
     private string WriteSource(string text)
