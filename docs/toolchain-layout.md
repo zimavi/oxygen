@@ -111,7 +111,8 @@ every archive has built. The release gets both archives and a `SHA256SUMS` file,
 SHA-256 hash of each archive. The release notes are generated from the commits since the previous
 release.
 
-A version that already has a release is not built again, so a run that repeats does nothing. A run
+While the major version is 0, the release is a pre-release, since nothing is stable yet. A version
+that already has a release is not built again, so a run that repeats does nothing. A run
 that failed after the tag was made builds the tagged commit, not the one it started from. The
 workflow can also be started by hand from the Actions tab, on `master` only.
 

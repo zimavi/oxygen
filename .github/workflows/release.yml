@@ -86,5 +86,11 @@ jobs:
         run: |
           sha256sum oxygen-*.zip oxygen-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
-          gh release create "v$VERSION" --target "$SHA" --title "Oxygen $VERSION" --generate-notes \
+          # While the major version is 0 nothing is released as stable, so the release is a pre-release.
+          if [ "${VERSION%%.*}" = "0" ]; then
+            prerelease=--prerelease
+          else
+            prerelease=
+          fi
+          gh release create "v$VERSION" --target "$SHA" --title "Oxygen $VERSION" --generate-notes $prerelease \
             oxygen-*.zip oxygen-*.tar.gz SHA256SUMS
