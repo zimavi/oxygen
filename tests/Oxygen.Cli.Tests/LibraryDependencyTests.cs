@@ -24,6 +24,26 @@ public sealed class LibraryDependencyTests : IDisposable
         }
         """;
 
+    // The library has a module-level variable, which its own functions and a generic function of the module use.
+    private const string CountLibrary = """
+        module mylib;
+
+        i32 count = 3;
+
+        public void tick() {
+            count += 1;
+        }
+
+        public i32 current() {
+            return count;
+        }
+
+        public T mark<T>(T value) {
+            count += 1;
+            return value;
+        }
+        """;
+
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "oxygenc-tests", Guid.NewGuid().ToString("N"));
 
     public LibraryDependencyTests() => Directory.CreateDirectory(_directory);
@@ -88,6 +108,42 @@ public sealed class LibraryDependencyTests : IDisposable
         Assert.Equal(7, run.ExitCode);
     }
 
+    // A generic function of a library uses the library's module-level variable. The program's instantiation changes the same storage that the
+    // library's own code reads, so the program sees the library's change and the library sees the program's.
+    [SkippableFact]
+    public void AGenericFunctionOfAnotherLibraryUsesTheGlobalsOfItsModule()
+    {
+        var run = BuildAndRunProgram(
+            """
+            import mylib;
+
+            i32 main() {
+                tick();
+                mark<i32>(0);
+                return current();
+            }
+            """, CountLibrary);
+
+        Assert.Equal(5, run.ExitCode);
+    }
+
+    // The privacy of a module's variables is about names: a program that imports the library cannot name its variable.
+    [SkippableFact]
+    public void AProgramCannotNameTheModuleVariableOfAnotherLibrary()
+    {
+        var build = BuildProgram(
+            """
+            import mylib;
+
+            i32 main() {
+                return count;
+            }
+            """, CountLibrary);
+
+        Assert.Equal(ExitCodes.SourceError, build.ExitCode);
+        Assert.Contains("'count'", build.Error);
+    }
+
     [SkippableFact]
     public void AProgramAndAnotherLibraryShareTheStaticFieldsOfAClass()
     {
@@ -137,10 +193,23 @@ public sealed class LibraryDependencyTests : IDisposable
         Assert.Equal(10, run.ExitCode);
     }
 
-    // Builds the standard library, then the library that uses it, then the program that uses both, and runs the program. The libraries are
-    // built beside the program, and the runtime is copied there too. The program finds them: on Windows through the DLL search, and on Linux
-    // through the library path, given to the child process only.
+    // Builds the standard library, then the library that uses it, then the program that uses both, and runs the program.
     private (int ExitCode, string Output, string Error) BuildAndRunProgram(string source, string librarySource = AppLibrary)
+    {
+        var build = BuildProgram(source, librarySource);
+        Assert.True(build.ExitCode == 0, $"Building the program failed with exit code {build.ExitCode}:\n{build.Error}");
+
+        // The program finds the libraries and the runtime beside it: on Windows through the DLL search, and on Linux through the library
+        // path, given to the child process only.
+        var environment = Windows
+            ? null
+            : new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = _directory };
+        return NativeProgram.RunProcess(Path.Combine(_directory, Windows ? "main.exe" : "main"), [], environment);
+    }
+
+    // Builds the standard library, then the library that uses it, then the program that uses both, and returns the program's build result.
+    // The libraries and the runtime are built beside the program, and the runtime is copied there too.
+    private (int ExitCode, string Output, string Error) BuildProgram(string source, string librarySource)
     {
         NativeProgram.RequireLibraryToolchain();
         var runtime = Path.Combine(TargetDirectory, Windows ? "oxygenrt.lib" : "liboxygenrt.so");
@@ -162,13 +231,9 @@ public sealed class LibraryDependencyTests : IDisposable
         var program = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
             ["build", programSource, "--stdlib", standardLibrary, "--stdlib", appLibrary + (Windows ? ".dll" : ".so"),
                 "-r", runtime, "-o", executable]);
-        Assert.True(program.ExitCode == 0, $"Building the program failed with exit code {program.ExitCode}:\n{program.Error}");
 
         File.Copy(runtimeFile, Path.Combine(_directory, Path.GetFileName(runtimeFile)), overwrite: true);
-        var environment = Windows
-            ? null
-            : new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = _directory };
-        return NativeProgram.RunProcess(executable, [], environment);
+        return program;
     }
 
     // Builds the standard library as a shared library in the test's folder, and returns the path of the shared library.

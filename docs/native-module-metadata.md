@@ -33,15 +33,22 @@ value can be outside the range of a JSON number.
 `generics` carries the generic declarations of the module, not its source text.
 Each entry is a unit in the binary syntax form (`SyntaxTreeCodec`, format version
 1, see `Oxygen.Compiler.Ast`): the module header, the imports, and the classes,
-structs, unions, interfaces and functions that have type parameters. The form
+structs, unions, interfaces and functions that have type parameters, all the
+structs and interfaces of the file, the non-generic classes without their
+bodies, and the module-level variables of the file, with their constant
+initializers. The form
 has no comments, formatting or original text. The entry's module and source name
-must match the names inside the form, and the form must hold only generic
-declarations. A damaged form is reported with the source it came from.
+must match the names inside the form, and the form must hold only declarations
+that the binary form carries (`GenericSyntax.IsGenericOnly`). A damaged form is
+reported with the source it came from.
 
 The language has no type parameters on methods, so each entry is a whole
-top-level generic declaration, and nothing else of its unit comes with it. The
-entries of a build are the generic declarations of the module being built, one
-entry per source file, with the file name as the source name.
+top-level generic declaration, and nothing else of its unit comes with it, apart
+from the variables of its file. The entries of a build are the generic
+declarations and the variables of the module being built, one entry per source
+file, with the file name as the source name. A program that instantiates a
+generic declaration uses the library's variables, which the library exports (see
+[globals](globals.md#across-a-library-boundary)).
 
 Both arrays are validated when the document is read, and a native name may
 appear only once in a module, for a function or for a method. Entries are written
