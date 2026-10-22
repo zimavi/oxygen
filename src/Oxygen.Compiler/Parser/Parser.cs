@@ -907,10 +907,31 @@ public sealed partial class Parser
         return new WhileStatement(condition, ParseStatement(), location);
     }
 
+    // A for-in header is `var name in` or `Type name in`. The type is read speculatively and the position is restored, so a for loop with
+    // a declaration (`for (i32 i = 0; ...)`) is still a for loop.
+    private bool IsForInHeader()
+    {
+        var start = _position;
+        try
+        {
+            if (!Match(TokenKind.Var))
+                ParseType(allowInferred: false);
+            return Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.In;
+        }
+        catch (ParseException)
+        {
+            return false;
+        }
+        finally
+        {
+            _position = start;
+        }
+    }
+
     private Statement ParseFor(SourceLocation location)
     {
         Consume(TokenKind.OpenParenthesis, "Expected '(' after 'for'.");
-        if (Check(TokenKind.Var) && Peek(1).Kind == TokenKind.Identifier && Peek(2).Kind == TokenKind.In)
+        if (IsForInHeader())
         {
             var variableType = ParseType(allowInferred: true);
             var variable = Consume(TokenKind.Identifier, "Expected an iteration variable name.").Lexeme;

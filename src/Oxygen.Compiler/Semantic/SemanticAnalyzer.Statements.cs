@@ -112,8 +112,6 @@ public sealed partial class SemanticAnalyzer
                 return false;
             case ForInStatement forInStatement:
                 {
-                    if (!forInStatement.VariableType.IsInferred)
-                        throw Error("For-in iteration variables must use 'var'", forInStatement.VariableType.Location);
                     var collectionType = AnalyzeExpression(forInStatement.Collection, scope, functions, moduleName,
                         imports, expressionTypes, resolvedCalls);
                     SemanticType iterationElement;
@@ -186,11 +184,20 @@ public sealed partial class SemanticAnalyzer
                         _usedFunctions.Add(iter);
                         _usedFunctions.Add(next);
                     }
+                    // The variable is `var` (its type is the element type), or an explicit type that must be the element type. An
+                    // explicit type is not converted: an element of another type is an error, as an implicit conversion is not allowed.
+                    var variableType = forInStatement.VariableType.IsInferred
+                        ? iterationElement
+                        : ResolveType(forInStatement.VariableType);
+                    if (!SemanticTypeComparer.Instance.Equals(variableType, iterationElement))
+                        throw ErrorWithCode(DiagnosticCode.ConversionMismatch,
+                            $"The iteration variable '{forInStatement.VariableName}' has type {variableType}, but the elements are {iterationElement}",
+                            forInStatement.VariableType.Location, forInStatement.VariableName.Length);
                     var forInScope = new Scope(scope, MarkVariableUsed);
                     if (forInScope.ContainsInCurrentScope(forInStatement.VariableName))
                         throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"Variable '{forInStatement.VariableName}' is already declared in this scope",
                             forInStatement.Location, forInStatement.VariableName.Length);
-                    var variable = new VariableSymbol(iterationElement, false,
+                    var variable = new VariableSymbol(variableType, false,
                         new VariableDeclarationStatement(forInStatement.VariableType, forInStatement.VariableName, false,
                             null, forInStatement.Location), false);
                     forInScope.Declare(forInStatement.VariableName, variable);

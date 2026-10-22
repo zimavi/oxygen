@@ -10,7 +10,10 @@ for (var value in values) {
 }
 ```
 
-The iteration variable is declared with `var`, is scoped to the loop, and is
+The iteration variable is declared with `var`, or with the element type written
+out, as in `for (i32 value in values)`. An explicit type must be the element
+type exactly: an iteration variable of another type is an error, since an
+implicit conversion is not allowed. The variable is scoped to the loop and is
 mutable. Iteration proceeds from index zero through the last array element.
 The collection expression is evaluated once before the loop starts.
 Fixed arrays are an intrinsic exception to the method protocol below; they do

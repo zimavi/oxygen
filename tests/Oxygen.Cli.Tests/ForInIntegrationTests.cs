@@ -72,6 +72,51 @@ public sealed class ForInIntegrationTests : IDisposable
         Assert.Equal("4\n5\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    // The iteration variable can be declared with the element type, as well as with var.
+    [SkippableFact]
+    public void ForInWithAnExplicitElementTypeIteratesTheArrayElements()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32[3] values = { 1, 2, 3 };
+                i32 total = 0;
+                for (i32 value in values) {
+                    total += value;
+                }
+                io.print(total);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("6", run.Output.Replace("\r\n", "\n"));
+    }
+
+    // An explicit type is not converted, so an iteration variable of another type is an error, as an implicit conversion would be.
+    [Fact]
+    public void ForInWithAnExplicitTypeThatIsNotTheElementTypeIsAnError()
+    {
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source, """
+            i32 main() {
+                i32[2] values = { 1, 2 };
+                for (i64 value in values) {
+                }
+                return 0;
+            }
+            """);
+
+        var run = NativeProgram.RunProcess(NativeProgram.CompilerExecutable, ["build", source, "--no-std", "--emit-ir", Path.Combine(_directory, "main.ll")]);
+
+        Assert.Equal(ExitCodes.SourceError, run.ExitCode);
+        Assert.Contains("has type i64, but the elements are i32", run.Error);
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }
