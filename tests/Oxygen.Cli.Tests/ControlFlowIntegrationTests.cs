@@ -1167,6 +1167,61 @@ public sealed class ControlFlowIntegrationTests : IDisposable
         Assert.Equal("1999999", run.Output.Replace("\r\n", "\n"));
     }
 
+    // A regular for loop can declare its counter with var, as well as with a type.
+    [SkippableFact]
+    public void ForLoopCounterDeclaredWithVarCountsThroughTheLoop()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            i32 main() {
+                i32 sum = 0;
+                for (var i = 1; i <= 3; i += 1) {
+                    sum += i;
+                }
+                io.print(sum);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("6", run.Output.Replace("\r\n", "\n"));
+    }
+
+    // A class local declared in the initializer of a for loop is released when the loop ends, before the code after the loop runs.
+    [SkippableFact]
+    public void ClassLocalDeclaredInAForInitializerIsDestroyedWhenTheLoopEnds()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            class Box {
+                i32 value = 3;
+
+                ~Box() {
+                    io.print("destroyed");
+                }
+            }
+
+            i32 main() {
+                for (var box = new Box(); box.value < 4; box.value += 1) {
+                    io.print(box.value);
+                }
+                io.print("end");
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("3destroyedend", run.Output.Replace("\r\n", "\n"));
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source, string? optimization = null) =>
         NativeProgram.BuildAndRun(_directory, source, optimization);
 }

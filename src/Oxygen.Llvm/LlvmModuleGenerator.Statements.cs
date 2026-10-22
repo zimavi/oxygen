@@ -680,8 +680,14 @@ public sealed partial class LlvmModuleGenerator
                 }
             case ForStatement forStatement:
                 {
+                    // The variables that the initializer declares are local to the loop, so they have their own storage and their own owned
+                    // scope, which is released when the loop ends on every path, including break and return.
+                    var initializerDepth = _ownedScopes.Count;
+                    _ownedScopes.Push([]);
+                    var loopValues = new Dictionary<string, LLVMValueRef>(values);
+                    var loopStorage = new Dictionary<string, LLVMValueRef>(storage);
                     if (forStatement.Initializer is not null
-                        && EmitStatement(context, builder, function, forStatement.Initializer, values, storage, model, llvmFunctions, emittedReturnType, loops))
+                        && EmitStatement(context, builder, function, forStatement.Initializer, loopValues, loopStorage, model, llvmFunctions, emittedReturnType, loops))
                         return true;
                     var conditionBlock = function.AppendBasicBlock("for.cond");
                     var bodyBlock = function.AppendBasicBlock("for.body");
@@ -691,23 +697,28 @@ public sealed partial class LlvmModuleGenerator
                     builder.PositionAtEnd(conditionBlock);
                     var condition = forStatement.Condition is null
                         ? LLVMValueRef.CreateConstInt(_context.Int1Type, 1, false)
-                        : EmitExpression(context, builder, forStatement.Condition, values, storage, model, llvmFunctions);
+                        : EmitExpression(context, builder, forStatement.Condition, loopValues, loopStorage, model, llvmFunctions);
                     builder.BuildCondBr(condition, bodyBlock, endBlock);
                     builder.PositionAtEnd(bodyBlock);
                     var forScopeDepth = _ownedScopes.Count;
                     _ownedScopes.Push([]);
                     loops.Push((endBlock, incrementBlock, forScopeDepth, true));
-                    var bodyTerminated = EmitStatement(context, builder, function, forStatement.Body, values, storage, model, llvmFunctions, emittedReturnType, loops);
+                    var bodyTerminated = EmitStatement(context, builder, function, forStatement.Body, loopValues, loopStorage, model, llvmFunctions, emittedReturnType, loops);
                     loops.Pop();
                     if (!bodyTerminated) builder.BuildBr(incrementBlock);
                     builder.PositionAtEnd(incrementBlock);
                     var incrementTerminated = forStatement.Increment is not null
-                        && EmitStatement(context, builder, function, forStatement.Increment, values, storage, model, llvmFunctions, emittedReturnType, loops);
+                        && EmitStatement(context, builder, function, forStatement.Increment, loopValues, loopStorage, model, llvmFunctions, emittedReturnType, loops);
                     if (!incrementTerminated) builder.BuildBr(conditionBlock);
                     builder.PositionAtEnd(endBlock);
                     if (_ownedScopes.Count > forScopeDepth)
                     {
-                        CleanupOwnedScope(builder, values, storage, model);
+                        CleanupOwnedScope(builder, loopValues, loopStorage, model);
+                        _ownedScopes.Pop();
+                    }
+                    if (_ownedScopes.Count > initializerDepth)
+                    {
+                        CleanupOwnedScope(builder, loopValues, loopStorage, model);
                         _ownedScopes.Pop();
                     }
                     return false;
