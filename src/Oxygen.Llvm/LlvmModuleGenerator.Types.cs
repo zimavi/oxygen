@@ -108,6 +108,8 @@ public sealed partial class LlvmModuleGenerator
         PrimitiveType.F64 => _context.DoubleType,
         PrimitiveType.Void => _context.VoidType,
         _ when type.Kind == SemanticTypeKind.Pointer && type.IsOpaquePointer => LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
+        // A function pointer is the address of a function.
+        _ when type.IsFunctionPointer => LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
         _ when type.Kind == SemanticTypeKind.Pointer => LLVMTypeRef.CreatePointer(ToLlvmType(type.Pointee!, model), 0),
         _ when type.Kind == SemanticTypeKind.Class && !IsValueClass(type, model) =>
             ClassPointerType(type.StructName!),

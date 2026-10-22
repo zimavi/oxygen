@@ -50,6 +50,8 @@ public static class OxygenNameMangler
             PrimitiveType.Bool => "b",
             PrimitiveType.Void => "v",
             _ when type.Kind == SemanticTypeKind.Pointer => "p" + EncodeType(type.Pointee!),
+            // A function pointer: its return type, then its parameter types as a counted list, like a function's signature.
+            _ when type.IsFunctionPointer => "F" + EncodeType(type.FunctionReturnType) + Signature(type.FunctionParameterTypes),
             _ when type.Kind == SemanticTypeKind.GenericParameter => "g" + Name(type.GenericParameterName!),
             _ when type.Kind == SemanticTypeKind.Enum => "E" + Name(type.EnumName!),
             _ when type.Kind == SemanticTypeKind.Union => EncodeNamedType("U", type.EnumName!, type.TypeArguments),

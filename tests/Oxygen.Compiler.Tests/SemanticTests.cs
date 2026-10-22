@@ -2430,7 +2430,7 @@ public sealed class SemanticTests
         var exception = Assert.Throws<SemanticException>(() =>
             Analyze("string text = \"hi\"; i32 main() { return 0; }"));
 
-        Assert.Contains("only numeric and bool globals are supported", exception.Message);
+        Assert.Contains("only numeric, bool and function pointer globals are supported", exception.Message);
     }
 
     [Fact]
@@ -4111,6 +4111,28 @@ public sealed class SemanticTests
     {
         var model = Analyze(
             "i32 pick(i32 a) { return a; } i32 pick(bool b) { return 0; } i32 main() { fn i32 op(i32) = &pick; return op(3); }");
+
+        Assert.NotNull(model.MainFunction);
+    }
+
+    // An overloaded name passed as an argument is held back until the parameter it goes to is known. No overload matches here.
+    [Fact]
+    public void AnOverloadedAddressArgumentWithNoMatchingOverloadIsAnError()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "i32 pick(i32 a) { return a; } i32 pick(bool b) { return 0; } i32 apply(fn i32 op(f64), f64 value) { return op(value); } " +
+            "i32 main() { return apply(&pick, 1.0); }"));
+
+        Assert.Contains("'pick'", exception.Message);
+    }
+
+    // The type arguments of the generic call are given, so the parameter's signature names i32 and the overload is chosen by it.
+    [Fact]
+    public void AnOverloadedAddressIsChosenForAGenericFunctionWithItsTypeArguments()
+    {
+        var model = Analyze(
+            "i32 pick(i32 a) { return a; } i32 pick(bool b) { return 0; } T twice<T>(T value, fn T step(T)) { return step(step(value)); } " +
+            "i32 main() { return twice<i32>(5, &pick); }");
 
         Assert.NotNull(model.MainFunction);
     }

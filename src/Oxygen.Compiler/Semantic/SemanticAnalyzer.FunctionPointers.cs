@@ -34,6 +34,15 @@ public sealed partial class SemanticAnalyzer
         LookupVariableType(scope, name.Name, name.Location) is null
         && FunctionValueCandidates(name.Name, moduleName, imports, functions).Count > 0;
 
+    // Whether an argument is the address of a name with more than one usable overload, which the callee's parameter must choose (see AnalyzeCall).
+    private bool IsOverloadedFunctionReference(
+        Expression argument, Scope scope, string moduleName, IReadOnlyList<ImportDeclaration> imports,
+        IReadOnlyDictionary<string, List<FunctionSymbol>> functions) =>
+        argument is UnaryExpression { Operator: TokenKind.Ampersand, Operand: IdentifierExpression name }
+        && IsFunctionName(name, scope, moduleName, imports, functions)
+        && FunctionValueCandidates(name.Name, moduleName, imports, functions)
+            .Count(candidate => !candidate.IsGeneric && !HasDefaultParameter(candidate)) > 1;
+
     // `&name` of a function. The overload is chosen by the function pointer type that the value is given: the function whose signature is that
     // type. Without such a type, an overloaded name is an error.
     private SemanticType AnalyzeFunctionReference(
@@ -154,6 +163,11 @@ public sealed partial class SemanticAnalyzer
                 throw ErrorWithCode(DiagnosticCode.ConversionMismatch,
                     $"Argument {index + 1} of the function pointer call expects {parameterTypes[index]}, got {argumentType}",
                     arguments[index].Location);
+            // A class object passed to a call that the callee may keep escapes, as it does for a direct call.
+            if (ValueOf(arguments[index]) is IdentifierExpression identifier
+                && IsOwnedClass(scope.Lookup(identifier.Name, identifier.Location).Type)
+                && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
+                _escapingClassLocals.Add(declaration);
         }
         ClassifyDereference(callee, scope, callee.Location);
         _indirectCallees[node] = callee;

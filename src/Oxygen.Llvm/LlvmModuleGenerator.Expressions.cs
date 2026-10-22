@@ -74,6 +74,9 @@ public sealed partial class LlvmModuleGenerator
                 context, builder, binary, values, storage, model, llvmFunctions),
             ConditionalExpression conditional => EmitConditional(
                 context, builder, conditional, values, storage, model, llvmFunctions),
+            // `&name` of a function is the function's address, which the analysis resolved to a function symbol.
+            UnaryExpression reference when model.FunctionReferences.ContainsKey(reference) =>
+                llvmFunctions[model.FunctionReferences[reference]],
             UnaryExpression unary => EmitUnary(context, builder, unary, values, storage, model, llvmFunctions),
             // `Class<T>.Name` reads a static property of one instance by calling that instance's getter.
             CallExpression bareProperty when model.StaticPropertyGetters.ContainsKey(bareProperty) => EmitStaticPropertyGet(builder,
@@ -84,6 +87,9 @@ public sealed partial class LlvmModuleGenerator
                 _globalVariables[model.GlobalReferences[bareStatic]],
                 "static.field"),
             CallExpression call => EmitCall(context, builder, call, values, storage, model, llvmFunctions),
+            IndirectCallExpression indirect => EmitIndirectCall(context, builder, indirect, indirect.Callee, indirect.Arguments,
+                values, storage, model, llvmFunctions),
+            LambdaExpression lambda => llvmFunctions[model.LambdaFunctions[lambda]],
             NamedArgumentExpression named => EmitExpression(context, builder, named.Value, values, storage, model, llvmFunctions),
             _ => throw new InvalidOperationException($"Unsupported expression '{expression.GetType().Name}'.")
         };

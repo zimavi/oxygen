@@ -144,6 +144,35 @@ public sealed class LibraryDependencyTests : IDisposable
         Assert.Contains("'count'", build.Error);
     }
 
+    // A function of a library takes a function pointer, which the program fills with its own function's address. The library's signature
+    // names the function pointer type through its metadata, so the program's call matches the library's function.
+    [SkippableFact]
+    public void AProgramPassesItsFunctionToAFunctionPointerParameterOfAnotherLibrary()
+    {
+        const string applyLibrary = """
+            module mylib;
+
+            public i32 apply(fn i32 op(i32, i32), i32 a, i32 b) {
+                return op(a, b);
+            }
+            """;
+
+        var run = BuildAndRunProgram(
+            """
+            import mylib;
+
+            i32 add(i32 a, i32 b) {
+                return a + b;
+            }
+
+            i32 main() {
+                return apply(&add, 2, 3);
+            }
+            """, applyLibrary);
+
+        Assert.Equal(5, run.ExitCode);
+    }
+
     // A public alias of a library is carried with the library's declarations, so a program names the library's type by the alias.
     [SkippableFact]
     public void AProgramUsesAnAliasOfAnotherLibrary()

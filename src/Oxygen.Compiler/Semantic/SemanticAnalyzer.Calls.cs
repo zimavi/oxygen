@@ -191,8 +191,17 @@ public sealed partial class SemanticAnalyzer
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Function '{functionName}' is not declared", call.Location, functionName.Length);
         }
 
+        // The address of an overloaded name has no type until the parameter it is passed to selects its overload. Such an argument is held back:
+        // it matches any function pointer parameter while the callee is chosen, and it is analysed with that parameter's type afterwards.
+        var pendingReferences = call.Arguments
+            .Select((argument, index) => (argument, index))
+            .Where(item => IsOverloadedFunctionReference(item.argument, scope, moduleName, imports, functions))
+            .Select(item => item.index)
+            .ToHashSet();
         var argumentTypes = call.Arguments
-            .Select(argument => AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls))
+            .Select((argument, index) => pendingReferences.Contains(index)
+                ? SemanticType.FromPrimitive(PrimitiveType.Void)
+                : AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls))
             .ToList();
         foreach (var argument in call.Arguments)
         {
@@ -290,7 +299,7 @@ public sealed partial class SemanticAnalyzer
         // rank remain. The return type never selects an overload.
         var ranked = candidates
             .Select(candidate => (candidate.function, candidate.order,
-                cost: CandidateCost(candidate.function, call, argumentTypes, candidate.order)))
+                cost: CandidateCost(candidate.function, call, argumentTypes, candidate.order, pendingReferences: pendingReferences)))
             .Where(item => item.cost is not null)
             .Select(item => (item.function, item.order, cost: item.cost!.Value))
             .ToList();
@@ -308,6 +317,7 @@ public sealed partial class SemanticAnalyzer
                 var (candidate, order) = candidates[0];
                 var mismatches = Enumerable.Range(0, order.Length)
                     .Where(position => order[position] != DefaultArgument
+                        && !pendingReferences.Contains(order[position])
                         && candidate.Parameters[position].Type != argumentTypes[order[position]])
                     .ToList();
                 if (mismatches.Count > 0)
@@ -327,6 +337,14 @@ public sealed partial class SemanticAnalyzer
         }
 
         var (function, chosenOrder, _) = matches[0];
+        // The held-back addresses take their overload from the parameter they are passed to, now that the callee is chosen.
+        foreach (var index in pendingReferences)
+        {
+            var position = Array.IndexOf(chosenOrder, index);
+            if (position >= 0)
+                AnalyzeExpression(call.Arguments[index], scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
+                    expectedType: function.Parameters[position].Type);
+        }
         for (var position = 0; position < chosenOrder.Length; position++)
         {
             if (chosenOrder[position] == DefaultArgument)
@@ -511,7 +529,8 @@ public sealed partial class SemanticAnalyzer
         CallExpression call,
         IReadOnlyList<SemanticType> argumentTypes,
         int[] order,
-        IReadOnlyDictionary<string, SemanticType>? substitutions = null)
+        IReadOnlyDictionary<string, SemanticType>? substitutions = null,
+        IReadOnlySet<int>? pendingReferences = null)
     {
         var worst = ConversionCost.Exact;
         for (var position = 0; position < order.Length; position++)
@@ -522,6 +541,13 @@ public sealed partial class SemanticAnalyzer
             var parameterType = substitutions is null
                 ? function.Parameters[position].Type
                 : SubstituteGenericType(function.Parameters[position].Type, substitutions);
+            // A held-back address (see AnalyzeCall) fits a function pointer parameter, whatever its overload turns out to be.
+            if (pendingReferences is not null && pendingReferences.Contains(index))
+            {
+                if (!parameterType.IsFunctionPointer)
+                    return null;
+                continue;
+            }
             var cost = ConversionCostOf(parameterType, ValueOf(call.Arguments[index]), argumentTypes[index]);
             if (cost is null)
                 return null;

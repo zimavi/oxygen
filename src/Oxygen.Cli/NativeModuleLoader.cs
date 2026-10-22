@@ -157,6 +157,18 @@ internal static class NativeModuleLoader
             }
             if (TryConsume("str"))
                 return SemanticType.String;
+            // A function pointer: its return type, then its parameter types as a counted list, as a function's signature is written.
+            if (TryConsume("F"))
+            {
+                var returnType = ReadType();
+                Expect("_p");
+                var count = ReadNumber();
+                Expect("_");
+                var parameterTypes = new SemanticType[count];
+                for (var index = 0; index < count; index++)
+                    parameterTypes[index] = ReadType();
+                return SemanticType.FunctionPointer(returnType, parameterTypes);
+            }
             if (TryConsume("p"))
                 return SemanticType.PointerTo(ReadType());
             if (TryConsume("a"))

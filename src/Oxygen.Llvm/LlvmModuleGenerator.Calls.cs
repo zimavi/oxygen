@@ -11,6 +11,9 @@ public sealed partial class LlvmModuleGenerator
 {
     private LLVMValueRef EmitCall(LLVMContextRef context, LLVMBuilderRef builder, CallExpression expression, IReadOnlyDictionary<string, LLVMValueRef> values, IReadOnlyDictionary<string, LLVMValueRef> storage, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        // A call through a function pointer named by its variable, field or element names no function.
+        if (model.IndirectCallees.TryGetValue(expression, out var indirectCallee))
+            return EmitIndirectCall(context, builder, expression, indirectCallee, expression.Arguments, values, storage, model, llvmFunctions);
         var parts = expression.Name.Split('.');
         // A union case is constructed by `Union.Case(...)`. It names no function, so it has no resolved call, and its type is the
         // union, which is keyed by its qualified name.
