@@ -95,7 +95,7 @@ public sealed class NoThrowTests
             "class Tally { i32 count; public Tally(i32 start) { count = start; } } " +
             "@nothrow i32 f() { Tally tally = new Tally(3); return 0; } i32 main() { return f(); }");
 
-        Assert.Contains(Errors(result), message => message.Contains("runs its constructor, which may throw", StringComparison.Ordinal));
+        Assert.Contains(Errors(result), message => message.Contains("runs a constructor that may throw", StringComparison.Ordinal));
     }
 
     [Fact]

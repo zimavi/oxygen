@@ -153,10 +153,16 @@ The body of a `@nothrow` function may not:
   declared with `@extern`, since C does not throw Oxygen exceptions;
 - call through a function pointer, or call a function that the compiler cannot resolve (a union case, a
   construction, or a call of a function value), since its target is not known;
-- create an object whose class has a constructor, since constructors cannot be `@nothrow` yet;
+- create an object whose construction may throw: a constructor that is not `@nothrow`, or the constructor
+  of a base class that is not `@nothrow`. A class without declared constructors is constructed by a
+  synthesized one, which runs its field initializers, so that is allowed only when every initializer is a literal;
 - read or write a property, since its accessor may throw;
 - `delete` an object, or use `for`-in, since destructors and iterator methods may throw;
 - declare a local whose class has a destructor, since the destructor runs at the end of the scope.
+
+A constructor may be `@nothrow`, and the same rules apply to it. Its field initializers are checked as
+expressions, and its body as a function. It may not chain to another constructor with `this(...)` or
+`base(...)`, and it may not run a base class's constructor that may throw.
 
 A dispatched call (a virtual method or an interface method) is allowed only when the method it
 names is `@nothrow`. An implementation of a `@nothrow` interface method, and an override of a
