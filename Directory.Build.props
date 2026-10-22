@@ -14,4 +14,9 @@
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
   </PropertyGroup>
 
+  <!-- A compiler warning fails the build, so a warning is fixed or suppressed on purpose, not left to accumulate. -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
 </Project>
