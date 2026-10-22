@@ -129,7 +129,8 @@ drop the code after it.
 `@noreturn` and `@nothrow` are independent. A `@noreturn` function may throw: a throw leaves the
 function and does not return to the caller, so its caller can catch the exception. A function that
 is both may only abort. A C function declared with `@extern` can be `@noreturn` too, for example one
-that ends the program.
+that ends the program. The standard library's `std.process.abort()` is one: it ends the program with exit
+code 101, and the message, if any, is written by the caller first.
 
 ## Without exceptions
 

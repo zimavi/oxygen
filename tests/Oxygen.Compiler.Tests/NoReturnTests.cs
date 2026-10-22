@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Oxygen.Compiler.Ast;
 using Oxygen.Compiler.Diagnostics;
 using Oxygen.Compiler.Lexer;
 using Oxygen.Compiler.Parsing;
@@ -64,6 +65,35 @@ public sealed class NoReturnTests
             "@noreturn i32 f() { stop(); } i32 main() { return 0; }");
 
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    // The library's abort, as the metadata of std.process describes it: no return, and a C function that ends the program.
+    private static ExternalModuleDeclaration StandardAbort(bool noReturn) => new(
+        "std.process",
+        [new ExternalFunctionDeclaration("abort", SemanticType.FromPrimitive(PrimitiveType.Void), [], "oxygen_runtime_abort",
+            Visibility.Public, new CInteropFunctionMetadata("oxygen_runtime_abort"), NoReturn: noReturn)]);
+
+    private static SemanticResult AnalyzeWithLibrary(string source, ExternalModuleDeclaration library)
+    {
+        var tokenizer = new Tokenizer(Log.Logger);
+        var program = new Parser(tokenizer.Tokenize("import std.process; " + source), Log.Logger).Parse();
+        return new SemanticAnalyzer(Log.Logger).AnalyzeWithDiagnostics([program], ["main.oxy"], [library]);
+    }
+
+    [Fact]
+    public void AnImportedNoreturnFunctionEndsANoreturnFunction()
+    {
+        var result = AnalyzeWithLibrary("@noreturn i32 f() { abort(); } i32 main() { return 0; }", StandardAbort(noReturn: true));
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void AnImportedFunctionWithoutTheAnnotationMayReturn()
+    {
+        var result = AnalyzeWithLibrary("@noreturn i32 f() { abort(); } i32 main() { return 0; }", StandardAbort(noReturn: false));
+
+        Assert.Contains("is @noreturn, but it can return", Assert.Single(Errors(result)));
     }
 
     [Fact]

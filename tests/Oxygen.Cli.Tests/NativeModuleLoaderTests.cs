@@ -92,6 +92,25 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.Contains("is not imported", warning);
     }
 
+    // The metadata of a function records @nothrow and @noreturn, so an importing program checks its calls the way the library's source does.
+    [Fact]
+    public void MetadataRecordsTheNothrowAndNoreturnAnnotationsOfAFunction()
+    {
+        var library = Path.Combine(_directory, "lib.a");
+        File.WriteAllBytes(library, [1, 2, 3, 4]);
+        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
+            [Function("abort", "v") with { NoReturn = true, NoThrow = true }, Function("add", "i32")]));
+
+        var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
+
+        var abort = loaded.Module.Functions.Single(function => function.Name == "abort");
+        Assert.True(abort.NoReturn);
+        Assert.True(abort.NoThrow);
+        var add = loaded.Module.Functions.Single(function => function.Name == "add");
+        Assert.False(add.NoReturn);
+        Assert.False(add.NoThrow);
+    }
+
     [Fact]
     public void MetadataForAnotherTargetIsRejected()
     {

@@ -114,6 +114,34 @@ public sealed class ImportedStandardLibraryTests : IDisposable
         Assert.Equal("7\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    // std.process.abort is @noreturn in the library's metadata, so a @noreturn function of the program may end with it, and the program
+    // ends with exit code 101 after the output before it.
+    [SkippableFact]
+    public void AProgramEndsWithTheNoreturnAbortOfASharedStandardLibrary()
+    {
+        var (library, runtime, runtimeFile) = PrepareSharedLibraries();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source, """
+            import std.io;
+            import std.process;
+
+            @noreturn
+            i32 fail() {
+                io.println_char('i');
+                abort();
+            }
+
+            i32 main() {
+                return fail();
+            }
+            """);
+
+        var run = BuildAndRun(source, library, runtime, runtimeFile);
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Equal("i\n", run.Output.Replace("\r\n", "\n"));
+    }
+
     // A class of the library is declared here and defined there, so a program throws and catches the library's RuntimeException.
     [SkippableFact]
     public void AProgramThrowsAndCatchesAnExceptionClassOfASharedStandardLibrary()
