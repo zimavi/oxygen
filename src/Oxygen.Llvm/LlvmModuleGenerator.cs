@@ -336,6 +336,7 @@ public sealed partial class LlvmModuleGenerator
             {
                 ModuleName = moduleName,
                 TargetTriple = _target.Triple,
+                ObjectLayoutVersion = NativeModuleMetadata.CurrentObjectLayoutVersion,
                 EntryPoint = "main",
                 // The module's own functions, and its externals: an extern is declared here and defined by the C runtime, so the object
                 // does not define it, but a program that imports the module must still declare it to call it. Methods and property

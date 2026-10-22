@@ -16,6 +16,11 @@ public sealed record NativeModuleMetadata
     public const int PreviousFormatVersion = 2;
 
     public int FormatVersion { get; init; } = CurrentFormatVersion;
+    // The layout of the objects of the module's classes: where their fields and virtual slots are in memory. A program that uses a class
+    // of a library lays the class out by the compiler's rule, so the library must have been built with the same rule, or the program would
+    // read the fields at the wrong places. Version 1 is the layout before the prefix layout, and a document without the field has it.
+    public const int CurrentObjectLayoutVersion = 2;
+    public int ObjectLayoutVersion { get; init; } = 1;
     // Every field that names the program is required, so no default such as "program" can stand in for the real name.
     public required string ModuleName { get; init; }
     public required string EntryPoint { get; init; }
@@ -191,12 +196,16 @@ public static class NativeModuleMetadataSerializer
             ?? throw new InvalidDataException("The native metadata document is empty.");
         // An array that the document does not have is read as null, not as the empty default, so the arrays are made empty here.
         // Version 2 documents have no types or generics at all.
+        // A document without the object layout was built before the prefix layout, so it is layout 1, not the zero that a missing number reads as.
+        using var document = JsonDocument.Parse(contents);
+        var hasObjectLayout = document.RootElement.TryGetProperty("objectLayoutVersion", out _);
         var metadata = read with
         {
             Functions = read.Functions ?? [],
             Dependencies = read.Dependencies ?? [],
             Types = read.Types ?? [],
-            Generics = read.Generics ?? []
+            Generics = read.Generics ?? [],
+            ObjectLayoutVersion = hasObjectLayout ? read.ObjectLayoutVersion : 1
         };
         Validate(metadata);
         return metadata;
@@ -262,6 +271,8 @@ public static class NativeModuleMetadataSerializer
 
     private static void Validate(NativeModuleMetadata metadata)
     {
+        if (metadata.ObjectLayoutVersion < 1)
+            throw new InvalidDataException($"Native metadata has object layout {metadata.ObjectLayoutVersion}, but layouts start at 1.");
         if (metadata.FormatVersion is not (NativeModuleMetadata.PreviousFormatVersion or NativeModuleMetadata.CurrentFormatVersion))
             throw new InvalidDataException(
                 $"Unsupported native metadata format version {metadata.FormatVersion}; " +

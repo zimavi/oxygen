@@ -55,6 +55,26 @@ public sealed class NativeModuleMetadataFormatTests
         Assert.Empty(metadata.Generics);
     }
 
+    // A document without the object layout field was built before the prefix layout, so it has layout 1.
+    [Fact]
+    public void ADocumentWithoutAnObjectLayoutIsLayoutOne()
+    {
+        var metadata = NativeModuleMetadataSerializer.Deserialize(
+            """{"formatVersion":3,"moduleName":"lib","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}""");
+
+        Assert.Equal(1, metadata.ObjectLayoutVersion);
+    }
+
+    [Fact]
+    public void TheObjectLayoutRoundTrips()
+    {
+        var metadata = Module() with { ObjectLayoutVersion = NativeModuleMetadata.CurrentObjectLayoutVersion };
+
+        var read = NativeModuleMetadataSerializer.Deserialize(NativeModuleMetadataSerializer.Serialize(metadata));
+
+        Assert.Equal(NativeModuleMetadata.CurrentObjectLayoutVersion, read.ObjectLayoutVersion);
+    }
+
     [Fact]
     public void AVersionTwoDocumentCannotCarryTypesOrGenerics()
     {

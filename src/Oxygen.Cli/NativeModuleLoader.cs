@@ -31,6 +31,11 @@ internal static class NativeModuleLoader
             if (metadata.TargetTriple != target.Triple)
                 throw new InvalidDataException(
                     $"The native module '{file.FullName}' was built for '{metadata.TargetTriple}', but the target is '{target.Triple}'.");
+            // A class of the library is laid out by the rule that built it, so a library with another rule cannot be used.
+            if (metadata.ObjectLayoutVersion != NativeModuleMetadata.CurrentObjectLayoutVersion)
+                throw new InvalidDataException(
+                    $"The native module '{file.FullName}' was built with object layout {metadata.ObjectLayoutVersion}, but this compiler " +
+                    $"lays out objects as layout {NativeModuleMetadata.CurrentObjectLayoutVersion}. Rebuild the library with this compiler.");
             modules.Add(Decode(file, metadata));
         }
         return modules;
