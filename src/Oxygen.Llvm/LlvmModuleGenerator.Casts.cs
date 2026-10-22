@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using LLVMSharp.Interop;
 using Oxygen.Compiler.Ast;
@@ -143,26 +144,20 @@ public sealed partial class LlvmModuleGenerator
         return (table, count);
     }
 
-    private void InitializeRuntimeTypeInfo(
-        LLVMBuilderRef builder,
+    // Gives the type information of `typeName` its value. Every field is known at compile time, so the value is a constant: it needs no
+    // startup code, and every object that defines the type gives the same value.
+    private void DefineRuntimeTypeInfo(
+        LLVMModuleRef module,
         string typeName,
         string? parentType,
         uint kind,
         SemanticModel model)
     {
-        var info = _runtimeTypeInfos[typeName];
-        var name = builder.BuildGlobalStringPtr(typeName, $"oxygen.type.name.{typeName}");
-        builder.BuildStore(name, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 0, "type.name"));
-        builder.BuildStore(
-            LLVMValueRef.CreateConstInt(_context.Int32Type, kind, false),
-            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 1, "type.kind"));
-        builder.BuildStore(
-            LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false),
-            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 2, "type.flags"));
+        var pointerType = LLVMTypeRef.CreatePointer(_context.Int8Type, 0);
+        var int32 = _context.Int32Type;
         var parent = parentType is null
-            ? LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0))
-            : GetTypeName(builder, parentType);
-        builder.BuildStore(parent, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 3, "type.parent"));
+            ? LLVMValueRef.CreateConstNull(pointerType)
+            : _runtimeTypeInfos[parentType];
         // Only advertise a message field when the generated class layout
         // actually contains one.  Name-based inference made an unrelated
         // class such as MyException unsafe for the native unhandled reporter.
@@ -171,23 +166,40 @@ public sealed partial class LlvmModuleGenerator
                 .FirstOrDefault(item => item.field.Name == "message"
                     && item.field.Type.Kind == SemanticTypeKind.String)
             : default;
-        // The offset is the field's address in the object's LLVM layout, so padding and the pointer size come from the
+        // The offset is the field's byte offset in the object's LLVM layout, so padding and the pointer size come from the
         // module's data layout rather than a second copy of those rules.
         var messageOffset = messageField.field is null
-            ? LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false)
-            : builder.BuildPtrToInt(
-                builder.BuildStructGEP2(_classTypes[typeName],
-                    LLVMValueRef.CreateConstNull(ClassPointerType(typeName)),
-                    (uint)FieldOffset(cls!, model, messageField.index), "message.address"),
-                _context.Int32Type, "message.offset");
-        builder.BuildStore(messageOffset, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 4, "type.message.offset"));
+            ? 0
+            : MessageFieldOffset(typeName, FieldOffset(cls!, model, messageField.index));
         // Releasing an object of this type calls the nearest destructor in its class chain, or nothing when there is none.
-        builder.BuildStore(FindDestructor(typeName, model) ?? LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
-            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 5, "type.destructor"));
+        var destructor = FindDestructor(typeName, model) ?? LLVMValueRef.CreateConstNull(pointerType);
         var supertypes = _runtimeSupertypes[typeName];
-        builder.BuildStore(supertypes.Table, builder.BuildStructGEP2(_runtimeTypeInfoType, info, 6, "type.supertypes"));
-        builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int32Type, supertypes.Count, false),
-            builder.BuildStructGEP2(_runtimeTypeInfoType, info, 7, "type.supertype.count"));
+        var info = _runtimeTypeInfos[typeName];
+        info.Initializer = LLVMValueRef.CreateConstNamedStruct(_runtimeTypeInfoType,
+        [
+            AddRuntimeTypeNameString(module, typeName),
+            LLVMValueRef.CreateConstInt(int32, kind, false),
+            LLVMValueRef.CreateConstInt(int32, 0, false),
+            parent,
+            LLVMValueRef.CreateConstInt(int32, (ulong)messageOffset, false),
+            destructor,
+            supertypes.Table,
+            LLVMValueRef.CreateConstInt(int32, supertypes.Count, false)
+        ]);
+    }
+
+    // The byte offset of a class's field in its LLVM layout. `structIndex` is the field's index in the struct, as FieldOffset gives it.
+    private unsafe int MessageFieldOffset(string typeName, int structIndex)
+    {
+        var data = LLVMTargetDataRef.FromStringRepresentation(_target.DataLayout);
+        try
+        {
+            return checked((int)data.OffsetOfElement(_classTypes[typeName], (uint)structIndex));
+        }
+        finally
+        {
+            LLVM.DisposeTargetData(data);
+        }
     }
 
     // The destructor that releases an object of `typeName`: the nearest one in its class chain, or null when there is none.
@@ -223,12 +235,27 @@ public sealed partial class LlvmModuleGenerator
             [builder.BuildBitCast(reference, pointerType, "free.memory")], string.Empty);
     }
 
-    private LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName)
+    // The type information of a type. A type's owner module defines it with external linkage, and every other object that has the
+    // type (an instance of a generic class, or a class of another module) defines it as linkonce_odr, so the linker keeps one copy.
+    // The runtime compares these addresses for `is` and catch, so a type must have one address in the whole program.
+    private LLVMValueRef AddRuntimeTypeInfoGlobal(LLVMModuleRef module, string typeName, bool ownedByThisObject)
     {
         var info = module.AddGlobal(_runtimeTypeInfoType, $"oxygen.type.info.{typeName}");
-        info.Linkage = LLVMLinkage.LLVMInternalLinkage;
-        info.Initializer = LLVMValueRef.CreateConstNull(_runtimeTypeInfoType);
+        info.Linkage = ownedByThisObject ? LLVMLinkage.LLVMExternalLinkage : LLVMLinkage.LLVMLinkOnceODRLinkage;
         return info;
+    }
+
+    // The name of a type as a constant string, with its terminating zero.
+    private LLVMValueRef AddRuntimeTypeNameString(LLVMModuleRef module, string typeName)
+    {
+        var int8 = _context.Int8Type;
+        var bytes = Encoding.UTF8.GetBytes(typeName).Append((byte)0)
+            .Select(value => LLVMValueRef.CreateConstInt(int8, value, false)).ToArray();
+        var text = module.AddGlobal(LLVMTypeRef.CreateArray(int8, (uint)bytes.Length), $"oxygen.type.name.{typeName}");
+        text.Linkage = LLVMLinkage.LLVMInternalLinkage;
+        text.IsGlobalConstant = true;
+        text.Initializer = LLVMValueRef.CreateConstArray(int8, bytes);
+        return text;
     }
 
     private LLVMValueRef GetTypeName(LLVMBuilderRef builder, string typeName)

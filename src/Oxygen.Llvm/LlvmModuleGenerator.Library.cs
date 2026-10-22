@@ -22,6 +22,11 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, OxygenNameMangler.MethodOwner> methodOwners) =>
         methodOwners.TryGetValue(symbol, out var owner) ? owner.ModuleName : symbol.ModuleName;
 
+    // Whether the object owns a type, so that it defines the type's information with external linkage. Only the type's module owns it,
+    // and an instance of a generic type is owned by no module, so every object with the instance defines the same copy.
+    private static bool OwnsTypeInThisObject(string typeModule, string typeName, string moduleName) =>
+        typeModule == moduleName && !IsInstantiationName(typeName);
+
     // Whether the object defines the class's constructors and destructor.
     private static bool DefinesClassInThisObject(ClassSymbol cls, string moduleName) =>
         cls.ModuleName == moduleName || IsInstantiationName(cls.Name);
