@@ -15,13 +15,13 @@ the standard library from the folder it runs from, so it needs no `OXYGEN_PATH`.
 | Shared runtime, loaded by programs | `bin\oxygenrt.dll` | `lib/liboxygenrt.so` |
 | Shared runtime, linked | `lib\oxygenrt.lib` | `lib/liboxygenrt.so` |
 | Static runtime | `lib\liboxygenrt.a` | `lib/liboxygenrt.a` |
-| Standard library, read for its metadata and loaded by programs | `bin\std.dll` | `lib/std.so` |
-| Standard library, linked | `lib\std.lib` | `lib/std.so` |
+| Standard library, read for its metadata and loaded by programs | `bin\oxygenstd.dll` | `lib/liboxygenstd.so` |
+| Standard library, linked | `lib\oxygenstd.lib` | `lib/liboxygenstd.so` |
 
-On Windows a program finds `oxygenrt.dll` and `std.dll` through `PATH`, so they sit in
+On Windows a program finds `oxygenrt.dll` and `oxygenstd.dll` through `PATH`, so they sit in
 `bin` beside the compiler. On Linux the loader needs `<prefix>/lib` on its library path.
-The Linux standard library is `std.so`, not `libstd.so`, because the library records its own
-file name as the name that programs ask the loader for.
+The Linux standard library is `liboxygenstd.so`. Its SONAME is its file name, which programs ask the loader
+for, and `ldconfig` caches only `lib*.so` names, so a name without the `lib` prefix is never found.
 
 ## Finding the installation
 
@@ -46,3 +46,65 @@ The compiler is part of an installation when the folder it runs from is called `
 
 The sources in `share/oxygen/stdlib` are not compiled. They are there for tools that show
 the standard library to the programmer, such as a language server.
+
+## Installing
+
+`scripts/install.ps1` (Windows) and `scripts/install.sh` (Linux x86_64) build the toolchain
+and copy it into the layout above. The default prefix is `%LOCALAPPDATA%\Oxygen` on Windows and
+`~/.local/oxygen` on Linux. Pass `-Prefix` or `--prefix` to choose another folder.
+
+```text
+scripts/install.ps1                          the default steps
+scripts/install.ps1 -AddToPath               also add <prefix>\bin to the user PATH
+scripts/install.ps1 -Only bundle,path        run only the named steps
+scripts/install.ps1 -SkipBuild               reuse the outputs that already exist, and copy them again
+scripts/install.ps1 -Update                  rebuild the installation at the prefix
+```
+
+`-Update` (`--update` on Linux) rebuilds every step into an installation that already exists
+at the prefix, and prints the version it replaced. It fails when there is no installation there,
+and it cannot be combined with `-SkipBuild`. It does not change PATH unless `-AddToPath` is
+also given. On Linux it does not ask about sudo. It refreshes the system links only when they
+already point at the prefix, and `--sudo` links them anyway.
+
+The Linux script takes the same options with two spellings: `--only`, `--skip-build` and
+`--add-to-path`. The steps run in this order, whatever order `-Only` names them in:
+
+| Step | What it does |
+|---|---|
+| `check-dotnet` | Checks for the .NET 10 SDK and stops with the install command if it is missing. It does not install .NET. |
+| `publish-compiler` | Publishes the compiler into `artifacts/install/stage/compiler`. |
+| `build-runtime` | Runs `runtime/build.ps1` or `build.sh` for the host. |
+| `build-stdlib` | Runs `stdlib/build.ps1` or `build.sh`, which builds the runtime it links and publishes its own compiler copy. |
+| `bundle` | Replaces the prefix's `bin`, `lib` and `share/oxygen/stdlib` folders with the built files. Other files in the prefix are left alone. |
+| `link-libraries` | Linux only: with sudo, symlinks `liboxygenrt.so` and `liboxygenstd.so` into `/usr/local/lib` and runs `ldconfig`. Runs after `bundle`. |
+| `path` | Windows only: adds `<prefix>\bin` to the user PATH, once. It runs only with `-AddToPath` or when named. |
+
+Each step is also a script of its own in `scripts/`, so any step can be rerun alone.
+
+On Linux, a default run asks whether to link the libraries with sudo, and only when it has a
+terminal:
+
+```text
+Link the libraries into /usr/local/lib with sudo, so programs find them without LD_LIBRARY_PATH? [y/N]
+```
+
+A yes runs `link-libraries`. Its sudo calls ask for the password on the terminal. Without a
+terminal they use `sudo -n`, which fails at once instead of waiting. If sudo cannot get
+permission, the step prints `But you promised ;(`, and the install carries on as it does
+without sudo. A no, or no answer, links nothing into `/usr/local/lib`, and programs then need
+`LD_LIBRARY_PATH=<prefix>/lib`. The symlinks point into the prefix, so they break if the
+prefix is moved or removed. Naming the step with `--only link-libraries` runs it without the
+question. `--sudo` answers yes without asking, for scripts.
+
+The Linux install exits with status 1 when the libraries were asked for and could not be linked.
+The install itself is complete then, with the prefix's own libraries, so the message says what to
+set. A default install that answers no exits 0.
+
+What is not done yet:
+
+- **Linux `path` step.** It stops with an error. Without the sudo links, a program built with the
+  installed compiler loads `liboxygenrt.so` and `liboxygenstd.so` from `<prefix>/lib`, which needs
+  `LD_LIBRARY_PATH` until the rpath question in the plan is decided. Put `<prefix>/bin` on `PATH` yourself.
+- **Target.** The scripts build the host target only.
+- **Uninstall, checksums, and the CI and release jobs** are later steps of the plan.
