@@ -540,9 +540,10 @@ public sealed class LlvmTests
         Assert.Contains("__oxygen_runtime_invalid_cast", ir);
         Assert.Contains("oxygen.type.info.program.Item", ir);
         Assert.Contains("oxygen.type.info.program.Printable", ir);
-        // The kind field is written through a constant address, which LLVM does not name, so the
-        // assertion checks the stored value: 2 is the interface kind.
-        Assert.Contains("store i32 2, ptr getelementptr", ir);
+        // The type information is a constant of the global, not a store at startup. The program owns it, so its linkage is external:
+        // the definition has no linkage keyword. 2 is the interface kind.
+        Assert.Matches(@"@oxygen\.type\.info\.program\.Printable = global [^\n]*\{ ptr @oxygen\.type\.name\.program\.Printable, i32 2,", ir);
+        Assert.Matches(@"@oxygen\.type\.info\.program\.Item = global [^\n]*\{ ptr @oxygen\.type\.name\.program\.Item,", ir);
         Assert.Contains("interface.type", ir);
         Assert.Contains("cast.failure", ir);
     }

@@ -239,6 +239,22 @@ public sealed class LibraryBuildTests : IDisposable
         Assert.Contains("define i32 @_Ox_v1_m6shapes_c3Box_f3get_p0_", ir);
     }
 
+    // The type information of a class that the library owns is defined with external linkage. An instance of a generic class has no owner,
+    // so the object defines it as linkonce_odr, and the linker keeps one copy of an instance that two objects define.
+    [Fact]
+    public void TheTypeInformationOfALibraryClassIsOwnedAndAnInstanceIsLinkOnce()
+    {
+        const string shapes = "module shapes; class Shape { i32 sides; } class Box<T> { T item; } " +
+            "public i32 read(Box<i32> box) { return box.item; }";
+        var model = Analyze(shapes, "module other; public i32 unused() { return 0; }");
+
+        using var library = new LlvmModuleGenerator().Generate("shapes", model, library: true);
+        var ir = library.ToString();
+
+        Assert.Matches(@"@oxygen\.type\.info\.shapes\.Shape = global \{", ir);
+        Assert.Matches(@"@oxygen\.type\.info\.shapes\.Box__ox_[^ ]+ = linkonce_odr global \{", ir);
+    }
+
     private static SemanticModel Analyze(string source, string dependency)
     {
         var tokens = new Tokenizer(Log.Logger);

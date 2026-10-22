@@ -200,14 +200,6 @@ public sealed partial class LlvmModuleGenerator
         var entry = nativeMain.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
         builder.BuildCall2(runtimeInitializeType, runtimeInitialize, []);
-        foreach (var cls in model.Classes.Values.Where(cls => !cls.IsGeneric))
-        {
-            InitializeRuntimeTypeInfo(builder, cls.QualifiedName, RuntimeParentName(cls, model), 1, model);
-        }
-        foreach (var interfaceSymbol in model.Interfaces.Values.Where(iface => !iface.IsGeneric))
-        {
-            InitializeRuntimeTypeInfo(builder, interfaceSymbol.QualifiedName, null, 2, model);
-        }
 
         var oxygenMain = model.MainFunction
             ?? throw new InvalidOperationException("Semantic model does not contain a main function.");

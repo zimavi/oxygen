@@ -173,9 +173,11 @@ public sealed partial class LlvmModuleGenerator
             }
 
             foreach (var cls in concreteClasses)
-                _runtimeTypeInfos[cls.QualifiedName] = AddRuntimeTypeInfoGlobal(module, cls.QualifiedName);
+                _runtimeTypeInfos[cls.QualifiedName] = AddRuntimeTypeInfoGlobal(module, cls.QualifiedName,
+                    OwnsTypeInThisObject(cls.ModuleName, cls.Name, moduleName));
             foreach (var interfaceSymbol in concreteInterfaces)
-                _runtimeTypeInfos[interfaceSymbol.QualifiedName] = AddRuntimeTypeInfoGlobal(module, interfaceSymbol.QualifiedName);
+                _runtimeTypeInfos[interfaceSymbol.QualifiedName] = AddRuntimeTypeInfoGlobal(module, interfaceSymbol.QualifiedName,
+                    OwnsTypeInThisObject(interfaceSymbol.ModuleName, interfaceSymbol.Name, moduleName));
             // The supertype tables refer to the type information above, so they are created after it.
             foreach (var cls in concreteClasses)
                 _runtimeSupertypes[cls.QualifiedName] = AddRuntimeSupertypeTable(module, cls.QualifiedName,
@@ -317,6 +319,12 @@ public sealed partial class LlvmModuleGenerator
                         destructor.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
                 }
             }
+
+            // Every type's information is defined here, as a constant, in every object: a library has no startup code of its own.
+            foreach (var cls in concreteClasses)
+                DefineRuntimeTypeInfo(module, cls.QualifiedName, RuntimeParentName(cls, model), 1, model);
+            foreach (var interfaceSymbol in concreteInterfaces)
+                DefineRuntimeTypeInfo(module, interfaceSymbol.QualifiedName, null, 2, model);
 
             if (!library)
                 EmitNativeMain(context, builder, module, model, llvmFunctions);
