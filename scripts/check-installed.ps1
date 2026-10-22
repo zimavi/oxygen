@@ -67,4 +67,7 @@ try {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# The test program'''s exit status was checked above. It must not stay in $LASTEXITCODE, since the PowerShell wrapper that GitHub Actions
+# uses turns a non-zero value into a failed step.
+$global:LASTEXITCODE = 0
 Write-Output "The installation at $Prefix builds and runs a program from a separate folder."

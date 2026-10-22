@@ -98,6 +98,8 @@ foreach ($step in $steps) {
     }
 }
 
+# A step's native exit status must not stay in $LASTEXITCODE, since the PowerShell wrapper that GitHub Actions uses turns it into a failure.
+$global:LASTEXITCODE = 0
 if ($steps -contains "bundle") {
     if ($Update) {
         $oldText = if ($oldVersion) { $oldVersion } else { "an unknown version" }
