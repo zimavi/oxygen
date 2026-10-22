@@ -110,11 +110,12 @@ public sealed partial class LlvmModuleGenerator
     private LLVMValueRef EmitNullReferenceException(
         LLVMBuilderRef builder, string message, SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
-        EmitExceptionInstance(builder, NullReferenceClassName, message, model, llvmFunctions);
+        EmitExceptionInstance(builder, NullReferenceClassName, EmitStringBytes(builder, Encoding.UTF8.GetBytes(message)), model,
+            llvmFunctions);
 
-    // Builds an instance of a class of std.exception with its message, through its (string) constructor. The class must be loaded.
+    // Builds an instance of a class of std.exception with its message, a string value, through its (string) constructor. The class must be loaded.
     private LLVMValueRef EmitExceptionInstance(
-        LLVMBuilderRef builder, string className, string message, SemanticModel model,
+        LLVMBuilderRef builder, string className, LLVMValueRef text, SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         if (!model.Classes.TryGetValue(className, out var cls))
@@ -124,7 +125,6 @@ public sealed partial class LlvmModuleGenerator
             && candidate.Parameters[0].Type.Kind == SemanticTypeKind.String);
         var instance = AllocateClassInstance(builder, className, cls, true, model, llvmFunctions);
         var constructor = _constructors[ConstructorKey(cls, ctor)];
-        var text = EmitStringBytes(builder, Encoding.UTF8.GetBytes(message));
         builder.BuildCall2(constructor.FunctionType, constructor, new[] { instance, text },
             (ReadOnlySpan<char>)string.Empty);
         return instance;

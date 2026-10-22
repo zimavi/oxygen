@@ -80,7 +80,7 @@ public sealed class ArrayLiteralIntegrationTests : IDisposable
             """);
 
         Assert.Equal(101, run.ExitCode);
-        Assert.Contains("Unhandled IndexOutOfRangeException: An array index is outside the bounds of the array.", run.Error + run.Output);
+        Assert.Contains("Unhandled IndexOutOfRangeException: Array index 9 is outside the bounds of the array of length 3.", run.Error + run.Output);
     }
 
     [SkippableFact]

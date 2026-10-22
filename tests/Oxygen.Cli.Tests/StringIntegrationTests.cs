@@ -60,7 +60,7 @@ public sealed class StringIntegrationTests : IDisposable
             """);
 
         Assert.Equal(101, run.ExitCode);
-        Assert.Contains("Unhandled IndexOutOfRangeException: A string index is outside the bounds of the string.", run.Error + run.Output);
+        Assert.Contains("Unhandled IndexOutOfRangeException: String index 9 is outside the bounds of the string of length 3.", run.Error + run.Output);
     }
 
     [SkippableFact]
