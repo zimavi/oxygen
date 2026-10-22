@@ -114,6 +114,22 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.Empty(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
     }
 
+    // A library built with another object layout cannot be used: its classes would be read at the wrong places.
+    [Fact]
+    public void MetadataWithAnotherObjectLayoutIsRejected()
+    {
+        var library = Path.Combine(_directory, "lib.a");
+        File.WriteAllBytes(library, [1, 2, 3, 4]);
+        NativeModuleMetadataSerializer.Embed(library,
+            Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple, [Function("add", "i32")]) with { ObjectLayoutVersion = 1 });
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
+
+        Assert.Contains("object layout 1", exception.Message);
+        Assert.Contains("Rebuild the library", exception.Message);
+    }
+
     // An archive that an older build appended metadata to: the section reader stops at the appended record, so the metadata is read.
     [Fact]
     public void AnArchiveWithAppendedMetadataGivesItsModule()
@@ -161,6 +177,7 @@ public sealed class NativeModuleLoaderTests : IDisposable
         ModuleName = moduleName,
         EntryPoint = "main",
         TargetTriple = triple,
+        ObjectLayoutVersion = NativeModuleMetadata.CurrentObjectLayoutVersion,
         Functions = functions
     };
 
