@@ -96,6 +96,10 @@ public sealed partial class LlvmModuleGenerator
                 (ReadOnlySpan<char>)string.Empty);
             var text = builder.BuildLoad2(stringType, message, "failure.text");
             var exception = EmitExceptionInstance(builder, className, text, model, llvmFunctions);
+            // The exception holds the text, so releasing the exception frees it (see __oxygen_runtime_release_caught_exception).
+            var data = builder.BuildExtractValue(text, 0, "failure.data");
+            builder.BuildCall2(_adoptFailureText.FunctionType, _adoptFailureText, [exception, data],
+                (ReadOnlySpan<char>)string.Empty);
             EmitThrowObject(builder, exception);
             _currentFunction = previousFunction;
         }

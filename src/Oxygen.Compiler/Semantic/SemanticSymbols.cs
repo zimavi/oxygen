@@ -235,8 +235,10 @@ public sealed class SemanticModel
         IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertyGetters = null,
         IReadOnlyDictionary<Expression, FunctionSymbol>? staticPropertySetters = null,
         IReadOnlySet<string>? externalModules = null,
-        IReadOnlySet<Expression>? nonNullDereferences = null)
+        IReadOnlySet<Expression>? nonNullDereferences = null,
+        IReadOnlySet<CatchClause>? freedCatchBindings = null)
     {
+        FreedCatchBindings = freedCatchBindings ?? new HashSet<CatchClause>(ReferenceEqualityComparer.Instance);
         ExternalModules = externalModules ?? new HashSet<string>(StringComparer.Ordinal);
         NonNullDereferences = nonNullDereferences ?? new HashSet<Expression>(ReferenceEqualityComparer.Instance);
         ArgumentOrders = argumentOrders ?? new Dictionary<SyntaxNode, int[]>();
@@ -283,6 +285,9 @@ public sealed class SemanticModel
     // The pointer operands of dereferences that the analysis proved non-null, so the backend emits them without a null check. Every other
     // dereference is checked at run time. Compared by reference, since each is a node of the analyzed syntax.
     public IReadOnlySet<Expression> NonNullDereferences { get; }
+
+    // The catch clauses whose exception object the catch frees when the body completes (see SemanticAnalyzer.Memory.cs).
+    public IReadOnlySet<CatchClause> FreedCatchBindings { get; }
 
     public IReadOnlyDictionary<SyntaxNode, int[]> ArgumentOrders { get; }
 

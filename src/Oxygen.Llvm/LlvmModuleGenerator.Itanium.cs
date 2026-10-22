@@ -121,14 +121,10 @@ public sealed partial class LlvmModuleGenerator
                 builder.BuildCall2(_exceptionEndCatch.FunctionType, _exceptionEndCatch,
                     Array.Empty<LLVMValueRef>(), (ReadOnlySpan<char>)string.Empty);
                 var pushedCatch = PushExceptionTarget(escape);
-                _caughtObjects.Push(objectValue);
-                var returned = EmitStatement(context, builder, function, clause.Body, values, storage,
-                    model, llvmFunctions, emittedReturnType, loops);
-                _caughtObjects.Pop();
+                var returned = EmitCatchBody(context, builder, function, clause, objectValue, values, storage, model,
+                    llvmFunctions, emittedReturnType, loops);
                 if (pushedCatch)
                     _exceptionContexts.Pop();
-                if (!returned)
-                    EmitReleaseCaughtTrace(builder, objectValue);
                 if (!returned && !(scope is not null && EmitFinallyCopy(context, builder, function, scope, values,
                         storage, model, llvmFunctions, emittedReturnType, loops)))
                     builder.BuildBr(end);

@@ -112,6 +112,11 @@ OXYGEN_RUNTIME_API uint64_t __oxygen_runtime_trace_depth(void);
 OXYGEN_RUNTIME_API void __oxygen_runtime_trace_restore(uint64_t depth);
 /* Releases the trace of a caught exception. Called when the catch body has finished. */
 OXYGEN_RUNTIME_API void __oxygen_runtime_release_exception_trace(void *object);
+/* Holds the text of a runtime failure in its exception object, which frees it when released. */
+OXYGEN_RUNTIME_API void __oxygen_runtime_adopt_failure_text(void *object, void *text);
+/* Releases a caught exception after its catch: its trace, the runtime's references to it, and the text of a runtime failure. The backend
+ * then runs its destructor and frees the object. */
+OXYGEN_RUNTIME_API void __oxygen_runtime_release_caught_exception(void *object);
 /* The returned view remains valid until the catch body that handles the
  * exception has finished, or the unhandled-exception reporter returns. */
 OXYGEN_RUNTIME_API const oxygen_runtime_trace *__oxygen_runtime_exception_trace(void *object);

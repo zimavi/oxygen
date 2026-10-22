@@ -46,13 +46,25 @@ constructors create the trace, and a derived exception class reaches them throug
 its constructor's `base(...)` call, or through the implicit parameterless base
 call.
 
-The runtime keeps the trace of a caught exception until the catch body that
-handles it completes, so the body can read `count` and the frames. After that,
-`count` is zero. A catch body that leaves early, by `return`, `break`,
-`continue` or a new `throw`, keeps its trace until the program ends. Each `try`
-saves the depth of the trace stack, and each catch restores it, because the
-functions that an exception left never popped their frames. The trace of an
-uncaught exception is printed and released when it reaches the entry point.
+A caught exception is released when the catch that handles it is finished with it.
+The catch frees the exception object, after running its destructor, when the
+binding of the catch is not kept elsewhere. The binding is kept elsewhere when the
+catch body uses it other than to read a member (`error.message`) or to call a
+method on it: assigning it, returning it, passing it to a function, storing it in
+a field or rethrowing it with `throw error;`. A kept exception is not freed by
+that catch; it is left to the place that holds it, as an escaping object is.
+Releasing the exception clears the runtime's references to it, releases its trace,
+and frees the text of a runtime failure.
+
+The release happens when the catch body completes normally, and also on each exit
+of the body by `return`, `break` or `continue`. An exception that leaves the catch
+body by a new `throw` is not released, so it is leaked. Each `try` saves the depth
+of the trace stack, and each catch restores it, because the functions that an
+exception left never popped their frames. The trace of an uncaught exception is
+printed and released when it reaches the entry point.
+
+A stack object (`T(...)`) cannot be thrown, since the exception would outlive the
+function that built it.
 
 Exception propagation is implemented by the runtime's handler frames. A
 function that does not handle an exception propagates it to its caller. Class

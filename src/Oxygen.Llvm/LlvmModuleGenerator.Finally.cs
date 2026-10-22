@@ -228,14 +228,10 @@ public sealed partial class LlvmModuleGenerator
                 EmitRestoreTraceDepth(builder, savedTraceDepth);
                 BuildNoThrowCall(builder, _exceptionEndCatch, []);
                 var pushedCatch = PushExceptionTarget(escape);
-                _caughtObjects.Push(caught);
-                var returned = EmitStatement(context, builder, function, clause.Body, values, storage,
-                    model, llvmFunctions, emittedReturnType, loops);
-                _caughtObjects.Pop();
+                var returned = EmitCatchBody(context, builder, function, clause, caught, values, storage, model,
+                    llvmFunctions, emittedReturnType, loops);
                 if (pushedCatch)
                     _exceptionContexts.Pop();
-                if (!returned)
-                    EmitReleaseCaughtTrace(builder, caught);
                 if (!returned && !(scope is not null && EmitFinallyCopy(context, builder, function, scope, values,
                         storage, model, llvmFunctions, emittedReturnType, loops)))
                     builder.BuildBr(end);
