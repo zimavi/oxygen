@@ -141,6 +141,7 @@ public sealed partial class SemanticAnalyzer
             {
                 var receiverType = AnalyzeExpression(call.Receiver, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
                 return AnalyzeMethodCall(call, receiverType, call.Name, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, allowVoid)
+                    ?? TryFunctionPointerFieldCall(call, call.Receiver!, call.Name, receiverType, scope, functions, moduleName, imports, expressionTypes, resolvedCalls)
                     ?? throw ErrorWithCode(DiagnosticCode.NotDeclared,
                         $"Method '{call.Name}' is not declared for a receiver of type {receiverType}", call.Location, call.Name.Length);
             }
@@ -171,11 +172,20 @@ public sealed partial class SemanticAnalyzer
                     expressionTypes, resolvedCalls, allowVoid);
                 if (methodResult is not null)
                     return methodResult;
+                // `calc.op(...)` calls a field of function pointer type when the receiver is a variable and has no method of that name.
+                if (receiverName is not ("this" or "base")
+                    && TryFunctionPointerFieldCall(call, new IdentifierExpression(receiverName, call.Location), methodName, receiverType,
+                        scope, functions, moduleName, imports, expressionTypes, resolvedCalls) is { } fieldCall)
+                    return fieldCall;
             }
         }
         var overloads = ResolveFunctions(functionName, moduleName, imports, functions);
         // A method of a class is called through its class or an object, never by its bare name.
         overloads = overloads.Where(function => !IsClassMethodSymbol(function)).ToList();
+        // A name that is a variable of function pointer type is called through the variable, unless a function has the same name.
+        if (call.Receiver is null && TryFunctionPointerVariableCall(call, overloads.Count > 0, scope, functions, moduleName, imports,
+                expressionTypes, resolvedCalls) is { } calledVariable)
+            return calledVariable;
         if (overloads.Count == 0)
         {
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Function '{functionName}' is not declared", call.Location, functionName.Length);
@@ -322,7 +332,7 @@ public sealed partial class SemanticAnalyzer
             if (chosenOrder[position] == DefaultArgument)
                 continue;
             var argument = ValueOf(call.Arguments[chosenOrder[position]]);
-            if (argument is NullLiteralExpression && function.Parameters[position].Type.IsPointer)
+            if (argument is NullLiteralExpression && (function.Parameters[position].Type.IsPointer || function.Parameters[position].Type.IsFunctionPointer))
                 expressionTypes[argument] = function.Parameters[position].Type;
         }
         resolvedCalls[call] = function;

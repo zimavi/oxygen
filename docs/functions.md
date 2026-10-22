@@ -159,3 +159,22 @@ signature.
 
 A function pointer type has the type code `F` in mangled symbol names and in the native
 module metadata. See [mangling](mangling.md).
+
+### Calls, addresses and comparisons
+
+- **Calls.** Any expression of a function pointer type can be called: a variable
+  (`f(1, 2)`), a field (`calc.op(1, 2)`), an array element (`ops[0](1, 2)`) or the
+  result of a call (`make()(1, 2)`). A field call is a call of the field, not a method
+  call.
+- **Addresses.** `&name` takes the address of a free function or of an `@extern`
+  function. It also takes a generic function's address with explicit type arguments.
+  The address of a class method is rejected. The address of a function with default
+  parameters is rejected, since a function pointer type has no defaults; the call must
+  pass every argument.
+- **Comparisons.** `==` and `!=` compare two function pointers by address. A function
+  pointer can be assigned `null` and compared with `null`.
+- **Name clashes.** A call `f(...)` where `f` is both a function and a variable of function
+  pointer type in scope is an error. The program renames one of them.
+- **Generic addresses.** `&name` takes a generic function's address only with explicit type
+  arguments: `&twice<i32>`. The type arguments are not inferred from the target type, so a
+  bare generic name is an error.

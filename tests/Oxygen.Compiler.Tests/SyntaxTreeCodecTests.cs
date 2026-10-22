@@ -60,6 +60,8 @@ public sealed class SyntaxTreeCodecTests
         fn i32 (i32) make() { return null; }
         i32 main() {
             fn i32 (i32 x) { return x + 1; };
+            fn i32 ops[2](i32) = null;
+            i32 called = ops[0](1);
             i32 total = 0;
             i32[2] values = { 1, 2 };
             Child child = new Child(1);

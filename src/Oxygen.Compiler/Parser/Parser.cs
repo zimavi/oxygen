@@ -1267,6 +1267,12 @@ public sealed partial class Parser
                 // Any other `expression.name(...)` calls the method on the value of expression, such as `make().name()`.
                 expression = ParseMemberSuffix(expression, member);
             }
+            // A call of a function pointer that is an element or a call result: `ops[0](1, 2)`, `make()(1, 2)`.
+            else if (expression is (IndexExpression or CallExpression) && Match(TokenKind.OpenParenthesis))
+            {
+                var arguments = ParseArguments();
+                expression = new IndirectCallExpression(expression, arguments, expression.Location);
+            }
             else if (Match(TokenKind.Arrow))
             {
                 var member = ConsumeIdentifierLike("Expected an identifier after '->'.");
@@ -1480,8 +1486,21 @@ public sealed partial class Parser
         var returnType = ParseType(allowInferred: false);
         var name = Consume(TokenKind.Identifier,
             "Expected a name in a function pointer declaration, which has the form fn <return> <name>(<types>).");
+        // An array of function pointers writes its length after the name: fn <return> <name>[<length>](<types>).
+        int? arrayLength = null;
+        if (Match(TokenKind.OpenBracket))
+        {
+            var length = Consume(TokenKind.IntegerLiteral, "Expected the length of the array of function pointers.");
+            if (!int.TryParse(length.Lexeme, out var parsed) || parsed <= 0)
+                throw Error("The length of an array of function pointers must be a positive integer.", length);
+            arrayLength = parsed;
+            Consume(TokenKind.CloseBracket, "Expected ']' after the length of the array of function pointers.");
+        }
         var parameters = ParseFunctionTypeParameters();
-        return (new TypeSyntax(null, false, location) { FunctionReturn = returnType, FunctionParameters = parameters }, name);
+        var functionType = new TypeSyntax(null, false, location) { FunctionReturn = returnType, FunctionParameters = parameters };
+        if (arrayLength is { } count)
+            functionType = new TypeSyntax(null, false, location, ArrayLength: count, ElementType: functionType);
+        return (functionType, name);
     }
 
     // Whether a function pointer declaration starts here: `fn <return> <name>(`. A form without a name, such as a return type, does not.
@@ -1494,7 +1513,7 @@ public sealed partial class Parser
         {
             Advance();
             ParseType(allowInferred: false);
-            return Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.OpenParenthesis;
+            return Check(TokenKind.Identifier) && Peek(1).Kind is TokenKind.OpenParenthesis or TokenKind.OpenBracket;
         }
         catch (ParseException)
         {

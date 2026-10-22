@@ -103,7 +103,8 @@ public static class SyntaxTreeCodec
         SwitchCase,
         SwitchStatement,
         TypeAliasDeclaration,
-        LambdaExpression
+        LambdaExpression,
+        IndirectCallExpression
     }
 
     private sealed class Writer
@@ -217,6 +218,7 @@ public static class SyntaxTreeCodec
                 case GlobalVariableDeclaration n: Tag(NodeKind.GlobalVariableDeclaration); Global(n); break;
                 case TypeAliasDeclaration n: Tag(NodeKind.TypeAliasDeclaration); TypeAlias(n); break;
                 case LambdaExpression n: Tag(NodeKind.LambdaExpression); Lambda(n); break;
+                case IndirectCallExpression n: Tag(NodeKind.IndirectCallExpression); Indirect(n); break;
                 case UnionCaseDeclaration n: Tag(NodeKind.UnionCaseDeclaration); UnionCase(n); break;
                 case UnionDeclaration n: Tag(NodeKind.UnionDeclaration); Union(n); break;
                 case EnumMemberDeclaration n: Tag(NodeKind.EnumMemberDeclaration); EnumMember(n); break;
@@ -520,6 +522,13 @@ public static class SyntaxTreeCodec
             OptItems(n.TypeArguments, Node);
             OptNode(n.FunctionReturn);
             Items(n.FunctionParameters, Node);
+        }
+
+        private void Indirect(IndirectCallExpression n)
+        {
+            Node(n.Callee);
+            Items(n.Arguments, Node);
+            Loc(n.Location);
         }
 
         private void Lambda(LambdaExpression n)
@@ -871,6 +880,7 @@ public static class SyntaxTreeCodec
                 NodeKind.GlobalVariableDeclaration => ReadGlobal(),
                 NodeKind.TypeAliasDeclaration => ReadTypeAlias(),
                 NodeKind.LambdaExpression => ReadLambda(),
+                NodeKind.IndirectCallExpression => ReadIndirect(),
                 NodeKind.UnionCaseDeclaration => ReadUnionCase(),
                 NodeKind.UnionDeclaration => ReadUnion(),
                 NodeKind.EnumMemberDeclaration => ReadEnumMember(),
@@ -1192,6 +1202,13 @@ public static class SyntaxTreeCodec
             var functionParameters = Items(Typed<TypeSyntax>);
             return new TypeSyntax(primitive, isInferred, location, isString, pointee, namedType, arrayLength, elementType,
                 typeArguments) { FunctionReturn = functionReturn, FunctionParameters = functionParameters };
+        }
+
+        private IndirectCallExpression ReadIndirect()
+        {
+            var callee = Typed<Expression>();
+            var arguments = Items(Typed<Expression>);
+            return new IndirectCallExpression(callee, arguments, Loc());
         }
 
         private LambdaExpression ReadLambda()

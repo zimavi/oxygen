@@ -509,3 +509,10 @@ public sealed record LambdaExpression(
     IReadOnlyList<ParameterDeclaration> Parameters,
     BlockStatement Body,
     SourceLocation Location) : Expression(Location);
+
+// A call of a function pointer that is not a name: an element of an array, the result of a call, or any other expression of a function
+// pointer type. A call through a name is a CallExpression, which the analysis resolves to a function or a function pointer.
+public sealed record IndirectCallExpression(
+    Expression Callee,
+    IReadOnlyList<Expression> Arguments,
+    SourceLocation Location) : Expression(Location);

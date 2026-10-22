@@ -10,6 +10,14 @@ public sealed partial class SemanticAnalyzer
     {
         if (syntax.IsInferred)
             return null;
+        if (syntax.IsFunction)
+        {
+            var returnType = ConcreteType(syntax.FunctionReturn!, genericParameters);
+            var parameterTypes = syntax.FunctionParameters.Select(parameter => ConcreteType(parameter, genericParameters)).ToArray();
+            return returnType is null || parameterTypes.Any(parameter => parameter is null)
+                ? null
+                : SemanticType.FunctionPointer(returnType, parameterTypes!);
+        }
         if (syntax.IsArray)
             return SemanticType.ArrayOf(ConcreteType(syntax.ElementType!, genericParameters)!, syntax.ArrayLength!.Value);
         if (syntax.IsString)
@@ -47,6 +55,13 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames)
     {
+        if (syntax.IsFunction)
+            return syntax with
+            {
+                FunctionReturn = RewriteTypeSyntax(syntax.FunctionReturn!, substitutions, aggregateNames),
+                FunctionParameters = syntax.FunctionParameters
+                    .Select(parameter => RewriteTypeSyntax(parameter, substitutions, aggregateNames)).ToArray()
+            };
         if (syntax.NamedType is not null && substitutions.TryGetValue(syntax.NamedType, out var replacement)
             && syntax.DeclaredTypeArguments.Count == 0)
             return TypeSyntaxFromSemantic(replacement, syntax.Location);
@@ -86,7 +101,10 @@ public sealed partial class SemanticAnalyzer
     private SemanticType SemanticTypeFromSyntax(TypeSyntax syntax,
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames) =>
-        syntax.NamedType is not null && substitutions.TryGetValue(syntax.NamedType, out var replacement)
+        syntax.IsFunction
+            ? SemanticType.FunctionPointer(SemanticTypeFromSyntax(syntax.FunctionReturn!, substitutions, aggregateNames),
+                syntax.FunctionParameters.Select(parameter => SemanticTypeFromSyntax(parameter, substitutions, aggregateNames)).ToArray())
+        : syntax.NamedType is not null && substitutions.TryGetValue(syntax.NamedType, out var replacement)
             ? replacement
             : syntax.Primitive is not null
                 ? SemanticType.FromPrimitive(syntax.Primitive.Value)
