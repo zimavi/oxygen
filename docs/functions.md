@@ -99,3 +99,63 @@ The rules are:
 A label is recognized only at the start of an argument, so the `:` of a
 conditional expression inside an argument is still that operator:
 `scale(flag ? 1 : 2)` passes a conditional value.
+
+## Function pointers
+
+A function pointer is a value that holds the address of a function. Its type has a
+return type and a list of parameter types. A function pointer is one pointer-sized
+value, so it can be a local, a global, a field, a parameter, a return value or an
+element of an array.
+
+### Forms
+
+- **Type.** Where no name is declared, the type is written `fn <return> (<types>)`,
+  for example `fn i32 (i32, i32)`. The parameter list holds types only.
+- **Declaration.** A declared name is written inside the form: `fn <return> <name>(<types>)`,
+  for example `fn i32 op(i32, i32) = &add;`. It declares a variable, a parameter or a
+  field called `name` with that type. A parameter list holds these declarations, so
+  every parameter has a name.
+- **Return type.** A function returns a function pointer with the unnamed form before
+  its own name: `fn i32 (i32, i32) make() { ... }`.
+- **Lambda.** An inline function, with a body and named parameters, is written
+  `fn <return> (<type> <name>, ...) { <body> }`, for example
+  `fn i32 (i32 x) { return x + 1; }`. A lambda has no captures: its body cannot name a
+  local of the function it is written in. Its type is the function pointer type of its
+  signature.
+
+The form after `fn <return>` decides what it is. A name before the parameter list is a
+declaration. A parameter list followed by a body is a lambda. Any other parameter list
+is a type.
+
+### Values
+
+- `&name` is the address of a function. Its type is that of the function's signature.
+  A name with several overloads is chosen by the type that the value is given to (a
+  declaration, an assignment, an argument or a return). Without such a type, it is an
+  error.
+- A lambda is a function pointer of its signature. Lambdas and `&name` are never null.
+- Two function pointer types are the same when their return and parameter types are
+  the same.
+- A variable of a function pointer type is called as `f(arguments)`, with the
+  arguments converted to the parameter types as for any call.
+- A module-level variable of a function pointer type can be given a constant
+  initializer, which is `&name`. Without one it starts as null.
+
+### Null
+
+A call through a function pointer checks that it is not null first, like a dereference of
+a pointer (see [pointers](pointers.md#null-pointers)). The analysis proves a pointer
+non-null in the same cases as for a pointer. A null function pointer that is called
+throws `NullReferenceException`. A build without `std.exception` stops the program with
+exit code 101.
+
+### C interoperability
+
+A function pointer parameter of an `@extern` function is an ordinary C function pointer
+with the signature that the Oxygen type names. The C declaration must match that
+signature.
+
+### Mangling and libraries
+
+A function pointer type has the type code `F` in mangled symbol names and in the native
+module metadata. See [mangling](mangling.md).

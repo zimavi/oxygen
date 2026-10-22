@@ -10,7 +10,7 @@ namespace Oxygen.Compiler.Ast;
 // a change to either needs a new FormatVersion.
 public static class SyntaxTreeCodec
 {
-    public const int FormatVersion = 2;
+    public const int FormatVersion = 3;
 
     private static readonly byte[] Magic = "OXYAST"u8.ToArray();
 
@@ -102,7 +102,8 @@ public static class SyntaxTreeCodec
         ClassConstructionExpression,
         SwitchCase,
         SwitchStatement,
-        TypeAliasDeclaration
+        TypeAliasDeclaration,
+        LambdaExpression
     }
 
     private sealed class Writer
@@ -215,6 +216,7 @@ public static class SyntaxTreeCodec
                 case CompilationUnit n: Tag(NodeKind.CompilationUnit); Unit(n); break;
                 case GlobalVariableDeclaration n: Tag(NodeKind.GlobalVariableDeclaration); Global(n); break;
                 case TypeAliasDeclaration n: Tag(NodeKind.TypeAliasDeclaration); TypeAlias(n); break;
+                case LambdaExpression n: Tag(NodeKind.LambdaExpression); Lambda(n); break;
                 case UnionCaseDeclaration n: Tag(NodeKind.UnionCaseDeclaration); UnionCase(n); break;
                 case UnionDeclaration n: Tag(NodeKind.UnionDeclaration); Union(n); break;
                 case EnumMemberDeclaration n: Tag(NodeKind.EnumMemberDeclaration); EnumMember(n); break;
@@ -516,6 +518,16 @@ public static class SyntaxTreeCodec
             OptInt(n.ArrayLength);
             OptNode(n.ElementType);
             OptItems(n.TypeArguments, Node);
+            OptNode(n.FunctionReturn);
+            Items(n.FunctionParameters, Node);
+        }
+
+        private void Lambda(LambdaExpression n)
+        {
+            Node(n.ReturnType);
+            Items(n.Parameters, Node);
+            Node(n.Body);
+            Loc(n.Location);
         }
 
         private void Block(BlockStatement n)
@@ -858,6 +870,7 @@ public static class SyntaxTreeCodec
                 NodeKind.CompilationUnit => ReadUnit(),
                 NodeKind.GlobalVariableDeclaration => ReadGlobal(),
                 NodeKind.TypeAliasDeclaration => ReadTypeAlias(),
+                NodeKind.LambdaExpression => ReadLambda(),
                 NodeKind.UnionCaseDeclaration => ReadUnionCase(),
                 NodeKind.UnionDeclaration => ReadUnion(),
                 NodeKind.EnumMemberDeclaration => ReadEnumMember(),
@@ -1175,8 +1188,18 @@ public static class SyntaxTreeCodec
             var arrayLength = OptInt();
             var elementType = OptNode<TypeSyntax>();
             var typeArguments = OptItems(Typed<TypeSyntax>);
+            var functionReturn = OptNode<TypeSyntax>();
+            var functionParameters = Items(Typed<TypeSyntax>);
             return new TypeSyntax(primitive, isInferred, location, isString, pointee, namedType, arrayLength, elementType,
-                typeArguments);
+                typeArguments) { FunctionReturn = functionReturn, FunctionParameters = functionParameters };
+        }
+
+        private LambdaExpression ReadLambda()
+        {
+            var returnType = Typed<TypeSyntax>();
+            var parameters = Items(Typed<ParameterDeclaration>);
+            var body = Typed<BlockStatement>();
+            return new LambdaExpression(returnType, parameters, body, Loc());
         }
 
         private BlockStatement ReadBlock()

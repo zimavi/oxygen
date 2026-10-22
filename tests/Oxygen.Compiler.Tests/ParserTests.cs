@@ -910,6 +910,78 @@ public sealed class ParserTests
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains(message));
     }
 
+    // `fn <return> (<types>)` is a function pointer type where no name is declared. Its parameters are types only.
+    [Fact]
+    public void ParsesAFunctionPointerTypeWhereNoNameIsDeclared()
+    {
+        var unit = Parse("type Op = fn i32 (i32, i32); fn i32 (i32) make() { return null; } i32 main() { return 0; }");
+
+        var alias = Assert.Single(unit.Aliases);
+        Assert.True(alias.Target.IsFunction);
+        Assert.Equal(PrimitiveType.I32, alias.Target.FunctionReturn!.Primitive);
+        Assert.Equal(2, alias.Target.FunctionParameters.Count);
+        Assert.Equal(PrimitiveType.I32, alias.Target.FunctionParameters[1].Primitive);
+        var make = unit.Functions.First(function => function.Name == "make");
+        Assert.True(make.ReturnType.IsFunction);
+        Assert.Single(make.ReturnType.FunctionParameters);
+    }
+
+    // `fn <return> <name>(<types>)` declares the name: a local, a parameter, a field and a global all write it that way.
+    [Fact]
+    public void ParsesADeclaredFunctionPointerNameInEveryDeclarationForm()
+    {
+        var unit = Parse(
+            "fn i32 global_op(i32, i32) = null; " +
+            "struct Holder { fn i32 field(i32, i32); } " +
+            "i32 apply(fn i32 op(i32, i32), i32 x) { fn i32 local(i32) = null; return x; } " +
+            "i32 main() { return 0; }");
+
+        var global = Assert.Single(unit.Globals);
+        Assert.Equal("global_op", global.Name);
+        Assert.True(global.Type.IsFunction);
+        var field = Assert.Single(unit.Structs[0].Fields);
+        Assert.Equal("field", field.Name);
+        Assert.True(field.Type.IsFunction);
+        var apply = unit.Functions.First(function => function.Name == "apply");
+        Assert.Equal("op", apply.Parameters[0].Name);
+        Assert.True(apply.Parameters[0].Type.IsFunction);
+        var local = Assert.IsType<VariableDeclarationStatement>(apply.Body.Statements[0]);
+        Assert.Equal("local", local.Name);
+        Assert.Equal(PrimitiveType.I32, local.Type.FunctionReturn!.Primitive);
+    }
+
+    [Fact]
+    public void ParsesAClassFieldOfAFunctionPointerType()
+    {
+        var unit = Parse("class Calculator { fn i32 op(i32, i32) = null; } i32 main() { return 0; }");
+
+        var field = Assert.Single(unit.Classes[0].Fields);
+        Assert.Equal("op", field.Name);
+        Assert.True(field.Type.IsFunction);
+    }
+
+    // `fn <return> (<type> <name>, ...) { <body> }` is a lambda. The parameters are named, since the body uses them.
+    [Fact]
+    public void ParsesALambdaWithNamedParameters()
+    {
+        var unit = Parse("i32 main() { fn i32 (i32 x, i32 y) { return x + y; }; return 0; }");
+
+        var statement = Assert.IsType<ExpressionStatement>(unit.Functions[0].Body.Statements[0]);
+        var lambda = Assert.IsType<LambdaExpression>(statement.Expression);
+        Assert.Equal(["x", "y"], lambda.Parameters.Select(parameter => parameter.Name));
+        Assert.Equal(PrimitiveType.I32, lambda.ReturnType.Primitive);
+    }
+
+    [Theory]
+    [InlineData("i32 main() { fn i32 (i32, i32) = null; return 0; }", "Expected a name in a function pointer declaration")]
+    [InlineData("i32 apply(fn i32 op(i32 a)) { return 0; } i32 main() { return 0; }", "Expected ')' after the parameter types of a function pointer")]
+    public void ReportsAMalformedFunctionPointerForm(string source, string message)
+    {
+        var result = ParseWithDiagnostics(source);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains(message));
+    }
+
     private ParseResult ParseWithDiagnostics(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).ParseWithDiagnostics("main.oxy");
 

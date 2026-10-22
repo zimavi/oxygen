@@ -61,6 +61,7 @@ public enum TokenKind
     Enum,
     Union,
     Type,
+    Fn,
     Switch,
     Case,
     Default,

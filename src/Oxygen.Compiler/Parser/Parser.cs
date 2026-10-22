@@ -266,6 +266,18 @@ public sealed partial class Parser
 
             var memberLocation = Current.Location;
             var isConst = Match(TokenKind.Const);
+            // A function pointer field declares its name inside its form. A method or property returns a type first, so it cannot start here.
+            if (IsFunctionPointerDeclarationStart())
+            {
+                var (fieldType, fieldName) = ParseDeclaredName(allowInferred: false, "Expected a class member name.");
+                Expression? fieldInitializer = Match(TokenKind.Equals) ? ParseExpression() : null;
+                if (isConst && fieldInitializer is null)
+                    throw Error("A const class field must have an initializer.", Current);
+                Consume(TokenKind.Semicolon, "Expected ';' after class field.");
+                fields.Add(new ClassFieldDeclaration(fieldType, fieldName.Lexeme, memberVisibility, memberLocation,
+                    fieldInitializer, isConst, isStatic));
+                continue;
+            }
             var type = ParseType(allowInferred: false);
             var memberName = ConsumeIdentifierLike("Expected a class member name.").Lexeme;
             if (Check(TokenKind.OpenParenthesis))
@@ -433,8 +445,8 @@ public sealed partial class Parser
             do
             {
                 var parameterLocation = Current.Location;
-                var type = ParseType(allowInferred: false);
-                var parameterName = Consume(TokenKind.Identifier, "Expected a parameter name.").Lexeme;
+                var (type, parameterNameToken) = ParseDeclaredName(allowInferred: false, "Expected a parameter name.");
+                var parameterName = parameterNameToken.Lexeme;
                 var defaultValue = Match(TokenKind.Equals) ? ParseExpression() : null;
                 parameters.Add(new ParameterDeclaration(type, parameterName, parameterLocation, defaultValue));
             } while (Match(TokenKind.Comma));
@@ -560,8 +572,8 @@ public sealed partial class Parser
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
             var fieldLocation = Current.Location;
-            var type = ParseType(allowInferred: false);
-            var fieldName = Consume(TokenKind.Identifier, "Expected a field name.").Lexeme;
+            var (type, fieldNameToken) = ParseDeclaredName(allowInferred: false, "Expected a field name.");
+            var fieldName = fieldNameToken.Lexeme;
             Consume(TokenKind.Semicolon, "Expected ';' after struct field.");
             fields.Add(new StructFieldDeclaration(type, fieldName, fieldLocation));
         }
@@ -711,8 +723,8 @@ public sealed partial class Parser
             do
             {
                 var parameterLocation = Current.Location;
-                var type = ParseType(allowInferred: false);
-                var parameterName = Consume(TokenKind.Identifier, "Expected a parameter name.").Lexeme;
+                var (type, parameterNameToken) = ParseDeclaredName(allowInferred: false, "Expected a parameter name.");
+                var parameterName = parameterNameToken.Lexeme;
                 var defaultValue = Match(TokenKind.Equals) ? ParseExpression() : null;
                 parameters.Add(new ParameterDeclaration(type, parameterName, parameterLocation, defaultValue));
             } while (Match(TokenKind.Comma));
@@ -823,6 +835,7 @@ public sealed partial class Parser
 
         if (Check(TokenKind.Const) || Check(TokenKind.Var) || IsType(Current.Kind)
             || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier)
+            || (Check(TokenKind.Fn) && !IsLambdaStart())
             || IsQualifiedVariableDeclarationStart()
             || IsGenericVariableDeclarationStart()
             || IsNamedPointerOrArrayDeclarationStart())
@@ -968,7 +981,8 @@ public sealed partial class Parser
     private Statement ParseForClause(bool isInitializer)
     {
         if (Check(TokenKind.Const) || Check(TokenKind.Var) || IsType(Current.Kind)
-            || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier))
+            || (Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.Identifier)
+            || (Check(TokenKind.Fn) && !IsLambdaStart()))
             return ParseVariableDeclaration();
 
         var expressionLocation = Current.Location;
@@ -998,8 +1012,8 @@ public sealed partial class Parser
     {
         var location = Current.Location;
         var isConst = Match(TokenKind.Const);
-        var type = ParseType(allowInferred: true);
-        var name = Consume(TokenKind.Identifier, "Expected a variable name.").Lexeme;
+        var (type, nameToken) = ParseDeclaredName(allowInferred: true, "Expected a variable name.");
+        var name = nameToken.Lexeme;
         Expression? initializer = null;
         if (Match(TokenKind.Equals))
         {
@@ -1039,6 +1053,12 @@ public sealed partial class Parser
         try
         {
             Match(TokenKind.Const);
+            if (Check(TokenKind.Fn))
+            {
+                // A function pointer declaration names its variable inside its form, so the name is already read.
+                ParseDeclaredName(allowInferred: false, "Expected a global variable name.");
+                return Check(TokenKind.Equals) || Check(TokenKind.Semicolon);
+            }
             ParseType(allowInferred: false);
             return Check(TokenKind.Identifier) && Peek(1).Kind is TokenKind.Equals or TokenKind.Semicolon;
         }
@@ -1056,8 +1076,8 @@ public sealed partial class Parser
     {
         var location = Current.Location;
         var isConst = Match(TokenKind.Const);
-        var type = ParseType(allowInferred: false);
-        var name = Consume(TokenKind.Identifier, "Expected a global variable name.").Lexeme;
+        var (type, nameToken) = ParseDeclaredName(allowInferred: false, "Expected a global variable name.");
+        var name = nameToken.Lexeme;
         Expression? initializer = Match(TokenKind.Equals) ? ParseExpression() : null;
         Consume(TokenKind.Semicolon, "Expected ';' after global variable declaration.");
         return new GlobalVariableDeclaration(type, name, isConst, initializer, location);
@@ -1280,6 +1300,8 @@ public sealed partial class Parser
 
     private Expression ParsePrimaryExpression()
     {
+        if (Check(TokenKind.Fn))
+            return ParseLambda();
         var token = Advance();
         switch (token.Kind)
         {
@@ -1420,6 +1442,129 @@ public sealed partial class Parser
         }
     }
 
+    // A function pointer type where no name is declared: `fn <return> (<types>)`.
+    private TypeSyntax ParseFunctionType()
+    {
+        var location = Consume(TokenKind.Fn, "Expected 'fn'.").Location;
+        var returnType = ParseType(allowInferred: false);
+        return new TypeSyntax(null, false, location) { FunctionReturn = returnType, FunctionParameters = ParseFunctionTypeParameters() };
+    }
+
+    // The parameter types of a function pointer type, `(<type>, ...)`. The parameters have no names.
+    private IReadOnlyList<TypeSyntax> ParseFunctionTypeParameters()
+    {
+        Consume(TokenKind.OpenParenthesis, "Expected '(' after the return type of a function pointer.");
+        var types = new List<TypeSyntax>();
+        if (!Check(TokenKind.CloseParenthesis))
+        {
+            do
+            {
+                types.Add(ParseType(allowInferred: false));
+            }
+            while (Match(TokenKind.Comma));
+        }
+        Consume(TokenKind.CloseParenthesis, "Expected ')' after the parameter types of a function pointer.");
+        return types;
+    }
+
+    // A declared name with its type. A function pointer declares its name inside its form, `fn <return> <name>(<types>)`. Any other
+    // declaration writes its type first and then its name. `var` is allowed only where `allowInferred` is set, and then no name is inside a form.
+    private (TypeSyntax Type, Token Name) ParseDeclaredName(bool allowInferred, string message)
+    {
+        if (!Check(TokenKind.Fn))
+        {
+            var type = ParseType(allowInferred);
+            return (type, Consume(TokenKind.Identifier, message));
+        }
+        var location = Consume(TokenKind.Fn, "Expected 'fn'.").Location;
+        var returnType = ParseType(allowInferred: false);
+        var name = Consume(TokenKind.Identifier,
+            "Expected a name in a function pointer declaration, which has the form fn <return> <name>(<types>).");
+        var parameters = ParseFunctionTypeParameters();
+        return (new TypeSyntax(null, false, location) { FunctionReturn = returnType, FunctionParameters = parameters }, name);
+    }
+
+    // Whether a function pointer declaration starts here: `fn <return> <name>(`. A form without a name, such as a return type, does not.
+    private bool IsFunctionPointerDeclarationStart()
+    {
+        if (!Check(TokenKind.Fn))
+            return false;
+        var start = _position;
+        try
+        {
+            Advance();
+            ParseType(allowInferred: false);
+            return Check(TokenKind.Identifier) && Peek(1).Kind == TokenKind.OpenParenthesis;
+        }
+        catch (ParseException)
+        {
+            return false;
+        }
+        finally
+        {
+            _position = start;
+        }
+    }
+
+    // Whether a lambda starts here: `fn <return> (` with its parameter list closed by `)` and followed by `{`. Any other `fn` starts a type or a
+    // declaration.
+    private bool IsLambdaStart()
+    {
+        if (!Check(TokenKind.Fn))
+            return false;
+        var start = _position;
+        try
+        {
+            Advance();
+            ParseType(allowInferred: false);
+            if (!Check(TokenKind.OpenParenthesis))
+                return false;
+            var depth = 0;
+            while (!Check(TokenKind.EndOfFile))
+            {
+                if (Check(TokenKind.OpenParenthesis))
+                    depth++;
+                else if (Check(TokenKind.CloseParenthesis) && --depth == 0)
+                {
+                    Advance();
+                    return Check(TokenKind.OpenBrace);
+                }
+                Advance();
+            }
+            return false;
+        }
+        catch (ParseException)
+        {
+            return false;
+        }
+        finally
+        {
+            _position = start;
+        }
+    }
+
+    // A lambda without captures: `fn <return> (<type> <name>, ...) { <body> }`.
+    private LambdaExpression ParseLambda()
+    {
+        var location = Consume(TokenKind.Fn, "Expected 'fn'.").Location;
+        var returnType = ParseType(allowInferred: false);
+        Consume(TokenKind.OpenParenthesis, "Expected '(' after the return type of a lambda.");
+        var parameters = new List<ParameterDeclaration>();
+        if (!Check(TokenKind.CloseParenthesis))
+        {
+            do
+            {
+                var parameterLocation = Current.Location;
+                var type = ParseType(allowInferred: false);
+                var name = Consume(TokenKind.Identifier, "Expected a lambda parameter name.").Lexeme;
+                parameters.Add(new ParameterDeclaration(type, name, parameterLocation));
+            }
+            while (Match(TokenKind.Comma));
+        }
+        Consume(TokenKind.CloseParenthesis, "Expected ')' after the lambda parameters.");
+        return new LambdaExpression(returnType, parameters, ParseBlock(), location);
+    }
+
     private TypeSyntax ParseType(bool allowInferred)
     {
         if (allowInferred && Match(TokenKind.Var))
@@ -1429,6 +1574,9 @@ public sealed partial class Parser
 
         if (Match(TokenKind.String))
             return ParsePointerSuffix(new TypeSyntax(null, false, Previous.Location, true));
+
+        if (Check(TokenKind.Fn))
+            return ParsePointerSuffix(ParseFunctionType());
 
         if (PrimitiveTypes.TryGetValue(Current.Kind, out var primitive))
         {

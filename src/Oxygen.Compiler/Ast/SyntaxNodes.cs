@@ -274,6 +274,11 @@ public sealed record TypeSyntax(
     public bool IsPointer => Pointee is not null;
     public bool IsArray => ArrayLength is not null;
     public IReadOnlyList<TypeSyntax> DeclaredTypeArguments => TypeArguments ?? [];
+
+    // A function pointer type, `fn <return> (<types>)`. Its parameters are types only.
+    public bool IsFunction => FunctionReturn is not null;
+    public TypeSyntax? FunctionReturn { get; init; }
+    public IReadOnlyList<TypeSyntax> FunctionParameters { get; init; } = [];
 }
 
 public abstract record Statement(SourceLocation Location) : SyntaxNode(Location);
@@ -496,3 +501,11 @@ public sealed record SwitchStatement(
     Expression Value,
     IReadOnlyList<SwitchCase> Cases,
     SourceLocation Location) : Statement(Location);
+
+// A lambda without captures, `fn <return> (<type> <name>, ...) { <body> }`. Its body cannot name a local of the function it is written in.
+// Its type is the function pointer type of its signature.
+public sealed record LambdaExpression(
+    TypeSyntax ReturnType,
+    IReadOnlyList<ParameterDeclaration> Parameters,
+    BlockStatement Body,
+    SourceLocation Location) : Expression(Location);

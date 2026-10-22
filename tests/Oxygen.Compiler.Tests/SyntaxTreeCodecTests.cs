@@ -56,7 +56,10 @@ public sealed class SyntaxTreeCodecTests
     private const string Statements = """
         i32 scale(i32 x, i32 factor = 2) { return x * factor; }
         void note() { return; }
+        fn i32 op(i32, i32) = null;
+        fn i32 (i32) make() { return null; }
         i32 main() {
+            fn i32 (i32 x) { return x + 1; };
             i32 total = 0;
             i32[2] values = { 1, 2 };
             Child child = new Child(1);
