@@ -35,7 +35,8 @@ public sealed class GenericSyntaxTests
         Assert.Equal(["twice"], generic.Functions.Select(function => function.Name));
         Assert.Equal(["Box"], generic.Structs.Select(structure => structure.Name));
         Assert.Equal(["Holder"], generic.Classes.Select(declaration => declaration.Name));
-        Assert.Empty(generic.Interfaces);
+        // An interface is carried whether or not it is generic: it declares signatures only, and a constraint may name it.
+        Assert.Equal(["Named"], generic.Interfaces.Select(declaration => declaration.Name));
         Assert.Equal(["Maybe"], generic.Unions.Select(declaration => declaration.Name));
         Assert.Empty(generic.Enums);
         Assert.Empty(generic.Globals);

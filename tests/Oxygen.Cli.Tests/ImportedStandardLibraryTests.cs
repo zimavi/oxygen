@@ -3,8 +3,8 @@ using Xunit;
 namespace Oxygen.Cli.Tests;
 
 // --stdlib takes the modules of a shared standard library from the library's metadata. A program declares the library's functions and
-// does not compile the standard library's source, so the program's IR declares them and does not define them. The program then links
-// the library and the shared runtime, and runs with both beside it.
+// instantiates its generic functions and unions, and it does not compile the standard library's source. It then links the library and the
+// shared runtime, and runs with both beside it.
 public sealed class ImportedStandardLibraryTests : IDisposable
 {
     private static readonly bool Windows = OperatingSystem.IsWindows();
@@ -24,15 +24,9 @@ public sealed class ImportedStandardLibraryTests : IDisposable
     [SkippableFact]
     public void AProgramDeclaresTheFunctionsOfASharedStandardLibraryAndRunsWithIt()
     {
-        NativeProgram.RequireLibraryToolchain();
-        // The program links the runtime's import library on Windows, and its DLL is copied beside the program to run.
-        var runtime = Path.Combine(TargetDirectory, Windows ? "oxygenrt.lib" : "liboxygenrt.so");
-        var runtimeFile = Path.Combine(TargetDirectory, Windows ? "oxygenrt.dll" : "liboxygenrt.so");
-        Skip.IfNot(File.Exists(runtime) && File.Exists(runtimeFile),
-            "The shared runtime is not built. Run runtime/build.ps1 or runtime/build.sh to build it.");
-        var library = BuildStandardLibrary();
-        var source = Path.Combine(_directory, "main.oxy");
+        var (library, runtime, runtimeFile) = PrepareSharedLibraries();
         // write_stdout is an extern of the library, and print_char and println_char are its functions with bodies.
+        var source = Path.Combine(_directory, "main.oxy");
         File.WriteAllText(source, """
             import std.io;
 
@@ -55,21 +49,71 @@ public sealed class ImportedStandardLibraryTests : IDisposable
             Assert.DoesNotMatch($"define [^\\n]*{name}", text);
         }
 
+        var run = BuildAndRun(source, library, runtime, runtimeFile);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("hi\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    // The generic functions of memory and io are instantiated in the program, and so is a generic union of collection, whose functions
+    // the program uses. Their bodies are checked where they are instantiated, and the library's own check is not repeated.
+    [SkippableFact]
+    public void AProgramInstantiatesTheGenericFunctionsAndUnionsOfASharedStandardLibrary()
+    {
+        var (library, runtime, runtimeFile) = PrepareSharedLibraries();
+        var source = Path.Combine(_directory, "main.oxy");
+        File.WriteAllText(source, """
+            import std.collection;
+            import std.io;
+            import std.memory;
+
+            i32 main() {
+                i32* values = alloc<i32>(2);
+                values[0] = 7;
+                io.println(values[0]);
+                free<i32>(values);
+                Option<i32> value = Option.Some(9);
+                if (is_some(value)) {
+                    return 3;
+                }
+                return 4;
+            }
+            """);
+
+        var run = BuildAndRun(source, library, runtime, runtimeFile);
+
+        Assert.Equal(3, run.ExitCode);
+        Assert.Equal("7\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    // Builds the standard library and returns it with the runtime that a program links and the runtime file that it needs beside it.
+    // The test is skipped when the toolchain or the shared runtime is missing.
+    private (string Library, string Runtime, string RuntimeFile) PrepareSharedLibraries()
+    {
+        NativeProgram.RequireLibraryToolchain();
+        // The program links the runtime's import library on Windows, and its DLL is copied beside the program to run.
+        var runtime = Path.Combine(TargetDirectory, Windows ? "oxygenrt.lib" : "liboxygenrt.so");
+        var runtimeFile = Path.Combine(TargetDirectory, Windows ? "oxygenrt.dll" : "liboxygenrt.so");
+        Skip.IfNot(File.Exists(runtime) && File.Exists(runtimeFile),
+            "The shared runtime is not built. Run runtime/build.ps1 or runtime/build.sh to build it.");
+        return (BuildStandardLibrary(), runtime, runtimeFile);
+    }
+
+    // Builds the program against the library and the runtime, then runs it. The library is built beside the program, and the runtime is
+    // copied there too. The program finds both: on Windows through the DLL search, and on Linux through the library path, which is given to
+    // the child process only.
+    private (int ExitCode, string Output, string Error) BuildAndRun(string source, string library, string runtime, string runtimeFile)
+    {
         var executable = Path.Combine(_directory, Windows ? "main.exe" : "main");
         var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
             ["build", source, "--stdlib", library, "-r", runtime, "-o", executable]);
         Assert.True(build.ExitCode == 0, $"Build failed with exit code {build.ExitCode}:\n{build.Error}");
 
-        // The runtime is copied beside the program, which finds the library there too: on Windows through the DLL search, and on Linux
-        // through the library path, given to the child process only.
         File.Copy(runtimeFile, Path.Combine(_directory, Path.GetFileName(runtimeFile)), overwrite: true);
         var environment = Windows
             ? null
             : new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = _directory };
-        var run = NativeProgram.RunProcess(executable, [], environment);
-
-        Assert.Equal(0, run.ExitCode);
-        Assert.Equal("hi\n", run.Output.Replace("\r\n", "\n"));
+        return NativeProgram.RunProcess(executable, [], environment);
     }
 
     // Builds the standard library as a shared library in the test's folder, and returns the path of the shared library.
@@ -85,5 +129,4 @@ public sealed class ImportedStandardLibraryTests : IDisposable
         Assert.True(run.ExitCode == 0, $"Building the standard library failed with exit code {run.ExitCode}:\n{run.Error}");
         return output + (Windows ? ".dll" : ".so");
     }
-
 }
