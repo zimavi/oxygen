@@ -229,10 +229,9 @@ public sealed class FunctionPointerIntegrationTests : IDisposable
         Assert.Equal(2, run.ExitCode);
     }
 
-    // A lambda in a generic function takes the type arguments of its instance. Two instances at different types in one program are
-    // not covered yet: the second instance's lambda reads its parameter with the first instance's type.
+    // A lambda in a generic function is copied for each instance, so each instance's lambda has the type arguments of that instance.
     [SkippableFact]
-    public void ALambdaInAGenericFunctionTakesTheTypeArgumentsOfItsInstance()
+    public void ALambdaInAGenericFunctionHasTheTypeArgumentsOfEachInstance()
     {
         NativeProgram.RequireNativeToolchain();
 
@@ -244,7 +243,10 @@ public sealed class FunctionPointerIntegrationTests : IDisposable
             }
 
             i32 main() {
-                return pass<i32>(6);
+                if (pass<bool>(true)) {
+                    return pass<i32>(6);
+                }
+                return 0;
             }
             """);
 

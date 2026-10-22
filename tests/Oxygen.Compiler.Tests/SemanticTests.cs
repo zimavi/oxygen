@@ -2496,6 +2496,18 @@ public sealed class SemanticTests
         Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
     }
 
+    // A generic function is used through its instance, so the instance's use is what counts, whether the call names the type arguments or not.
+    [Theory]
+    [InlineData("id<i32>(3)")]
+    [InlineData("id(3)")]
+    public void DoesNotReportAGenericFunctionThatIsCalled(string call)
+    {
+        var result = AnalyzeWithDiagnostics(
+            $"T id<T>(T value) {{ return value; }} i32 main() {{ return {call}; }}");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Message == "Function 'id' is never called");
+    }
+
     [Fact]
     public void DoesNotReportUnusedPublicOrExternalFunctions()
     {

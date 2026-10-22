@@ -274,7 +274,12 @@ public sealed partial class SemanticAnalyzer
                     }).ToArray()
                 });
         foreach (var pair in normalizedFunctions)
+        {
             functions[pair.Key.Declaration] = pair.Value;
+            // The normalized copy is a different record, so the use recorded for the instance is moved to it.
+            if (_usedFunctions.Remove(pair.Key))
+                _usedFunctions.Add(pair.Value);
+        }
         foreach (var overloads in functionsByName.Values)
             for (var index = 0; index < overloads.Count; index++)
                 if (normalizedFunctions.TryGetValue(overloads[index], out var replacement))
