@@ -55,7 +55,7 @@ public sealed class StandardOutputIntegrationTests : IDisposable
 
         Assert.Equal(101, run.ExitCode);
         Assert.Equal("1\n", run.Output.Replace("\r\n", "\n"));
-        Assert.Contains("integer division by zero", run.Error);
+        Assert.Contains("Unhandled DivideByZeroException: Integer division by zero.", run.Error);
     }
 
     [SkippableFact]

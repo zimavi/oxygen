@@ -195,9 +195,9 @@ public sealed partial class LlvmModuleGenerator
             return builder.BuildICmp(intPredicate, left, right, "icmp");
         }
         if (!isFloatingPoint && op is TokenKind.Slash or TokenKind.Percent)
-            EmitIntegerDivisionChecks(builder, left, right, IsUnsignedInteger(leftType));
+            EmitIntegerDivisionChecks(builder, left, right, IsUnsignedInteger(leftType), model);
         if (!isFloatingPoint && op is TokenKind.LessThanLessThan or TokenKind.GreaterThanGreaterThan)
-            EmitShiftRangeCheck(builder, left, right);
+            EmitShiftRangeCheck(builder, left, right, model);
         return op switch
         {
             TokenKind.Plus when isFloatingPoint => builder.BuildFAdd(left, right, "fadd"),
@@ -226,11 +226,11 @@ public sealed partial class LlvmModuleGenerator
 
     // Integer division and remainder are undefined in LLVM for a zero divisor and for INT_MIN / -1 (signed only). Oxygen
     // reports both through the runtime instead, so the undefined operation is never executed.
-    private void EmitIntegerDivisionChecks(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef right, bool isUnsigned)
+    private void EmitIntegerDivisionChecks(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef right, bool isUnsigned, SemanticModel model)
     {
         var divisorIsZero = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, right,
             LLVMValueRef.CreateConstInt(right.TypeOf, 0, false), "div.zero");
-        EmitArithmeticCheck(builder, divisorIsZero, ArithmeticFailureKind.DivideByZero, LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false));
+        EmitArithmeticCheck(builder, divisorIsZero, ArithmeticFailureKind.DivideByZero, LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), model);
         if (isUnsigned)
             return;
         var width = left.TypeOf.IntWidth;
@@ -239,17 +239,17 @@ public sealed partial class LlvmModuleGenerator
         var rightIsMinusOne = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, right,
             LLVMValueRef.CreateConstInt(right.TypeOf, ulong.MaxValue, true), "div.minus.one");
         var overflows = builder.BuildAnd(leftIsMinimum, rightIsMinusOne, "div.overflow");
-        EmitArithmeticCheck(builder, overflows, ArithmeticFailureKind.SignedOverflow, LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false));
+        EmitArithmeticCheck(builder, overflows, ArithmeticFailureKind.SignedOverflow, LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false), model);
     }
 
     // A shift count must be less than the bit width of the shifted value; LLVM leaves other counts undefined.
-    private void EmitShiftRangeCheck(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef count)
+    private void EmitShiftRangeCheck(LLVMBuilderRef builder, LLVMValueRef left, LLVMValueRef count, SemanticModel model)
     {
         var width = left.TypeOf.IntWidth;
         var outOfRange = builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, count,
             LLVMValueRef.CreateConstInt(count.TypeOf, width, false), "shift.range");
         var operand = builder.BuildZExtOrBitCast(count, _context.Int64Type, "shift.count");
-        EmitArithmeticCheck(builder, outOfRange, ArithmeticFailureKind.ShiftOutOfRange, operand);
+        EmitArithmeticCheck(builder, outOfRange, ArithmeticFailureKind.ShiftOutOfRange, operand, model);
     }
 
     private enum ArithmeticFailureKind
@@ -261,14 +261,15 @@ public sealed partial class LlvmModuleGenerator
 
     // Branches to the runtime failure hook when `failed` is true. The hook does not return.
     private void EmitArithmeticCheck(LLVMBuilderRef builder, LLVMValueRef failed, ArithmeticFailureKind kind,
-        LLVMValueRef operand)
+        LLVMValueRef operand, SemanticModel model)
     {
         var function = builder.InsertBlock.Parent;
         var failureBlock = function.AppendBasicBlock("arith.failure");
         var continueBlock = function.AppendBasicBlock("arith.continue");
         builder.BuildCondBr(failed, failureBlock, continueBlock);
         builder.PositionAtEnd(failureBlock);
-        BuildNoThrowCall(builder, _arithmeticFailure, [LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)kind, false), operand]);
+        EmitFailureCall(builder, FailureOf(kind), model, _arithmeticFailure,
+            [LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)kind, false), operand]);
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
     }
