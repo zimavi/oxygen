@@ -269,7 +269,8 @@ public sealed partial class LlvmModuleGenerator
         builder.BuildCondBr(failed, failureBlock, continueBlock);
         builder.PositionAtEnd(failureBlock);
         EmitFailureCall(builder, FailureOf(kind), model, _arithmeticFailure,
-            [LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)kind, false), operand]);
+            [LLVMValueRef.CreateConstInt(_context.Int32Type, (ulong)kind, false), operand], operand,
+            LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false));
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
     }

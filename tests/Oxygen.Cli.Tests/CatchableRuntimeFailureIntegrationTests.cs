@@ -157,6 +157,29 @@ public sealed class CatchableRuntimeFailureIntegrationTests : IDisposable
         Assert.Equal(9, run.ExitCode);
     }
 
+    // Uncaught, the failure reports its class and a message that shows the value, and the program ends with the runtime's exit code.
+    [SkippableFact]
+    public void AnUncaughtInvalidEnumValueReportsItsValue()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.exception;
+
+            enum Color { Red, Green }
+
+            i32 main() {
+                i32 value = 7;
+                Color color = cast<Color>(value);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Contains("Unhandled RuntimeException: The value 7 is not a case of the enum.", run.Error);
+    }
+
     // The failure happens in a function that the try calls, so the exception unwinds the call and reaches the catch.
     [SkippableFact]
     public void AFailureInACalledFunctionUnwindsToTheCatch()

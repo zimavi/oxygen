@@ -74,8 +74,9 @@ by the compiled code, and each one throws an instance of its class:
 | A shift count out of range for the shifted type | `std.exception.RuntimeException` |
 | An enum value that is not one of the enum's cases | `std.exception.RuntimeException` |
 
-The class's message describes the failure. It does not include the index, length
-or value, which the program does not yet format. The exception captures the stack
+The message describes the failure and gives its values: the index and the length of
+an array or a string, the shift count, or the enum value. An enum value is shown as
+an unsigned number. The exception captures the stack
 trace where the failure happened, as a `throw` does. A build without
 `std.exception` (`--no-std`) has no class to throw, so these failures end the
 program with exit code 101, as they always did.

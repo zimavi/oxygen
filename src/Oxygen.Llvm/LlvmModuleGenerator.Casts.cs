@@ -63,7 +63,7 @@ public sealed partial class LlvmModuleGenerator
         var failureValue = enumSymbol.UnderlyingType is PrimitiveType.I64 or PrimitiveType.U64
             ? operand
             : builder.BuildZExt(operand, _context.Int64Type, "enum.value");
-        EmitFailureCall(builder, CatchableFailure.InvalidEnumValue, model, _enumCastFailure, [failureValue]);
+        EmitFailureCall(builder, CatchableFailure.InvalidEnumValue, model, _enumCastFailure, [failureValue], failureValue, LLVMValueRef.CreateConstInt(_context.Int64Type, 0, false));
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
         return RequireSameRepresentation(operand, operandType, targetType, model);

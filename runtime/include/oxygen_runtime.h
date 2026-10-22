@@ -85,6 +85,19 @@ OXYGEN_RUNTIME_API void __oxygen_runtime_null_reference_failure(void);
 /* Stops the program, with exit code 101, when a null pointer is dereferenced in a program that has no NullReferenceException (see --no-std). */
 OXYGEN_RUNTIME_API void __oxygen_runtime_null_pointer_failure(void);
 OXYGEN_RUNTIME_API void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand);
+
+/* The failures that a catch can handle, as the compiler numbers them. The compiler's helper of each failure passes its number, and the
+ * values that the message shows, to __oxygen_runtime_format_failure. */
+#define OXYGEN_FAILURE_ARRAY_INDEX 1         /* first: the index, second: the length of the array */
+#define OXYGEN_FAILURE_STRING_INDEX 2        /* first: the index, second: the length of the string */
+#define OXYGEN_FAILURE_DIVIDE_BY_ZERO 3      /* no values */
+#define OXYGEN_FAILURE_SIGNED_OVERFLOW 4     /* no values */
+#define OXYGEN_FAILURE_SHIFT_OUT_OF_RANGE 5  /* first: the shift count */
+#define OXYGEN_FAILURE_INVALID_ENUM_VALUE 6  /* first: the value */
+
+/* Writes the message of a failure into memory from oxygen_alloc, and returns it in message. The memory has the lifetime of the exception
+ * that holds the message. */
+OXYGEN_RUNTIME_API void __oxygen_runtime_format_failure(int32_t kind, uint64_t first, uint64_t second, oxygen_string *message);
 OXYGEN_RUNTIME_API uint8_t __oxygen_runtime_is_instance(
     const void *object,
     const oxygen_runtime_type_info *expected_type);
