@@ -152,6 +152,7 @@ public sealed partial class LlvmModuleGenerator
             _dropFlags.Clear();
             _runtimeTypeInfos.Clear();
             _runtimeTypeNameStrings.Clear();
+            _failureHelpers.Clear();
             _runtimeSupertypes.Clear();
             _runtimeTypeInfoType = _context.GetStructType(
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type,
@@ -321,6 +322,9 @@ public sealed partial class LlvmModuleGenerator
                         destructor.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
                 }
             }
+
+            // The failure helpers are written after the functions, which may have declared them.
+            EmitFailureHelpers(model, llvmFunctions);
 
             // Every type's information is defined here, as a constant, in every object: a library has no startup code of its own.
             foreach (var cls in concreteClasses.Where(cls => !DefinedByLibrary(cls.ModuleName, IsInstantiationName(cls.Name), model)))

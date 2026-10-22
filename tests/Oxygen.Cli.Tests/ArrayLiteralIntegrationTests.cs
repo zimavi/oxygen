@@ -80,7 +80,7 @@ public sealed class ArrayLiteralIntegrationTests : IDisposable
             """);
 
         Assert.Equal(101, run.ExitCode);
-        Assert.Contains("Oxygen array index 9 is out of bounds for length 3", run.Error + run.Output);
+        Assert.Contains("Unhandled IndexOutOfRangeException: An array index is outside the bounds of the array.", run.Error + run.Output);
     }
 
     [SkippableFact]

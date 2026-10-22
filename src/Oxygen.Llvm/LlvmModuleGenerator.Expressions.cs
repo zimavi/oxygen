@@ -311,7 +311,7 @@ public sealed partial class LlvmModuleGenerator
         var continueBlock = _currentFunction.AppendBasicBlock("array.bounds.continue");
         builder.BuildCondBr(invalid, failureBlock, continueBlock);
         builder.PositionAtEnd(failureBlock);
-        BuildNoThrowCall(builder, _arrayBoundsFailure, [llvmIndex, length]);
+        EmitFailureCall(builder, CatchableFailure.ArrayIndex, model, _arrayBoundsFailure, [llvmIndex, length]);
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
         return builder.BuildGEP2(ToLlvmType(arrayType, model), pointer,
@@ -338,7 +338,7 @@ public sealed partial class LlvmModuleGenerator
         var continueBlock = _currentFunction.AppendBasicBlock("string.bounds.continue");
         builder.BuildCondBr(outside, failureBlock, continueBlock);
         builder.PositionAtEnd(failureBlock);
-        BuildNoThrowCall(builder, _stringBoundsFailure, [llvmIndex, length]);
+        EmitFailureCall(builder, CatchableFailure.StringIndex, model, _stringBoundsFailure, [llvmIndex, length]);
         builder.BuildUnreachable();
         builder.PositionAtEnd(continueBlock);
         var data = builder.BuildExtractValue(text, 0, "string.data");

@@ -85,3 +85,15 @@ public class NullReferenceException : RuntimeException {
     public NullReferenceException() : base() {}
     public NullReferenceException(string message) : base(message) {}
 }
+
+// Raised when an array or a string is indexed outside its bounds.
+public class IndexOutOfRangeException : RuntimeException {
+    public IndexOutOfRangeException() : base() {}
+    public IndexOutOfRangeException(string message) : base(message) {}
+}
+
+// Raised when an integer is divided by zero.
+public class DivideByZeroException : RuntimeException {
+    public DivideByZeroException() : base() {}
+    public DivideByZeroException(string message) : base(message) {}
+}

@@ -198,7 +198,7 @@ void __oxygen_runtime_continue_throw(void *object)
         EXCEPTION_NONCONTINUABLE,
         1,
         arguments);
-    abort();
+    oxygen_runtime_abort();
 #endif
 }
 
@@ -245,7 +245,7 @@ void __oxygen_runtime_rethrow(void)
 {
 #if !defined(_WIN32)
     __cxa_rethrow();
-    abort();
+    oxygen_runtime_abort();
 #else
     oxygen_context *context = oxygen_context_current();
     if (context->current_seh_object == NULL)
@@ -262,7 +262,7 @@ void __oxygen_runtime_rethrow(void)
         context->current_seh_flags | EXCEPTION_NONCONTINUABLE,
         1,
         arguments);
-    abort();
+    oxygen_runtime_abort();
 #endif
 }
 
@@ -309,7 +309,7 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
     fflush(stderr);
     __cxa_end_catch();
     oxygen_release_trace(object);
-    abort();
+    oxygen_runtime_abort();
 #else
     void *object = __oxygen_runtime_exception_object(exception_handle);
     const oxygen_runtime_type_info *type =
@@ -336,7 +336,7 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
     fputc('\n', oxygen_runtime_error_stream());
     fflush(stderr);
     oxygen_release_trace(object);
-    abort();
+    oxygen_runtime_abort();
 #endif
 }
 

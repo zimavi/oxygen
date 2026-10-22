@@ -63,10 +63,30 @@ If an exception reaches the generated native entry point without a matching
 handler, the runtime prints the exception type, message, and stack trace to
 standard error, flushes the stream, and terminates with a non-zero exit status.
 
-Runtime failures are different. Indexing out of bounds, integer division by zero,
-an invalid shift or enum value, a failed allocation, a failed write to standard
-output or error, and a stack trace frame out of range each print a message and end the program with exit code 101. A runtime
-failure does not raise an exception that a catch can handle.
+Some failures are raised as exceptions that a catch can handle. These are detected
+by the compiled code, and each one throws an instance of its class:
+
+| Failure | Class |
+| --- | --- |
+| Indexing an array or a string out of bounds | `std.exception.IndexOutOfRangeException` |
+| Integer division by zero | `std.exception.DivideByZeroException` |
+| Signed division that overflows (the minimum value divided by -1) | `std.exception.RuntimeException` |
+| A shift count out of range for the shifted type | `std.exception.RuntimeException` |
+| An enum value that is not one of the enum's cases | `std.exception.RuntimeException` |
+
+The class's message describes the failure. It does not include the index, length
+or value, which the program does not yet format. The exception captures the stack
+trace where the failure happened, as a `throw` does. A build without
+`std.exception` (`--no-std`) has no class to throw, so these failures end the
+program with exit code 101, as they always did.
+
+Other runtime failures end the program with exit code 101 and do not raise an
+exception that a catch can handle: a failed allocation, a failed write to standard
+output or error, and a stack trace frame out of range. Out of memory cannot build
+an exception, and a failed write has nowhere to report one.
+
+An uncaught exception, of either kind, is reported as described above, and ends the
+program with exit code 101, as the other runtime failures do.
 
 On Windows, a hardware fault is a runtime failure too: an access violation, a
 divide error or a stack overflow. The runtime prints the exception code and the

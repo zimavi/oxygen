@@ -109,12 +109,17 @@ public sealed partial class LlvmModuleGenerator
     // class and its (string) constructor exist.
     private LLVMValueRef EmitNullReferenceException(
         LLVMBuilderRef builder, string message, SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
+        EmitExceptionInstance(builder, NullReferenceClassName, message, model, llvmFunctions);
+
+    // Builds an instance of a class of std.exception with its message, through its (string) constructor. The class must be loaded.
+    private LLVMValueRef EmitExceptionInstance(
+        LLVMBuilderRef builder, string className, string message, SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        const string className = NullReferenceClassName;
         if (!model.Classes.TryGetValue(className, out var cls))
             throw new InvalidOperationException(
-                $"Internal compiler error: '{className}' is not loaded, so a null reference cannot be reported.");
+                $"Internal compiler error: '{className}' is not loaded, so the exception cannot be built.");
         var ctor = cls.Constructors.First(candidate => candidate.Parameters.Count == 1
             && candidate.Parameters[0].Type.Kind == SemanticTypeKind.String);
         var instance = AllocateClassInstance(builder, className, cls, true, model, llvmFunctions);
