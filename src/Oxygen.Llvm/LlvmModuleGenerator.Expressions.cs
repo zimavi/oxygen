@@ -361,11 +361,12 @@ public sealed partial class LlvmModuleGenerator
         {
             var index = structure.Fields.Select((candidate, index) => (candidate, index))
                 .First(pair => pair.candidate.Name == field.Name).index;
-            result = builder.BuildInsertValue(
-                result,
-                EmitExpression(context, builder, field.Value, values, storage, model, llvmFunctions),
-                (uint)index,
-                $"struct.{field.Name}");
+            // The value has the type of its expression, which may be narrower than the field: an integer literal is i32 until it is
+            // converted, as an assignment converts it.
+            var fieldType = NormalizeAggregateType(structure.Fields[index].Type, model);
+            var value = CoerceValue(builder, EmitExpression(context, builder, field.Value, values, storage, model, llvmFunctions),
+                model.ExpressionTypes[field.Value], fieldType, model);
+            result = builder.BuildInsertValue(result, value, (uint)index, $"struct.{field.Name}");
         }
         return result;
     }

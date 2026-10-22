@@ -63,7 +63,7 @@ public sealed partial class SemanticAnalyzer
             IsExpression pattern => AnalyzeIsExpression(
                 pattern, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             StructLiteralExpression literal => AnalyzeStructLiteral(
-                literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
+                literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             ArrayLiteralExpression literal => AnalyzeArrayLiteral(literal, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType),
             IndexExpression index => AnalyzeIndex(index, scope, functions, moduleName, imports, expressionTypes, resolvedCalls),
             MemberAccessExpression member => AnalyzeMemberAccess(
@@ -221,11 +221,21 @@ public sealed partial class SemanticAnalyzer
         string moduleName,
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
-        IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
+        IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
+        SemanticType? expectedType = null)
     {
         if (FindTypeName(literal.TypeName, literal.Location) is not { } structName
             || !_structsByName.TryGetValue(structName, out var structure))
             throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Struct '{literal.TypeName}' is not declared", literal.Location, literal.TypeName.Length);
+        // A generic struct's type arguments come from the type the literal initializes, since the literal names none.
+        var isGeneric = (structure.TypeParameters ?? []).Count > 0;
+        var use = expectedType is { IsStruct: true } && expectedType.StructName == structName
+            ? expectedType
+            : SemanticType.Struct(structName);
+        if (isGeneric && use.TypeArguments is not { Count: > 0 })
+            throw Error($"Struct '{literal.TypeName}' is generic, so the literal needs a declared type that gives its type arguments",
+                literal.Location, literal.TypeName.Length);
+        var substitutions = StructTypeArguments(structure, use);
         var fields = new HashSet<string>(StringComparer.Ordinal);
         foreach (var field in literal.Fields)
         {
@@ -233,13 +243,14 @@ public sealed partial class SemanticAnalyzer
                 throw ErrorWithCode(DiagnosticCode.AlreadyDeclared, $"Struct field '{field.Name}' is specified more than once", field.Location, field.Name.Length);
             var declaration = structure.Fields.FirstOrDefault(candidate => candidate.Name == field.Name)
                 ?? throw Error($"Struct '{literal.TypeName}' has no field named '{field.Name}'", field.Location, field.Name.Length);
-            var valueType = AnalyzeExpression(field.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls);
-            if (!CanAssign(declaration.Type, field.Value, valueType))
-                throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot initialize field '{field.Name}' with {valueType}; expected {declaration.Type}", field.Value.Location);
+            var fieldType = SubstituteGenericType(declaration.Type, substitutions);
+            var valueType = AnalyzeExpression(field.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, fieldType);
+            if (!CanAssign(fieldType, field.Value, valueType))
+                throw ErrorWithCode(DiagnosticCode.ConversionMismatch, $"Cannot initialize field '{field.Name}' with {valueType}; expected {fieldType}", field.Value.Location);
         }
         if (fields.Count != structure.Fields.Count)
             throw Error($"Struct literal '{literal.TypeName}' must initialize every field", literal.Location, literal.TypeName.Length);
-        return SemanticType.Struct(structName);
+        return use;
     }
 
     private SemanticType AnalyzeMemberAccess(
@@ -378,9 +389,17 @@ public sealed partial class SemanticAnalyzer
         if (!targetType.IsStruct)
             throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"Member access requires a struct or class value, got {targetType}", member.Location);
         var structure = _structsByName[targetType.StructName!];
-        return structure.Fields.FirstOrDefault(field => field.Name == member.MemberName)?.Type
+        var structField = structure.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName)
             ?? throw Error($"Struct '{targetType}' has no field named '{member.MemberName}'", member.Location, member.MemberName.Length);
+        // The field's type is the type of the struct as it is used, so a generic struct's type parameters are replaced by its arguments.
+        return SubstituteGenericType(structField.Type, StructTypeArguments(structure, targetType));
     }
+
+    // The type arguments of a use of a generic struct, by the struct's parameter names. A non-generic struct has none.
+    private static Dictionary<string, SemanticType> StructTypeArguments(StructSymbol structure, SemanticType use) =>
+        (structure.TypeParameters ?? [])
+            .Zip(use.TypeArguments ?? [], (name, argument) => (name, argument))
+            .ToDictionary(pair => pair.name, pair => pair.argument, StringComparer.Ordinal);
 
     private SemanticType AnalyzeNewExpression(
         NewExpression expression, Scope scope,

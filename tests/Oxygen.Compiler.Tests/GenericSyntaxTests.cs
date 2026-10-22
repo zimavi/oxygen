@@ -33,7 +33,8 @@ public sealed class GenericSyntaxTests
         Assert.Equal("shapes", generic.ModuleName);
         Assert.Equal(["std.memory"], generic.Imports.Select(import => import.Name));
         Assert.Equal(["twice"], generic.Functions.Select(function => function.Name));
-        Assert.Equal(["Box"], generic.Structs.Select(structure => structure.Name));
+        // A struct is carried whether or not it is generic, since a generic struct can use a struct that is not.
+        Assert.Equal(["Box", "Pair"], generic.Structs.Select(structure => structure.Name));
         Assert.Equal(["Holder"], generic.Classes.Select(declaration => declaration.Name));
         // An interface is carried whether or not it is generic: it declares signatures only, and a constraint may name it.
         Assert.Equal(["Named"], generic.Interfaces.Select(declaration => declaration.Name));

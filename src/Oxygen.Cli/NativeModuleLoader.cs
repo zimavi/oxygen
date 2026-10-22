@@ -94,17 +94,13 @@ internal static class NativeModuleLoader
         if (metadata.Types.Count > 0)
             notes.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' declares {metadata.Types.Count} type(s), which are not imported yet.");
 
-        // The classes (generic ones with their bodies, others as declarations), the generic unions and functions, and the interfaces are
-        // imported. Generic structs are not yet, so each one is noted.
+        // The structs, the classes (generic ones with their bodies, others as declarations), the generic unions and functions, and the
+        // interfaces are all imported.
         var genericUnits = new List<LoadedGenericUnit>();
         foreach (var generic in metadata.Generics)
         {
             var decoded = SyntaxTreeCodec.Read(generic.Syntax);
-            var unit = decoded.Unit;
-            var skipped = unit.Structs.Count;
-            if (skipped > 0)
-                notes.Add($"Native module '{generic.ModuleName}' in '{file.FullName}' has {skipped} generic struct(s), which are not imported yet.");
-            genericUnits.Add(new LoadedGenericUnit(unit with { Structs = [] }, decoded.SourceName));
+            genericUnits.Add(new LoadedGenericUnit(decoded.Unit, decoded.SourceName));
         }
         return new LoadedNativeModule(new ExternalModuleDeclaration(metadata.ModuleName, functions), warnings, notes, genericUnits);
     }
