@@ -330,7 +330,7 @@ public sealed partial class LlvmModuleGenerator
                 else if (assignment.Target is UnaryExpression { Operator: TokenKind.Star, Operand: var operand })
                     builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                         model.ExpressionTypes[assignment.Target], model),
-                        EmitExpression(context, builder, operand, values, storage, model, llvmFunctions));
+                        EmitCheckedPointer(context, builder, operand, values, storage, model, llvmFunctions));
                 else if (assignment.Target is IndexExpression index)
                     // The value is converted to the element type: a literal keeps its i32 type otherwise, and storing
                     // that into an i8 element would write past it.

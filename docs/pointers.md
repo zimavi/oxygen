@@ -27,6 +27,20 @@ pointers it assigns, since they may hold a value on the path that leads back int
 validity and lifetime rules are the programmer's responsibility; pointers to
 local variables are allowed, but must not outlive the storage they reference.
 
+## Null pointers
+
+Every dereference of a pointer checks that it is not null first. A dereference is
+any of these: `*p` read as a value, as the target of an assignment or an increment,
+or with `&`; `p[index]`; and any member of `*p`, such as `p->name`, `(*p).name` or
+`p->method()`. When the pointer is null, the program throws `NullReferenceException`,
+which a `catch` can handle, as it does for a null class reference. Without
+`std.exception` (a build with `--no-std`), there is no exception to throw, so the
+program stops with exit code 101, as a null class reference does.
+
+The check is made when the program runs. The compiler rejects the dereference of the
+null literal, and of a pointer that is null on every path, as before. A pointer that
+is null on only some paths is checked at run time.
+
 Pointer arithmetic supports `pointer + integer` and `pointer - integer`.
 The integer offset is scaled by the size of the pointee type. Prefix and
 postfix `++` and `--`, and compound `+=` and `-=`, apply the same scaled
@@ -77,10 +91,8 @@ i32 main() {
   and `p->name` is the only way to reach the member.
 - `->` on a value that is not a pointer is an error, so `value->name` is rejected for
   an integer, a struct value or a class value.
-- A null pointer is not checked. Dereferencing it is the programmer's responsibility,
-  as for any other pointer, and `p->name` and `(*p).name` both dereference it.
-- A pointer to a class reference that is null reaches the member access of that class,
-  which throws `NullReferenceException` as a null class reference does.
+- A null pointer that is dereferenced throws `NullReferenceException`, as a null class
+  reference does. See [null pointers](#null-pointers).
 
 Integers support prefix and postfix `++` and `--`, compound arithmetic and
 bitwise assignment, and the binary bitwise (`&`, `|`, `^`) and shift (`<<`,

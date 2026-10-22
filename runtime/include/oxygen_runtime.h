@@ -82,6 +82,8 @@ OXYGEN_RUNTIME_API void __oxygen_runtime_enum_cast_failure(uint64_t value);
    operand is the shift count for kind 3 and 0 otherwise. */
 /* Stops the program, with exit code 101, when a null class reference is used in a program that has no NullReferenceException (see --no-std). */
 OXYGEN_RUNTIME_API void __oxygen_runtime_null_reference_failure(void);
+/* Stops the program, with exit code 101, when a null pointer is dereferenced in a program that has no NullReferenceException (see --no-std). */
+OXYGEN_RUNTIME_API void __oxygen_runtime_null_pointer_failure(void);
 OXYGEN_RUNTIME_API void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand);
 OXYGEN_RUNTIME_API uint8_t __oxygen_runtime_is_instance(
     const void *object,

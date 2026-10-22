@@ -334,11 +334,15 @@ public sealed partial class LlvmModuleGenerator
                 return EmitArrayAddress(context, builder, element, values, storage, model, llvmFunctions);
             if (expression.Operand is UnaryExpression
                 { Operator: TokenKind.Star, Operand: var dereferenced })
-                return EmitExpression(context, builder, dereferenced, values, storage, model, llvmFunctions);
+                return EmitCheckedPointer(context, builder, dereferenced, values, storage, model, llvmFunctions);
+        }
+        if (expression.Operator == TokenKind.Star)
+        {
+            // The pointer is checked before it is read, so a null pointer is reported and never loaded from.
+            var pointer = EmitCheckedPointer(context, builder, expression.Operand, values, storage, model, llvmFunctions);
+            return builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[expression], model), pointer, "deref");
         }
         var operand = EmitExpression(context, builder, expression.Operand, values, storage, model, llvmFunctions);
-        if (expression.Operator == TokenKind.Star)
-            return builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[expression], model), operand, "deref");
         var isFloatingPoint = model.ExpressionTypes[expression].Primitive is PrimitiveType.F32 or PrimitiveType.F64;
         if (expression.Operator == TokenKind.Bang)
             return builder.BuildNot(operand, "not");
@@ -375,7 +379,7 @@ public sealed partial class LlvmModuleGenerator
             MemberAccessExpression => EmitPlace(context, builder, expression, values, storage, model, llvmFunctions).Address
                 ?? throw new InvalidOperationException("Internal compiler error: this member has no address."),
             UnaryExpression { Operator: TokenKind.Star, Operand: var pointer } =>
-                EmitExpression(context, builder, pointer, values, storage, model, llvmFunctions),
+                EmitCheckedPointer(context, builder, pointer, values, storage, model, llvmFunctions),
             IndexExpression index => EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions),
             _ => throw new InvalidOperationException("Increment target is not supported by the LLVM backend.")
         };

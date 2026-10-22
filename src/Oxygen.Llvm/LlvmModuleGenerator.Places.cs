@@ -31,7 +31,7 @@ public sealed partial class LlvmModuleGenerator
                     EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions), "element");
             case UnaryExpression { Operator: TokenKind.Star } dereference:
                 return MemoryPlace(builder, type,
-                    EmitExpression(context, builder, dereference.Operand, values, storage, model, llvmFunctions), "deref");
+                    EmitCheckedPointer(context, builder, dereference.Operand, values, storage, model, llvmFunctions), "deref");
             case MemberAccessExpression member:
                 return EmitMemberPlace(context, builder, member, values, storage, model, llvmFunctions);
             // `Class<T>.Name` is a static property of one instance: a compound assignment loads it through that instance's getter.

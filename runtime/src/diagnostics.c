@@ -45,6 +45,15 @@ void __oxygen_runtime_null_reference_failure(void)
     oxygen_runtime_abort();
 }
 
+/* A null pointer was dereferenced in a program built with --no-std, which has no NullReferenceException to throw. It stops the program
+ * with exit code 101, as a null class reference does. */
+void __oxygen_runtime_null_pointer_failure(void)
+{
+    fprintf(oxygen_runtime_error_stream(), "Oxygen stopped: a null pointer was dereferenced\n");
+    fflush(stderr);
+    oxygen_runtime_abort();
+}
+
 void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand)
 {
     switch (kind)
