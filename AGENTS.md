@@ -843,3 +843,253 @@ Oxygen should evolve as a coherent programming language, not merely as a collect
 Keep language semantics, compiler architecture, LLVM integration, runtime functionality, and the standard library clearly separated.
 
 When uncertain, inspect the implementation, identify the missing design decision, explain the trade-offs, and choose the simplest design consistent with Oxygen's established direction.
+
+# Oxygen Engineering and Maintainability Policy
+
+## 1. Purpose
+
+Oxygen is a compiled programming language implemented in C#. Its compiler produces LLVM IR and uses native toolchain processes to compile and link native binaries.
+
+The goal is to develop Oxygen through specification-driven development while preserving a codebase that is understandable, testable, reviewable, and safe to extend by human contributors.
+
+Correct output is necessary but not sufficient. Every implementation must also respect architectural boundaries, make its behavior understandable, and provide sufficient evidence for human review.
+
+Maintainability is a design constraint, not a cleanup task to postpone until later.
+
+## 2. Core principles
+
+### 2.1 Explicitness over cleverness
+
+Prefer clear control flow, descriptive names, explicit data flow, and visible failure handling.
+
+Do not introduce clever abstractions, implicit behavior, hidden global state, or complicated generic frameworks when a simpler implementation communicates the intent more clearly.
+
+Avoid both giant multipurpose classes and excessive fragmentation into tiny classes with no meaningful independent responsibility.
+
+### 2.2 Cohesion and limited coupling
+
+Each component must have a clear responsibility and a defined boundary.
+
+Components should depend on stable contracts rather than unrelated implementation details.
+
+A change should affect only the components that genuinely need to understand it. If a feature requires changes across several compiler stages, explain why each stage is affected.
+
+Do not duplicate language rules, serialization rules, type-conversion logic, or other authoritative behavior across multiple components.
+
+### 2.3 Abstractions must earn their existence
+
+Introduce an abstraction when it provides a concrete benefit, such as enforcing an invariant, isolating an external dependency, eliminating meaningful duplication, enabling independent testing, or representing a stable domain concept.
+
+Do not introduce interfaces, factories, registries, service locators, generic frameworks, or additional projects merely to make the architecture appear more sophisticated.
+
+Do not generalize for hypothetical future requirements without a concrete architectural reason.
+
+### 2.4 Human-readable implementation
+
+A reviewer must be able to understand why the implementation works without reconstructing the entire compiler.
+
+Use domain terminology consistently. Keep functions focused on a coherent operation. Make important assumptions, invariants, side effects, and failure conditions explicit.
+
+Comments should explain intent, non-obvious constraints, invariants, and reasons behind design decisions. Do not use comments as a substitute for understandable code.
+
+Avoid unexplained magic values, unnecessary indirection, deeply nested control flow, and methods that perform several unrelated operations.
+
+Do not optimize for the smallest possible diff or lowest line count at the expense of comprehension.
+
+### 2.5 Explicit failure behavior
+
+Failures must be represented and handled consistently with existing Oxygen conventions.
+
+Do not silently discard errors, convert failures into success-shaped values, use broad exception handling to conceal defects, or fall back to misleading defaults.
+
+Validate untrusted inputs at appropriate boundaries, especially source files, serialized native library metadata, external tool arguments, and compiler-generated artifacts.
+
+Distinguish invalid user input, invalid source programs, malformed library metadata, unavailable toolchain dependencies, and internal compiler defects.
+
+Follow existing error and result types unless the specification explicitly justifies a change.
+
+## 3. Mandatory compiler architecture
+
+The logical compilation pipeline is:
+
+1. CLI argument processing and command dispatch.
+2. Source acquisition and reading.
+3. Lexical analysis.
+4. Syntactic parsing and source AST construction.
+5. Native library parsing and metadata ingestion, including Oxygen type information, generic AST trees, and other serialized compiler metadata.
+6. Semantic analysis.
+7. LLVM IR generation.
+8. Native toolchain invocation through Clang for compilation and linking.
+
+The exact execution order may accommodate dependency loading, incremental compilation, or other documented requirements. Do not assume that every stage must be a separate project or process.
+
+Every stage must have an explicit responsibility, defined inputs and outputs, and documented failure behavior.
+
+### 3.1 CLI and orchestration
+
+Own argument parsing, command selection, configuration, and coordination of compilation tasks.
+
+Do not implement language syntax parsing, semantic rules, or LLVM lowering in the CLI.
+
+### 3.2 Source acquisition
+
+Own access to source files and the representation of source content and identity.
+
+Keep filesystem access separate from lexical and syntactic analysis so those stages can be tested using in-memory inputs.
+
+### 3.3 Lexer
+
+Convert source characters into tokens according to the language specification.
+
+Own lexical errors and token source locations. Do not perform semantic analysis or emit LLVM IR.
+
+### 3.4 Parser
+
+Convert tokens into the source AST according to the language grammar.
+
+Own syntax errors, source locations, and any specified parser recovery behavior. Do not implement type checking, LLVM lowering, or native process execution.
+
+### 3.5 Native library and metadata ingestion
+
+Decode, validate, and represent serialized Oxygen library metadata.
+
+Handle type information, generic definitions and AST trees according to the metadata format specification.
+
+Do not trust malformed or incompatible metadata. Report meaningful diagnostics for invalid formats, unsupported versions, missing required information, and structurally invalid data.
+
+Keep serialization and deserialization rules separate from language semantic rules. Shared AST or type representations are acceptable where they preserve clear ownership and invariants.
+
+### 3.6 Semantic analysis
+
+Own name resolution, type checking, overload resolution, generic validation, and other compile-time language rules.
+
+Represent semantic information explicitly. LLVM generation must not need to rediscover facts that semantic analysis is responsible for establishing.
+
+Semantic analysis may consume source ASTs and validated library metadata through defined contracts.
+
+### 3.7 LLVM IR generation
+
+Translate semantically valid constructs into LLVM IR.
+
+Follow the language's established lowering rules and runtime ABI. Do not silently invent semantic behavior or use IR generation to bypass diagnostics that belong to semantic analysis.
+
+If the current architecture permits IR generation to receive invalid or partially analyzed nodes, document and enforce the relevant invariants explicitly.
+
+### 3.8 Native toolchain integration
+
+Own invocation of Clang, command construction, process lifecycle, exit status, and native build diagnostics.
+
+Do not place compiler language rules or AST transformations in the toolchain integration layer.
+
+Handle paths and process arguments safely and avoid relying on the current working directory unless the behavior is explicit.
+
+## 4. Contracts and data ownership
+
+For each component, define:
+
+- Its responsibility and explicit non-responsibilities.
+- The types and invariants of its inputs.
+- The types and guarantees of its outputs.
+- The errors or diagnostics it can produce.
+- The resources or state it owns.
+- Its dependencies on other components.
+- How it can be tested independently.
+
+Do not allow downstream stages to depend on undocumented internal details of upstream implementations.
+
+Do not add redundant representations of the same information unless each representation has a clearly justified purpose.
+
+Where source ASTs, semantic information, generic AST trees, and serialized metadata overlap, establish which representation is authoritative and who owns transformations between representations.
+
+## 5. Spec-driven development procedure
+
+Before implementing a non-trivial change:
+
+1. Inspect the relevant source code, existing specifications, tests, and established conventions.
+2. Identify the responsible components and the architectural contracts affected.
+3. Write or update a specification describing the behavior, design, failure modes, and acceptance criteria.
+4. Identify affected public APIs, language rules, metadata formats, runtime ABI, and compatibility requirements.
+5. Define a testing strategy before writing the implementation.
+6. Implement the smallest coherent change that satisfies the specification.
+7. Run the relevant tests and available build or formatting checks.
+8. Review the final diff against the specification and this policy.
+9. Report the implementation, design decisions, tests performed, and remaining limitations.
+
+For a small, localized change, keep the specification lightweight. Do not create unnecessary documents or procedural overhead for trivial fixes.
+
+If the specification conflicts with the existing architecture or an established language rule, stop and explain the conflict before silently choosing a direction.
+
+Do not implement unrelated improvements while working on a feature. Propose independent refactors separately unless they are required for correctness or a clearly defined architectural boundary.
+
+## 6. Implementation quality requirements
+
+- Follow established naming, formatting, and project conventions.
+- Reuse existing domain models and utilities where they fit the requirement.
+- Avoid duplicate implementations of the same rule.
+- Avoid global mutable state and hidden dependencies.
+- Keep side effects at explicit boundaries.
+- Avoid unnecessary reflection, runtime type-name inspection, or other mechanisms that conflict with the project's NativeAOT requirements.
+- Avoid unnecessary allocations and repeated work in compiler hot paths, but do not sacrifice clarity for unmeasured performance gains.
+- Keep configuration, language semantics, metadata formats, and toolchain behavior separate.
+- Preserve backward compatibility unless a breaking change is explicitly specified.
+- Do not introduce dependencies without explaining their purpose and maintenance cost.
+- Do not claim that code, tests, or builds succeeded unless they were actually run and their results observed.
+
+When a function or class grows beyond a comfortable scope, evaluate whether its responsibilities should be separated. Do not apply arbitrary line-count limits without considering cohesion and readability.
+
+## 7. Testing requirements
+
+Test behavior at the narrowest useful boundary and verify integration behavior where components interact.
+
+Depending on the change, tests should cover:
+
+- Valid inputs and expected outputs.
+- Invalid inputs and meaningful failure behavior.
+- Boundary conditions and malformed data.
+- Relevant regression cases.
+- Interactions with adjacent pipeline stages.
+- User-visible diagnostics and exit status where applicable.
+
+Use lexer, parser, semantic, metadata, LLVM generation, and end-to-end tests according to the component being changed.
+
+Prefer assertions about language semantics, observable behavior, documented contracts, and stable IR properties over assertions about private implementation details.
+
+Tests must not merely reproduce the implementation's assumptions. Their expected behavior must be traceable to the specification.
+
+## 8. Human review requirements
+
+Before presenting a change for review, verify:
+
+- The implementation satisfies every applicable acceptance criterion.
+- Each modified component has a justified responsibility.
+- Architectural boundaries remain intact or changes to them are explicitly justified.
+- No unrelated changes or accidental duplication were introduced.
+- Errors and edge cases are handled intentionally.
+- Tests provide evidence for the behavior being changed.
+- Public API, metadata, language semantics, runtime ABI, and compatibility implications are documented where relevant.
+- The diff can be understood without reading unrelated parts of the repository.
+
+Summarize the design rationale, not just the list of files modified.
+
+If the implementation is correct but introduces significant complexity, explain that complexity and why it is necessary.
+
+## 9. Stop conditions
+
+Do not proceed with a major design decision when essential information is missing and a wrong assumption could cause architectural damage.
+
+Instead, identify the uncertainty, present the smallest set of reasonable alternatives, explain the trade-offs, and request clarification when necessary.
+
+Do not invent requirements, silently weaken acceptance criteria, bypass failing tests, suppress diagnostics to make a build pass, or perform broad refactoring under the label of a localized feature.
+
+## 10. Definition of maintainable completion
+
+A change is complete only when:
+
+1. The specified behavior is implemented.
+2. Relevant automated checks have been executed, with failures reported honestly.
+3. The architectural boundaries are preserved or deliberately revised.
+4. The implementation and tests are understandable to another contributor.
+5. Relevant compatibility and failure behavior are addressed.
+6. The final change is traceable to its specification.
+
+Correctness, maintainability, and reviewability are independent requirements. None substitutes for the others.
