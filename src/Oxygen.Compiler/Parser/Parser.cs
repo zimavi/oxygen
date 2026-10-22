@@ -65,6 +65,7 @@ public sealed partial class Parser
             var interfaces = new List<InterfaceDeclaration>();
             var functions = new List<FunctionDeclaration>();
             var globals = new List<GlobalVariableDeclaration>();
+            var aliases = new List<TypeAliasDeclaration>();
             while (!Check(TokenKind.EndOfFile))
             {
                 if (IsEnumDeclarationStart())
@@ -77,6 +78,8 @@ public sealed partial class Parser
                     classes.Add(ParseClass());
                 else if (IsInterfaceDeclarationStart())
                     interfaces.Add(ParseInterface());
+                else if (IsTypeAliasStart())
+                    aliases.Add(ParseTypeAlias());
                 else if (IsGlobalVariableStart())
                     globals.Add(ParseGlobalVariable());
                 else
@@ -91,7 +94,8 @@ public sealed partial class Parser
                 Unions = unions,
                 Classes = classes,
                 Interfaces = interfaces,
-                Globals = globals
+                Globals = globals,
+                Aliases = aliases
             };
         }
         catch (ParseException exception)
@@ -127,6 +131,7 @@ public sealed partial class Parser
 
         var functions = new List<FunctionDeclaration>();
         var globals = new List<GlobalVariableDeclaration>();
+        var aliases = new List<TypeAliasDeclaration>();
         var location = Current.Location;
 
         while (!Check(TokenKind.EndOfFile))
@@ -143,6 +148,8 @@ public sealed partial class Parser
                     classes.Add(ParseClass());
                 else if (IsInterfaceDeclarationStart())
                     interfaces.Add(ParseInterface());
+                else if (IsTypeAliasStart())
+                    aliases.Add(ParseTypeAlias());
                 else if (IsGlobalVariableStart())
                     globals.Add(ParseGlobalVariable());
                 else
@@ -165,7 +172,8 @@ public sealed partial class Parser
             Classes = classes
             ,
             Interfaces = interfaces,
-            Globals = globals
+            Globals = globals,
+            Aliases = aliases
         }, diagnostics.Diagnostics);
     }
 
@@ -1004,6 +1012,27 @@ public sealed partial class Parser
 
     // A global variable is `[const] Type name` followed by '=' or ';'. A function is `Type name` followed by '(' or '<',
     // so the token after the name tells them apart.
+    // `type Name = Target;`, with an optional `public` or `private` before `type`.
+    private bool IsTypeAliasStart()
+    {
+        var index = _position;
+        if (index < _tokens.Count && _tokens[index].Kind is TokenKind.Public or TokenKind.Private)
+            index++;
+        return index < _tokens.Count && _tokens[index].Kind == TokenKind.Type;
+    }
+
+    private TypeAliasDeclaration ParseTypeAlias()
+    {
+        var location = Current.Location;
+        var visibility = ParseVisibility();
+        Consume(TokenKind.Type, "Expected 'type'.");
+        var name = Consume(TokenKind.Identifier, "Expected a type alias name after 'type'.").Lexeme;
+        Consume(TokenKind.Equals, "Expected '=' after the type alias name.");
+        var target = ParseType(allowInferred: false);
+        Consume(TokenKind.Semicolon, "Expected ';' after the type alias.");
+        return new TypeAliasDeclaration(name, target, visibility, location);
+    }
+
     private bool IsGlobalVariableStart()
     {
         var start = _position;

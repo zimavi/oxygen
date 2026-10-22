@@ -49,7 +49,15 @@ public sealed partial class SemanticAnalyzer
                 return syntax.IsPointer ? SemanticType.PointerTo(generic) : generic;
             }
             // The name denotes a type of the current module or of one it imports; the type is keyed by its qualified name.
-            var typeName = FindTypeName(syntax.NamedType, syntax.Location)
+            var visibleName = FindVisibleTypeKey(syntax.NamedType, syntax.Location);
+            if (visibleName is not null && _aliasDeclarations.ContainsKey(visibleName))
+            {
+                // An alias is the type it names, so it has no type arguments of its own.
+                if (syntax.DeclaredTypeArguments.Count != 0)
+                    throw Error($"Type alias '{syntax.NamedType}' cannot have type arguments", syntax.Location, syntax.NamedType.Length);
+                return AliasType(visibleName);
+            }
+            var typeName = visibleName
                 ?? throw ErrorWithCode(DiagnosticCode.NotDeclared, $"Struct '{syntax.NamedType}' is not declared", syntax.Location, syntax.NamedType.Length);
             if (_enumsByName.ContainsKey(typeName))
             {

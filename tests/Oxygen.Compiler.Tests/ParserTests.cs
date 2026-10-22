@@ -885,6 +885,31 @@ public sealed class ParserTests
         Assert.Contains("A static property has a get and a set accessor, each with a body", exception.Message);
     }
 
+    // A type alias is `type Name = Target;`, with an optional visibility. Its target is any type, including a pointer.
+    [Fact]
+    public void ParsesTypeAliasesWithTheirVisibilityAndTargets()
+    {
+        var unit = Parse("public type Count = u64; type Pointer = i32*; i32 main() { return 0; }");
+
+        var count = Assert.Single(unit.Aliases, alias => alias.Name == "Count");
+        Assert.Equal(Visibility.Public, count.Visibility);
+        Assert.Equal(PrimitiveType.U64, count.Target.Primitive);
+        var pointer = Assert.Single(unit.Aliases, alias => alias.Name == "Pointer");
+        Assert.Equal(Visibility.Private, pointer.Visibility);
+        Assert.True(pointer.Target.IsPointer);
+    }
+
+    [Theory]
+    [InlineData("type Count u64;", "Expected '=' after the type alias name.")]
+    [InlineData("type Count = u64", "Expected ';' after the type alias.")]
+    [InlineData("type = u64;", "Expected a type alias name after 'type'.")]
+    public void ReportsAMalformedTypeAlias(string source, string message)
+    {
+        var result = ParseWithDiagnostics(source);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains(message));
+    }
+
     private ParseResult ParseWithDiagnostics(string source) =>
         new Parser(_tokenizer.Tokenize(source), Log.Logger).ParseWithDiagnostics("main.oxy");
 

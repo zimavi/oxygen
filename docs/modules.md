@@ -172,6 +172,10 @@ a type of this module and an imported type. A module declares each type name
 once, so two declarations of one name in one module are an error at the
 declaration.
 
+A type alias (see [type aliases](type-aliases.md)) is a type name too. It follows
+the same rules, so an alias and a type of one name, or two aliases of one name
+that two imports provide, are ambiguous at the use.
+
 A name that is not visible is not in the way. A program may declare its own
 `Exception` while it does not import `std.exception`. Importing that module makes
 the two names clash, and the clash is reported at the use.

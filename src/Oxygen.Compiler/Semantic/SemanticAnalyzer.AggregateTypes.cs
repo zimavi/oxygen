@@ -20,6 +20,9 @@ public sealed partial class SemanticAnalyzer
         {
             if (genericParameters.Contains(syntax.NamedType))
                 return SemanticType.GenericParameter(syntax.NamedType);
+            // An alias is the type it names, so a use of it is that type, whatever the name is in the generated names.
+            if (VisibleTypeKeyOrNull(syntax.NamedType) is { } aliasKey && _aliasDeclarations.ContainsKey(aliasKey))
+                return AliasType(aliasKey);
             var arguments = syntax.DeclaredTypeArguments
                 .Select(item => ConcreteType(item, genericParameters)).ToArray();
             IReadOnlyList<SemanticType>? concreteArguments = arguments.Any(item => item is null)
@@ -47,6 +50,9 @@ public sealed partial class SemanticAnalyzer
         if (syntax.NamedType is not null && substitutions.TryGetValue(syntax.NamedType, out var replacement)
             && syntax.DeclaredTypeArguments.Count == 0)
             return TypeSyntaxFromSemantic(replacement, syntax.Location);
+        // An alias is rewritten as the type it names, so the generated code refers to that type and not to a struct of the alias's name.
+        if (syntax.NamedType is not null && VisibleTypeKeyOrNull(syntax.NamedType) is { } aliasKey && _aliasDeclarations.ContainsKey(aliasKey))
+            return TypeSyntaxFromSemantic(AliasType(aliasKey), syntax.Location);
         if (syntax.IsPointer)
             return syntax with { Pointee = RewriteTypeSyntax(syntax.Pointee!, substitutions, aggregateNames) };
         if (syntax.IsArray)
@@ -94,6 +100,8 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyDictionary<string, SemanticType> substitutions,
         IReadOnlyDictionary<string, string> aggregateNames)
     {
+        if (VisibleTypeKeyOrNull(syntax.NamedType!) is { } aliasKey && _aliasDeclarations.ContainsKey(aliasKey))
+            return AliasType(aliasKey);
         var arguments = syntax.DeclaredTypeArguments
             .Select(item => SemanticTypeFromSyntax(item, substitutions, aggregateNames)).ToArrayOrNull();
         var typeName = TypeNameOrNull(syntax.NamedType!) ?? syntax.NamedType!;

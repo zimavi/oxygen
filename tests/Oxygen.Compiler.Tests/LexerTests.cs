@@ -68,6 +68,18 @@ public sealed class LexerTests
     }
 
     [Fact]
+    public void TokenizesTypeKeyword()
+    {
+        var kinds = _lexer.Tokenize("type Name = u64;")
+            .Select(token => token.Kind)
+            .ToArray();
+
+        Assert.Equal(
+            [TokenKind.Type, TokenKind.Identifier, TokenKind.Equals, TokenKind.U64, TokenKind.Semicolon, TokenKind.EndOfFile],
+            kinds);
+    }
+
+    [Fact]
     public void TokenizesEnumKeyword()
     {
         Assert.Equal(

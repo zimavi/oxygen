@@ -25,6 +25,8 @@ public sealed class SyntaxTreeCodecTests
         @extern("puts") extern i32 puts(i32 value);
         const i32 limit = 100;
         i32 counter = 10;
+        public type Count = u64;
+        type Pointer = i32*;
         enum Color : i32 { Red, Green = 4, Blue }
         @flags enum Access { Read = 1, Write = 2 }
         struct Vector { i32 x; i32 y; }

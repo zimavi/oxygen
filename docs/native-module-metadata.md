@@ -32,11 +32,11 @@ value can be outside the range of a JSON number.
 
 `generics` carries the generic declarations of the module, not its source text.
 Each entry is a unit in the binary syntax form (`SyntaxTreeCodec`, format version
-1, see `Oxygen.Compiler.Ast`): the module header, the imports, and the classes,
+2, see `Oxygen.Compiler.Ast`): the module header, the imports, and the classes,
 structs, unions, interfaces and functions that have type parameters, all the
 structs and interfaces of the file, the non-generic classes without their
-bodies, and the module-level variables of the file, with their constant
-initializers. The form
+bodies, the module-level variables of the file, with their constant
+initializers, and all of its type aliases. The form
 has no comments, formatting or original text. The entry's module and source name
 must match the names inside the form, and the form must hold only declarations
 that the binary form carries (`GenericSyntax.IsGenericOnly`). A damaged form is

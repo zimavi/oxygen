@@ -16,7 +16,9 @@ public static class GenericSyntax
         Interfaces = unit.Interfaces,
         Functions = unit.Functions.Where(IsGeneric).ToArray(),
         Enums = [],
-        Globals = unit.Globals
+        Globals = unit.Globals,
+        // A carried declaration may use an alias, so every alias is carried, whether or not it is public.
+        Aliases = unit.Aliases
     };
 
     // Whether the unit has a declaration to carry.
@@ -24,7 +26,7 @@ public static class GenericSyntax
     {
         var generic = Extract(unit);
         return generic.Structs.Count > 0 || generic.Unions.Count > 0 || generic.Classes.Count > 0 ||
-            generic.Interfaces.Count > 0 || generic.Functions.Count > 0 || generic.Globals.Count > 0;
+            generic.Interfaces.Count > 0 || generic.Functions.Count > 0 || generic.Globals.Count > 0 || generic.Aliases.Count > 0;
     }
 
     // Whether every declaration of the unit is one that the binary form carries: structs, unions and functions that are generic where they

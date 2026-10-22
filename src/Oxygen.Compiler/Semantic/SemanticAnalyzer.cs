@@ -195,6 +195,7 @@ public sealed partial class SemanticAnalyzer
         string? SourceNameAt(int unitIndex) =>
             sourceNames is not null && unitIndex < sourceNames.Count ? sourceNames[unitIndex] : null;
 
+        RegisterAliasNames(compilationUnits, SourceNameAt);
         var functions = new Dictionary<FunctionDeclaration, FunctionSymbol>(ReferenceEqualityComparer.Instance);
         _functionSymbols = functions;
         for (var unitIndex = 0; unitIndex < compilationUnits.Count; unitIndex++)
@@ -425,6 +426,7 @@ public sealed partial class SemanticAnalyzer
                 };
             }
         }
+        ResolveAliases(compilationUnits, SourceNameAt, (externalModules ?? []).Select(module => module.ModuleName).ToHashSet(StringComparer.Ordinal));
         _sourceName = null;
         // A class with a declaration error is not analysed further, so no model is built when one is reported.
         if (!ValidateClassHierarchy())

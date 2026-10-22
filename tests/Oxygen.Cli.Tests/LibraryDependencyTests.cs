@@ -144,6 +144,33 @@ public sealed class LibraryDependencyTests : IDisposable
         Assert.Contains("'count'", build.Error);
     }
 
+    // A public alias of a library is carried with the library's declarations, so a program names the library's type by the alias.
+    [SkippableFact]
+    public void AProgramUsesAnAliasOfAnotherLibrary()
+    {
+        const string countLibrary = """
+            module mylib;
+
+            public type Count = i32;
+
+            public Count bump(Count value) {
+                return value + 1;
+            }
+            """;
+
+        var run = BuildAndRunProgram(
+            """
+            import mylib;
+
+            i32 main() {
+                Count value = 4;
+                return bump(value);
+            }
+            """, countLibrary);
+
+        Assert.Equal(5, run.ExitCode);
+    }
+
     [SkippableFact]
     public void AProgramAndAnotherLibraryShareTheStaticFieldsOfAClass()
     {
