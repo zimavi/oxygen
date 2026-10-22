@@ -5,6 +5,7 @@ A type alias gives another name to a type:
 ```oxygen
 type UserId = u64;
 type IntPointer = i32*;
+type BinaryOperation = fn i32 (i32, i32);
 
 UserId next(UserId id) {
     return id + 1;
@@ -17,15 +18,15 @@ An alias is not a new type. `UserId` and `u64` are the same type, so a value of 
 passes where the other is written, with no conversion and no diagnostic. This
 follows the rule that values of unrelated types never convert implicitly.
 
-The target can be any type: a primitive, a pointer, an array, a string, a struct,
-a class, a union, an enum or an interface. An alias of a nominal type (a class,
+The target can be any type: a primitive, a pointer, a [function pointer](functions.md#function-pointers),
+an array, a string, a struct, a class, a union, an enum or an interface. An alias of a nominal type (a class,
 struct, union, enum or interface) can be used wherever that type can, including
 the forms that name a type in an expression: a construction (`new Tally(5)`,
 `Point { x: 1 }`, `Option.Some(...)`), a static member (`Counter.count`) and a
 base type.
 
-An alias of a type that is not nominal (a primitive, a pointer, an array or a
-string) can be used only where a type is written, such as a declaration, a
+An alias of a type that is not nominal (a primitive, a pointer, a function pointer,
+an array or a string) can be used only where a type is written, such as a declaration, a
 parameter, a return type or a type argument. Using it in an expression is an
 error.
 
@@ -63,4 +64,3 @@ program that uses that alias.
   with no type parameters of its own. An alias of a generic type's instance,
   such as `type IntBox = Box<i32>;`, names that instance and can be used only as a
   type, not with type arguments.
-- Aliases of function pointer types wait for function pointers.

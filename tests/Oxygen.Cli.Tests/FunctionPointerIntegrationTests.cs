@@ -288,6 +288,67 @@ public sealed class FunctionPointerIntegrationTests : IDisposable
         Assert.Equal("some none ", run.Output.Replace("\r\n", "\n"));
     }
 
+    // An alias names the function pointer type; the alias and the written-out type are one type.
+    [SkippableFact]
+    public void AnAliasOfAFunctionPointerTypeIsTheSameTypeAsItsTarget()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            type BinaryOperation = fn i32 (i32, i32);
+
+            i32 add(i32 a, i32 b) {
+                return a + b;
+            }
+
+            i32 apply(BinaryOperation op, i32 x) {
+                return op(x, 1);
+            }
+
+            i32 main() {
+                BinaryOperation named = &add;
+                fn i32 written(i32, i32) = named;
+                return apply(written, 2);
+            }
+            """);
+
+        Assert.Equal(3, run.ExitCode);
+    }
+
+    // The C library calls back into an Oxygen function through an ordinary C function pointer (docs/functions.md).
+    [SkippableFact]
+    public void AnExternFunctionCallsBackThroughAFunctionPointer()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+
+            @extern("qsort")
+            extern void sort_bytes(void* items, u64 count, u64 size, fn i32 compare(void*, void*));
+
+            i32 descending(void* left, void* right) {
+                i32 a = *cast<i32*>(left);
+                i32 b = *cast<i32*>(right);
+                return b - a;
+            }
+
+            i32 main() {
+                i32[3] values = {1, 3, 2};
+                sort_bytes(cast<void*>(&values[0]), 3, 4, &descending);
+                io.println(values[0]);
+                io.println(values[1]);
+                io.println(values[2]);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("3\n2\n1\n", run.Output.Replace("\r\n", "\n"));
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }
