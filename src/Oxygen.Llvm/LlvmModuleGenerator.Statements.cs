@@ -315,11 +315,15 @@ public sealed partial class LlvmModuleGenerator
                     EmitClassMemberStore(builder, model.Classes[objectType.StructName!], receiver, nestedMember, assigned,
                         model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target], model, llvmFunctions);
                 }
-                else if (assignment.Target is MemberAccessExpression { Target: MemberAccessExpression or IndexExpression } structMember
-                         && model.ExpressionTypes[structMember.Target].IsStruct)
+                else if (assignment.Target is MemberAccessExpression
+                         {
+                             Target: MemberAccessExpression or IndexExpression or UnaryExpression { Operator: TokenKind.Star }
+                         } structMember
+                         && (model.ExpressionTypes[structMember.Target].IsStruct || model.ExpressionTypes[structMember.Target].IsClass))
                 {
-                    // A field of a struct that is itself a field or an element, as in line.b.y = v. The struct is read, the field is
-                    // replaced, and the struct is written back through its place.
+                    // A field of a struct, or of a value class, that is itself a field, an element or the target of a dereference, as in
+                    // line.b.y = v and (*pointer).y = v. The object is read, the field is replaced, and the object is written back through
+                    // its place. Reference classes are stored through their object above, so only value classes reach here.
                     EmitPlace(context, builder, assignment.Target, values, storage, model, llvmFunctions).Store(
                         CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target], model));
                 }

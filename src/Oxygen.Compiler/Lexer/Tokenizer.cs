@@ -441,6 +441,8 @@ public sealed class Tokenizer
             ('>', '=') => TokenKind.GreaterThanOrEquals,
             ('&', '&') => TokenKind.AmpersandAmpersand,
             ('|', '|') => TokenKind.PipePipe,
+            // `--` and `-=` are matched above, so a `-` followed by `>` is always the arrow.
+            ('-', '>') => TokenKind.Arrow,
             _ => first switch
             {
                 '(' => TokenKind.OpenParenthesis,
@@ -474,13 +476,13 @@ public sealed class Tokenizer
 
         Advance(first, ref position, ref line, ref column);
         if (kind is TokenKind.EqualsEquals or TokenKind.BangEquals or TokenKind.LessThanOrEquals
-            or TokenKind.GreaterThanOrEquals or TokenKind.AmpersandAmpersand or TokenKind.PipePipe)
+            or TokenKind.GreaterThanOrEquals or TokenKind.AmpersandAmpersand or TokenKind.PipePipe or TokenKind.Arrow)
         {
             Advance(second, ref position, ref line, ref column);
         }
 
         var length = kind is TokenKind.EqualsEquals or TokenKind.BangEquals or TokenKind.LessThanOrEquals
-            or TokenKind.GreaterThanOrEquals or TokenKind.AmpersandAmpersand or TokenKind.PipePipe
+            or TokenKind.GreaterThanOrEquals or TokenKind.AmpersandAmpersand or TokenKind.PipePipe or TokenKind.Arrow
             ? 2
             : 1;
         return new Token(kind, source[(position - length)..position], location);
