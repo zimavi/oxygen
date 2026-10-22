@@ -17,6 +17,9 @@
     <PackageReference Include="Serilog" Version="4.4.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="System.CommandLine" Version="2.0.13" />
+    <!-- The LLVM library is loaded at run time, so the compiler's output needs its native file. A reference through Oxygen.Llvm does not
+         copy it into this project's output, nor into a publish of it, so the package is referenced here as well. -->
+    <PackageReference Include="libLLVM" Version="$(LibLLVMVersion)" />
   </ItemGroup>
 
   <ItemGroup>
