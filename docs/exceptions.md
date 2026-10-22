@@ -114,6 +114,68 @@ optimized build keeps the access and the fault is reported as above, instead of
 treating the access as undefined behaviour. A stack overflow is reported the same
 way.
 
+## The `@noreturn` annotation
+
+`@noreturn` on a function or method promises that it never returns to its caller. Every path of its
+body must end in a `throw`, in a call to another `@noreturn` function, or in a loop that never ends.
+The compiler checks this the way it checks that a non-void function returns, so such a function needs
+no `return` statement. A `return` in it is an error, and a body that can reach its end is an error.
+
+A statement that calls a `@noreturn` function ends the path, so the statements after it are
+unreachable and get the same warning as code after a `break`. The emitted function carries LLVM's
+`noreturn` attribute, and the call is followed by an `unreachable` terminator, so the optimizer may
+drop the code after it.
+
+`@noreturn` and `@nothrow` are independent. A `@noreturn` function may throw: a throw leaves the
+function and does not return to the caller, so its caller can catch the exception. A function that
+is both may only abort. A C function declared with `@extern` can be `@noreturn` too, for example one
+that ends the program.
+
+## Without exceptions
+
+`--no-exceptions` is rejected with an error, since the feature is work in progress. The compiler
+code for it exists, and it is planned as follows: a throw prints the exception as an uncaught one
+and ends the program with exit code 101, without unwinding; a `try` is its body, with its `finally`
+clause running on every way out; a `catch` clause is type-checked, is not emitted, and gets a
+warning that it never runs; and a runtime failure ends the program with its message. The runtime is
+told the mode at startup, through the flags of `__oxygen_runtime_initialize`.
+
+## The `@nothrow` annotation
+
+`@nothrow` on a function or method promises that it never throws. The compiler checks the promise
+at compile time, and the code it emits for such a function is smaller, as described below.
+
+The body of a `@nothrow` function may not:
+
+- `throw` (including `throw;`);
+- call a function that may throw. A call is allowed when the callee is `@nothrow`, or is a C function
+  declared with `@extern`, since C does not throw Oxygen exceptions;
+- call through a function pointer, or call a function that the compiler cannot resolve (a union case, a
+  construction, or a call of a function value), since its target is not known;
+- create an object whose class has a constructor, since constructors cannot be `@nothrow` yet;
+- read or write a property, since its accessor may throw;
+- `delete` an object, or use `for`-in, since destructors and iterator methods may throw;
+- declare a local whose class has a destructor, since the destructor runs at the end of the scope.
+
+A dispatched call (a virtual method or an interface method) is allowed only when the method it
+names is `@nothrow`. An implementation of a `@nothrow` interface method, and an override of a
+`@nothrow` method, must be `@nothrow` too. A `try` statement inside a `@nothrow` function is a
+warning, since nothing in the function can throw to be caught.
+
+A runtime failure inside a `@nothrow` function stops the program with exit code 101, as it does without
+exceptions. It is not thrown, so a catch in the caller cannot see it.
+
+A `@nothrow` function is emitted as plain calls. Nothing in its body can throw, so it sets up no
+unwinding (no personality, no cleanup of its locals and no landing pads), and a `try` statement in it
+is lowered as a plain block with its `finally` clause. It also has no trace frame, since no exception
+that is reported can have it on its trace. The one exception is a C function that calls back into an
+Oxygen function that throws: that frame is then missing from the trace, as the C frames are.
+
+Limits of the check, which is conservative: a `@nothrow` annotation is not recorded in library
+metadata, so a function of a library is treated as one that may throw, even if it is marked
+`@nothrow` in its own module. A temporary object whose class has a destructor is not checked: only the
+locals of such a class are.
+
 This is distinct from compiler diagnostics, which are reported before native
 code is generated. Compiler diagnostics are structured reports for invalid
 source, malformed native metadata, unsupported backend inputs, and native
