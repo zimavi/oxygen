@@ -142,8 +142,9 @@ The version is in `VERSION` at the repository root, and it is written nowhere el
 reports it. The project follows [Semantic Versioning](https://semver.org). It starts at
 `0.1.0`, and while the major version is 0 nothing is released.
 
-A commit that changes behavior changes `VERSION` in the same commit, by the bump for its
-conventional commit type:
+A change that alters behavior bumps `VERSION` once, when it is fully implemented, however many
+commits it takes. The bump is made in the change's last commit (or in a bump commit before its
+merge), never in the intermediate commits. The bump depends on the conventional commit type:
 
 - `feat`: minor bump, `0.1.0` to `0.2.0`.
 - `fix` and `perf`: patch bump, `0.1.0` to `0.1.1`.
