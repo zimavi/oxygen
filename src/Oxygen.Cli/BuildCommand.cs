@@ -162,11 +162,6 @@ internal static class BuildCommand
             Console.Error.WriteLine("oxygenc: --library does not link, so --runtime cannot be used with it. Add --dynamic for a shared library.");
             return ExitCodes.SourceError;
         }
-        if (library && (result.GetValue(StandardLibrary) ?? []).Length > 0)
-        {
-            Console.Error.WriteLine("oxygenc: --stdlib cannot be used with --library yet.");
-            return ExitCodes.SourceError;
-        }
         if (library && result.GetValue(EmitIr) is not null)
         {
             Console.Error.WriteLine("oxygenc: --emit-ir writes one module's IR, so it cannot be used with --library.");
@@ -397,6 +392,9 @@ internal static class BuildCommand
                 return ExitCodes.ToolchainFailure;
             }
             dependencies.Add(new NativeDependency(runtimePath, NativeDependencyKind.Dynamic));
+            // A shared library that uses a standard library's classes or functions links that library too.
+            if (!TryAddStandardLibraryDependencies(result, target, sources, formatter, useColor, dependencies))
+                return ExitCodes.ToolchainFailure;
         }
 
         var keepTemporaryFiles = result.GetValue(KeepTemps);
@@ -447,6 +445,39 @@ internal static class BuildCommand
         return ExitCodes.Success;
     }
 
+    // Adds the standard libraries that --stdlib names to the link. A shared library is linked through its import library on Windows. The
+    // import library sits beside the DLL, which is the file that --stdlib names, since the DLL holds the metadata.
+    private static bool TryAddStandardLibraryDependencies(
+        System.CommandLine.ParseResult result,
+        OxygenTarget target,
+        IReadOnlyList<SourceText> sources,
+        DiagnosticFormatter formatter,
+        bool useColor,
+        List<NativeDependency> dependencies)
+    {
+        foreach (var standardLibrary in result.GetValue(StandardLibrary) ?? [])
+        {
+            var linked = target.Triple.Contains("-windows-", StringComparison.Ordinal) &&
+                standardLibrary.Extension.Equals(".dll", StringComparison.OrdinalIgnoreCase)
+                    ? Path.ChangeExtension(standardLibrary.FullName, ".lib")
+                    : standardLibrary.FullName;
+            if (!File.Exists(linked))
+            {
+                var libraryDiagnostics = new DiagnosticBag();
+                libraryDiagnostics.Add(
+                    DiagnosticPhase.Toolchain,
+                    DiagnosticSeverity.Error,
+                    $"No library to link for '{standardLibrary.FullName}': '{linked}' was not found. Build the library with " +
+                    "--dynamic, which writes the import library beside a DLL on Windows.",
+                    new SourceLocation(1, 1));
+                Display(libraryDiagnostics.Diagnostics, sources, formatter, useColor);
+                return false;
+            }
+            dependencies.Add(new NativeDependency(linked, NativeDependencyKind.Dynamic));
+        }
+        return true;
+    }
+
     // Links the generated module into the native executable with the runtime archive and the given dependencies.
     private static int BuildExecutable(
         System.CommandLine.ParseResult result,
@@ -476,28 +507,8 @@ internal static class BuildCommand
         var runtimeKind = RuntimeKindOf(runtimePath, target)
             ?? throw new InvalidOperationException($"The runtime '{runtimePath}' was not checked before linking.");
         var dependencies = new List<NativeDependency> { new(runtimePath, runtimeKind) };
-        // A shared library is linked through its import library on Windows. The import library sits beside the DLL, which is the file
-        // that --stdlib names, since the DLL holds the metadata.
-        foreach (var standardLibrary in result.GetValue(StandardLibrary) ?? [])
-        {
-            var linked = target.Triple.Contains("-windows-", StringComparison.Ordinal) &&
-                standardLibrary.Extension.Equals(".dll", StringComparison.OrdinalIgnoreCase)
-                    ? Path.ChangeExtension(standardLibrary.FullName, ".lib")
-                    : standardLibrary.FullName;
-            if (!File.Exists(linked))
-            {
-                var libraryDiagnostics = new DiagnosticBag();
-                libraryDiagnostics.Add(
-                    DiagnosticPhase.Toolchain,
-                    DiagnosticSeverity.Error,
-                    $"No library to link for '{standardLibrary.FullName}': '{linked}' was not found. Build the library with " +
-                    "--dynamic, which writes the import library beside a DLL on Windows.",
-                    new SourceLocation(1, 1));
-                Display(libraryDiagnostics.Diagnostics, sources, formatter, useColor);
-                return ExitCodes.ToolchainFailure;
-            }
-            dependencies.Add(new NativeDependency(linked, NativeDependencyKind.Dynamic));
-        }
+        if (!TryAddStandardLibraryDependencies(result, target, sources, formatter, useColor, dependencies))
+            return ExitCodes.ToolchainFailure;
 
         var keepTemporaryFiles = result.GetValue(KeepTemps);
         var temporaryDirectory = keepTemporaryFiles

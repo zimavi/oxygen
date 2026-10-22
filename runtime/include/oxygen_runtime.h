@@ -60,12 +60,15 @@ typedef struct oxygen_runtime_type_info
     const char *name;
     uint32_t kind;
     uint32_t flags;
+    /* Not used by the runtime, and always NULL: a pointer to another type's record cannot be a constant when that record is in a shared
+     * library on Windows. The supertype names below give the relations. */
     const struct oxygen_runtime_type_info *parent;
     uint32_t message_offset;
     /* The most derived destructor for this type, or NULL. Releasing an object calls it through its runtime type. */
     void (*destructor)(void *object);
-    /* Every base class and interface of this type, nearest first, without the type itself. The compiler emits the list. */
-    const struct oxygen_runtime_type_info *const *supertypes;
+    /* The names of every base class and interface of this type, nearest first, without the type itself. The compiler emits the list.
+     * Names are module-qualified and unique, so a type is found by its name as well as by its address. */
+    const char *const *supertype_names;
     uint32_t supertype_count;
 } oxygen_runtime_type_info;
 

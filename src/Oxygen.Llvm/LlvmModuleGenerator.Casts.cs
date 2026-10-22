@@ -136,11 +136,13 @@ public sealed partial class LlvmModuleGenerator
         if (count == 0)
             return (LLVMValueRef.CreateConstNull(pointerType), 0);
 
+        // The table holds the names of the supertypes, not their records: the runtime compares names, which needs no reference to another
+        // object's record in this constant.
         var table = module.AddGlobal(LLVMTypeRef.CreateArray(pointerType, count), $"oxygen.type.supertypes.{typeName}");
         table.Linkage = LLVMLinkage.LLVMInternalLinkage;
         table.IsGlobalConstant = true;
         table.Initializer = LLVMValueRef.CreateConstArray(pointerType,
-            supertypeNames.Select(name => _runtimeTypeInfos[name]).ToArray());
+            supertypeNames.Select(name => AddRuntimeTypeNameString(module, name)).ToArray());
         return (table, count);
     }
 
@@ -149,15 +151,13 @@ public sealed partial class LlvmModuleGenerator
     private void DefineRuntimeTypeInfo(
         LLVMModuleRef module,
         string typeName,
-        string? parentType,
         uint kind,
         SemanticModel model)
     {
         var pointerType = LLVMTypeRef.CreatePointer(_context.Int8Type, 0);
         var int32 = _context.Int32Type;
-        var parent = parentType is null
-            ? LLVMValueRef.CreateConstNull(pointerType)
-            : _runtimeTypeInfos[parentType];
+        // The parent is not used: the supertype names give the relations, and a pointer to another type's record is not a constant here.
+        var parent = LLVMValueRef.CreateConstNull(pointerType);
         // Only advertise a message field when the generated class layout
         // actually contains one.  Name-based inference made an unrelated
         // class such as MyException unsafe for the native unhandled reporter.
@@ -251,6 +251,8 @@ public sealed partial class LlvmModuleGenerator
     // The name of a type as a constant string, with its terminating zero.
     private LLVMValueRef AddRuntimeTypeNameString(LLVMModuleRef module, string typeName)
     {
+        if (_runtimeTypeNameStrings.TryGetValue(typeName, out var existing))
+            return existing;
         var int8 = _context.Int8Type;
         var bytes = Encoding.UTF8.GetBytes(typeName).Append((byte)0)
             .Select(value => LLVMValueRef.CreateConstInt(int8, value, false)).ToArray();
@@ -258,6 +260,7 @@ public sealed partial class LlvmModuleGenerator
         text.Linkage = LLVMLinkage.LLVMInternalLinkage;
         text.IsGlobalConstant = true;
         text.Initializer = LLVMValueRef.CreateConstArray(int8, bytes);
+        _runtimeTypeNameStrings[typeName] = text;
         return text;
     }
 
