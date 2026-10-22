@@ -172,6 +172,64 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.Empty(loaded.Warnings);
     }
 
+    // A class that the library declares decodes to the class of its qualified name, as the program's own classes do.
+    [Fact]
+    public void ADeclaredClassDecodesToTheClassOfItsQualifiedName()
+    {
+        var declared = new Dictionary<string, SemanticType> { ["lib.Exception"] = SemanticType.Class("lib.Exception") };
+
+        Assert.Equal(SemanticType.Class("lib.Exception"), NativeModuleLoader.DecodeType("C13lib.Exception", declared));
+    }
+
+    // The tag says what kind of type the name is. A struct tag does not match a declared class, so the type stays unsupported.
+    [Fact]
+    public void ADeclaredNameOfAnotherKindIsNotDecoded()
+    {
+        var declared = new Dictionary<string, SemanticType> { ["lib.Exception"] = SemanticType.Class("lib.Exception") };
+
+        Assert.Throws<NativeModuleLoader.UnsupportedNativeTypeException>(() => NativeModuleLoader.DecodeType("S13lib.Exception", declared));
+    }
+
+    // A function whose parameter is a class that its library declares is imported, and no warning is given for it.
+    [Fact]
+    public void AFunctionTakingADeclaredClassIsImportedWithoutAWarning()
+    {
+        var library = Path.Combine(_directory, "lib.a");
+        File.WriteAllBytes(library, [1, 2, 3, 4]);
+        var at = new SourceLocation(1, 1);
+        var exception = new ClassDeclaration("Exception", null, [], [], null, [], [], null, Visibility.Public, at);
+        var generic = NativeGenericMetadata.Create(
+            new CompilationUnit("lib", Visibility.Public, [], [], at) { Classes = [exception] }, "lib.oxy");
+        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
+                [Function("trace_count", "u64", "C13lib.Exception")]) with { Generics = [generic] });
+
+        var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
+
+        var function = Assert.Single(loaded.Module.Functions);
+        Assert.Equal(SemanticType.Class("lib.Exception"), Assert.Single(function.ParameterTypes));
+        Assert.Empty(loaded.Warnings);
+    }
+
+    // A generic class is not declared in the form the loader reads, so a function that takes it is still skipped with a warning.
+    [Fact]
+    public void AFunctionTakingAGenericClassIsStillSkipped()
+    {
+        var library = Path.Combine(_directory, "lib.a");
+        File.WriteAllBytes(library, [1, 2, 3, 4]);
+        var at = new SourceLocation(1, 1);
+        var box = new ClassDeclaration("Box", null, [], [], null, [], [], null, Visibility.Public, at,
+            TypeParameters: [new TypeParameterSyntax("T", at)]);
+        var generic = NativeGenericMetadata.Create(
+            new CompilationUnit("lib", Visibility.Public, [], [], at) { Classes = [box] }, "lib.oxy");
+        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
+                [Function("show", "v", "C7lib.Box_a1_i32")]) with { Generics = [generic] });
+
+        var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
+
+        Assert.Empty(loaded.Module.Functions);
+        Assert.Contains("generic instance", Assert.Single(loaded.Warnings));
+    }
+
     private static NativeModuleMetadata Metadata(string moduleName, string triple, NativeFunctionMetadata[] functions) => new()
     {
         ModuleName = moduleName,

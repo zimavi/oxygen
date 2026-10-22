@@ -220,8 +220,14 @@ internal static class BuildCommand
         }
         var sources = resolved.Sources;
 
-        // The generic declarations of the libraries that the program imports are analyzed with the program, so it can instantiate them.
-        var libraryGenerics = ImportedGenerics(loadedModules.SelectMany(loaded => loaded.GenericUnits), resolved.Units);
+        // A library module that the program does not import is not declared to the analyzer, and its warnings are not shown: the program
+        // cannot use its functions, and its classes are not loaded for them. The generic declarations of the imported modules are analyzed
+        // with the program, so it can instantiate them.
+        var importedModules = ImportedModuleNames(loadedModules.SelectMany(loaded => loaded.GenericUnits), resolved.Units);
+        var importedLoaded = loadedModules.Where(loaded => importedModules.Contains(loaded.Module.ModuleName)).ToList();
+        DisplayNativeWarnings(importedLoaded, input.Sources, formatter, useColor);
+        var importedExternalModules = importedLoaded.Select(loaded => loaded.Module).ToList();
+        var libraryGenerics = importedLoaded.SelectMany(loaded => loaded.GenericUnits).ToList();
         var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
             {
                 DefaultMemoryMode = result.GetValue(ManualMemory) ? MemoryMode.Manual : MemoryMode.Automatic
@@ -229,7 +235,7 @@ internal static class BuildCommand
             .AnalyzeWithDiagnostics(
                 resolved.Units.Concat(libraryGenerics.Select(generic => generic.Unit)).ToList(),
                 sources.Select(source => (string?)source.Name).Concat(libraryGenerics.Select(generic => (string?)generic.SourceName)).ToList(),
-                externalModules,
+                importedExternalModules,
                 requireMain: !library);
         if (semanticResult.Diagnostics.Count > 0)
         {
@@ -659,16 +665,15 @@ internal static class BuildCommand
         return (resolved.Sources, resolved.Units, resolved.Diagnostics);
     }
 
-    // The generic units of the libraries that the program imports: each module the program imports, and each module that one of those
-    // imports in turn. A module that nothing imports is not analyzed, so an unused library cannot stop the build.
-    private static List<LoadedGenericUnit> ImportedGenerics(
+    // The library modules that the program imports: each module the program imports, and each module that one of those imports in turn,
+    // through its generic units. A module that nothing imports is not used, so an unused library cannot stop the build.
+    private static HashSet<string> ImportedModuleNames(
         IEnumerable<LoadedGenericUnit> generics,
         IReadOnlyList<CompilationUnit> programUnits)
     {
         var all = generics.ToList();
         var pending = new Queue<string>(programUnits.SelectMany(unit => unit.Imports).Select(import => import.Name));
         var visited = new HashSet<string>(StringComparer.Ordinal);
-        var included = new List<LoadedGenericUnit>();
         while (pending.Count > 0)
         {
             var module = pending.Dequeue();
@@ -676,12 +681,27 @@ internal static class BuildCommand
                 continue;
             foreach (var generic in all.Where(generic => (generic.Unit.ModuleName ?? "program") == module))
             {
-                included.Add(generic);
                 foreach (var import in generic.Unit.Imports)
                     pending.Enqueue(import.Name);
             }
         }
-        return included;
+        return visited;
+    }
+
+    private static void DisplayNativeWarnings(
+        IReadOnlyList<LoadedNativeModule> loadedModules,
+        IReadOnlyList<SourceText> sources,
+        DiagnosticFormatter formatter,
+        bool useColor)
+    {
+        foreach (var loaded in loadedModules.Where(loaded => loaded.Warnings.Count > 0))
+        {
+            var warningBag = new DiagnosticBag();
+            foreach (var warning in loaded.Warnings)
+                warningBag.Add(DiagnosticPhase.Metadata, DiagnosticSeverity.Warning, warning, new SourceLocation(1, 1),
+                    sourceName: loaded.Module.ModuleName);
+            Display(warningBag.Diagnostics, sources, formatter, useColor);
+        }
     }
 
     // Reads the native libraries of --stdlib. Each library gives its modules, whose functions are then declared for the build without
@@ -704,14 +724,6 @@ internal static class BuildCommand
                     loadedModules.Add(loaded);
                     foreach (var note in loaded.Notes)
                         Log.Information("{Note}", note);
-                    if (loaded.Warnings.Count > 0)
-                    {
-                        var warningBag = new DiagnosticBag();
-                        foreach (var warning in loaded.Warnings)
-                            warningBag.Add(DiagnosticPhase.Metadata, DiagnosticSeverity.Warning, warning, new SourceLocation(1, 1),
-                                sourceName: modulePath.FullName);
-                        Display(warningBag.Diagnostics, sources, formatter, useColor);
-                    }
                 }
             }
             catch (Exception exception) when (exception is InvalidDataException or IOException)
