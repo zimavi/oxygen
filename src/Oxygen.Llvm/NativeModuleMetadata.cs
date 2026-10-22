@@ -44,6 +44,10 @@ public sealed record NativeFunctionMetadata
     public IReadOnlyList<string> ParameterTypes { get; init; } = [];
     public string? ExternalName { get; init; }
     public string CallingConvention { get; init; } = "c";
+    // The function annotations that a program needs to check its calls: @nothrow and @noreturn. A library of an older build has neither,
+    // so its functions are treated as ones that may throw and may return.
+    public bool NoThrow { get; init; }
+    public bool NoReturn { get; init; }
 }
 
 public sealed record NativeDependencyMetadata

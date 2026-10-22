@@ -12,4 +12,6 @@ public sealed record ExternalFunctionDeclaration(
     IReadOnlyList<SemanticType> ParameterTypes,
     string NativeName,
     Visibility Visibility = Visibility.Public,
-    CInteropFunctionMetadata? CInterop = null);
+    CInteropFunctionMetadata? CInterop = null,
+    bool NoThrow = false,
+    bool NoReturn = false);

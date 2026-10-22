@@ -1,4 +1,5 @@
 using Oxygen.Compiler.Ast;
+using Oxygen.Compiler.Lexer;
 
 namespace Oxygen.Compiler.Semantic;
 
@@ -65,6 +66,17 @@ public sealed partial class SemanticAnalyzer
                         access.Location, access.MemberName.Length);
                 break;
         }
+    }
+
+    // The annotations of a function of a library, which its metadata records, as the source annotations of a function would be.
+    private static IReadOnlyList<AnnotationSyntax> ImportedAnnotations(ExternalFunctionDeclaration external)
+    {
+        var annotations = new List<AnnotationSyntax>();
+        if (external.NoThrow)
+            annotations.Add(new AnnotationSyntax("nothrow", [], new SourceLocation(1, 1)));
+        if (external.NoReturn)
+            annotations.Add(new AnnotationSyntax("noreturn", [], new SourceLocation(1, 1)));
+        return annotations;
     }
 
     // @nothrow and @noreturn apply to functions and methods. The other declarations that carry annotations are checked here; classes are

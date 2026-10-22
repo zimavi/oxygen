@@ -507,7 +507,8 @@ public sealed partial class SemanticAnalyzer
                                 new SourceLocation(1, 1))).ToArray(),
                         new BlockStatement([], new SourceLocation(1, 1)),
                         external.Visibility,
-                        new SourceLocation(1, 1));
+                        new SourceLocation(1, 1),
+                        Annotations: ImportedAnnotations(external));
                     var symbol = new FunctionSymbol(
                         external.Name,
                         external.ReturnType,

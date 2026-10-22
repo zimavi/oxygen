@@ -382,7 +382,9 @@ public sealed partial class LlvmModuleGenerator
                         .Select(parameter => OxygenNameMangler.EncodeType(parameter.Type))
                         .ToArray(),
                     ExternalName = symbol.CInterop?.ExternalName,
-                    CallingConvention = symbol.CInterop?.CallingConvention ?? "c"
+                    CallingConvention = symbol.CInterop?.CallingConvention ?? "c",
+                    NoThrow = symbol.DeclaresNoThrow,
+                    NoReturn = symbol.DeclaresNoReturn
                 }).ToArray(),
                 Types = TypeMetadataOf(model, moduleName, methodOwners),
                 Generics = generics ?? []
