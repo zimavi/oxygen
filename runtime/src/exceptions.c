@@ -326,11 +326,9 @@ static const char *display_type_name(const char *name)
     return dot == NULL ? name : dot + 1;
 }
 
-void __oxygen_runtime_unhandled_object(void *exception_handle)
+/* Writes the report of an exception that nothing handles: its class, its message and its trace. */
+static void report_unhandled(void *object)
 {
-#if !defined(_WIN32)
-    void **payload = (void **)__cxa_begin_catch(exception_handle);
-    void *object = payload == NULL ? NULL : *payload;
     const oxygen_runtime_type_info *type =
         object == NULL ? NULL : *(const oxygen_runtime_type_info *const *)object;
     fprintf(oxygen_runtime_error_stream(), "Unhandled %s", type == NULL || type->name == NULL
@@ -354,37 +352,29 @@ void __oxygen_runtime_unhandled_object(void *exception_handle)
                 trace->frames[i].line, trace->frames[i].column);
     fputc('\n', oxygen_runtime_error_stream());
     fflush(stderr);
+}
+
+void __oxygen_runtime_unhandled_object(void *exception_handle)
+{
+#if !defined(_WIN32)
+    void **payload = (void **)__cxa_begin_catch(exception_handle);
+    void *object = payload == NULL ? NULL : *payload;
+    report_unhandled(object);
     __cxa_end_catch();
-    oxygen_release_trace(object);
-    oxygen_runtime_abort();
 #else
     void *object = __oxygen_runtime_exception_object(exception_handle);
-    const oxygen_runtime_type_info *type =
-        object == NULL ? NULL : *(const oxygen_runtime_type_info *const *)object;
-    fprintf(oxygen_runtime_error_stream(), "Unhandled %s",
-        type == NULL || type->name == NULL ? "Exception" : display_type_name(type->name));
-    if (type != NULL && type->message_offset != 0 && object != NULL)
-    {
-        const oxygen_string *message =
-            (const oxygen_string *)((const unsigned char *)object + type->message_offset);
-        if (message->data != NULL)
-        {
-            fputs(": ", oxygen_runtime_error_stream());
-            fwrite(message->data, 1, (size_t)message->length, oxygen_runtime_error_stream());
-        }
-    }
-    const oxygen_runtime_trace *trace = oxygen_find_trace(object);
-    if (trace != NULL)
-        for (uint64_t i = trace->count; i-- > 0;)
-            fprintf(oxygen_runtime_error_stream(), "\n  at %s (%s:%u:%u)",
-                trace->frames[i].function_name == NULL ? "<unknown>" : trace->frames[i].function_name,
-                trace->frames[i].file_name == NULL ? "<unknown>" : trace->frames[i].file_name,
-                trace->frames[i].line, trace->frames[i].column);
-    fputc('\n', oxygen_runtime_error_stream());
-    fflush(stderr);
+    report_unhandled(object);
+#endif
     oxygen_release_trace(object);
     oxygen_runtime_abort();
-#endif
+}
+
+/* A throw in a program built without exceptions: the object is reported and the program ends, since nothing can catch it. */
+_Noreturn void __oxygen_runtime_unhandled_instance(void *object)
+{
+    report_unhandled(object);
+    oxygen_release_trace(object);
+    oxygen_runtime_abort();
 }
 
 #if defined(_WIN32)

@@ -42,6 +42,8 @@ typedef struct oxygen_context
     void *in_flight_seh_object;
     /* The texts of the runtime failures whose exception objects are alive. */
     oxygen_failure_text_record *failure_texts;
+    /* The flags that the program started with (oxygen_runtime_flag). */
+    uint64_t runtime_flags;
 } oxygen_context;
 
 /* The context of the calling thread. It is created on first use. */

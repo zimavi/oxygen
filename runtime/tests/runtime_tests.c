@@ -145,7 +145,7 @@ typedef struct worker
 
 static void run_worker_frames(worker *work)
 {
-    __oxygen_runtime_initialize();
+    __oxygen_runtime_initialize(OXYGEN_RUNTIME_EXCEPTIONS_ENABLED);
     for (uint64_t index = 0; index < work->frames; index++)
         __oxygen_runtime_trace_push("frame", "file.oxy", (uint32_t)index, 1);
     atomic_fetch_add(&threads_pushed, 1);
