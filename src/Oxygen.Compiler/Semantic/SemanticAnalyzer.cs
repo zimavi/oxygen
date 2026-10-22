@@ -500,8 +500,10 @@ public sealed partial class SemanticAnalyzer
                     var symbol = new FunctionSymbol(
                         external.Name,
                         external.ReturnType,
-                        declaration.Parameters.Select(parameter =>
-                            new ParameterSymbol(parameter.Name, ResolveType(parameter.Type), parameter)).ToArray(),
+                        // The parameter types are the metadata's own types. A syntax type cannot name every one of them (a pointer or an
+                        // array, for instance), so it is not used here.
+                        external.ParameterTypes.Select((type, index) =>
+                            new ParameterSymbol(declaration.Parameters[index].Name, type, declaration.Parameters[index])).ToArray(),
                         declaration,
                         externalModule.ModuleName,
                         external.Visibility,
@@ -604,9 +606,12 @@ public sealed partial class SemanticAnalyzer
         DeclareGlobalVariables(compilationUnits, sourceNames, functionsByName, expressionTypes, resolvedCalls);
         DeclareStaticFields(compilationUnits, sourceNames, functionsByName, expressionTypes, resolvedCalls);
         ValidateDefaultParameters(functionsByName, functionSources, functionModules, expressionTypes, resolvedCalls, diagnostics);
+        // A function of a native library was checked when the library was built, so its body is not checked again here. Its generic
+        // instances are checked where the program uses them.
+        var libraryModules = (externalModules ?? []).Select(module => module.ModuleName).ToHashSet(StringComparer.Ordinal);
         foreach (var symbol in functionsByName.Values.SelectMany(overloads => overloads).ToList())
         {
-            if (symbol.IsExternal)
+            if (symbol.IsExternal || libraryModules.Contains(functionModules[symbol].Name))
                 continue;
             var owner = _classesByName.Values.FirstOrDefault(cls =>
                 cls.Methods.Concat(cls.StaticMethods).Any(method => ReferenceEquals(method, symbol)));

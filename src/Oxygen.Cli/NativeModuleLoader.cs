@@ -6,12 +6,16 @@ using Oxygen.Llvm;
 
 namespace Oxygen.Cli;
 
-// A native module's declarations, a warning for each function of it that cannot be imported, and a note for each part of it that the
-// compiler reads but does not use yet (types and generics), which is information rather than a warning.
+// A native module's declarations, a warning for each function of it that cannot be imported, a note for each part of it that the
+// compiler reads but does not use yet (types), and the generic declarations that the program instantiates from it.
 internal sealed record LoadedNativeModule(
     ExternalModuleDeclaration Module,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    IReadOnlyList<LoadedGenericUnit> GenericUnits);
+
+// The generic unions and functions of a native module, as units the program analyzes, and the name of the source they came from.
+internal sealed record LoadedGenericUnit(CompilationUnit Unit, string SourceName);
 
 internal static class NativeModuleLoader
 {
@@ -80,13 +84,24 @@ internal static class NativeModuleLoader
                 warnings.Add($"Native function '{function.SourceName}' in '{file.FullName}' is not imported: {exception.Message}");
             }
         }
-        // Types and generics are read and checked, but nothing uses them yet, so the library says so as a note, with --verbose.
+        // Types are read and checked, but nothing uses them yet, so the library says so as a note, with --verbose.
         var notes = new List<string>();
         if (metadata.Types.Count > 0)
             notes.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' declares {metadata.Types.Count} type(s), which are not imported yet.");
-        if (metadata.Generics.Count > 0)
-            notes.Add($"Native module '{metadata.ModuleName}' in '{file.FullName}' contains the generic syntax of {metadata.Generics.Count} unit(s), which is not used yet.");
-        return new LoadedNativeModule(new ExternalModuleDeclaration(metadata.ModuleName, functions), warnings, notes);
+
+        // The generic unions and functions, and the interfaces, are imported. Generic classes and structs are not, since a class's
+        // methods need the type information that a library does not export yet, so each one is noted.
+        var genericUnits = new List<LoadedGenericUnit>();
+        foreach (var generic in metadata.Generics)
+        {
+            var decoded = SyntaxTreeCodec.Read(generic.Syntax);
+            var unit = decoded.Unit;
+            var skipped = unit.Classes.Count + unit.Structs.Count;
+            if (skipped > 0)
+                notes.Add($"Native module '{generic.ModuleName}' in '{file.FullName}' has {skipped} generic class or struct(s), which are not imported yet.");
+            genericUnits.Add(new LoadedGenericUnit(unit with { Classes = [], Structs = [] }, decoded.SourceName));
+        }
+        return new LoadedNativeModule(new ExternalModuleDeclaration(metadata.ModuleName, functions), warnings, notes, genericUnits);
     }
 
     private static ExternalFunctionDeclaration DecodeFunction(NativeFunctionMetadata function) =>

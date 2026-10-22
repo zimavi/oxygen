@@ -208,8 +208,9 @@ internal static class BuildCommand
         }
 
         // The native libraries of --stdlib are read before the sources are resolved, since the modules they provide are not loaded from source.
-        if (!TryLoadNativeModules(result, target, input.Sources, formatter, useColor, out var externalModules))
+        if (!TryLoadNativeModules(result, target, input.Sources, formatter, useColor, out var loadedModules))
             return ExitCodes.SourceError;
+        var externalModules = loadedModules.Select(loaded => loaded.Module).ToList();
         var providedModules = externalModules.Select(module => module.ModuleName).ToHashSet(StringComparer.Ordinal);
         var resolved = ResolveModules(input.Sources, !result.GetValue(NoStd), providedModules);
         if (resolved.Diagnostics.Count > 0)
@@ -222,13 +223,15 @@ internal static class BuildCommand
         }
         var sources = resolved.Sources;
 
+        // The generic declarations of the libraries that the program imports are analyzed with the program, so it can instantiate them.
+        var libraryGenerics = ImportedGenerics(loadedModules.SelectMany(loaded => loaded.GenericUnits), resolved.Units);
         var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
             {
                 DefaultMemoryMode = result.GetValue(ManualMemory) ? MemoryMode.Manual : MemoryMode.Automatic
             }
             .AnalyzeWithDiagnostics(
-                resolved.Units,
-                sources.Select(source => (string?)source.Name).ToList(),
+                resolved.Units.Concat(libraryGenerics.Select(generic => generic.Unit)).ToList(),
+                sources.Select(source => (string?)source.Name).Concat(libraryGenerics.Select(generic => (string?)generic.SourceName)).ToList(),
                 externalModules,
                 requireMain: !library);
         if (semanticResult.Diagnostics.Count > 0)
@@ -597,6 +600,31 @@ internal static class BuildCommand
         return (resolved.Sources, resolved.Units, resolved.Diagnostics);
     }
 
+    // The generic units of the libraries that the program imports: each module the program imports, and each module that one of those
+    // imports in turn. A module that nothing imports is not analyzed, so an unused library cannot stop the build.
+    private static List<LoadedGenericUnit> ImportedGenerics(
+        IEnumerable<LoadedGenericUnit> generics,
+        IReadOnlyList<CompilationUnit> programUnits)
+    {
+        var all = generics.ToList();
+        var pending = new Queue<string>(programUnits.SelectMany(unit => unit.Imports).Select(import => import.Name));
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var included = new List<LoadedGenericUnit>();
+        while (pending.Count > 0)
+        {
+            var module = pending.Dequeue();
+            if (!visited.Add(module))
+                continue;
+            foreach (var generic in all.Where(generic => (generic.Unit.ModuleName ?? "program") == module))
+            {
+                included.Add(generic);
+                foreach (var import in generic.Unit.Imports)
+                    pending.Enqueue(import.Name);
+            }
+        }
+        return included;
+    }
+
     // Reads the native libraries of --stdlib. Each library gives its modules, whose functions are then declared for the build without
     // their source. Warnings are displayed, and an unusable library is an error, which gives false.
     private static bool TryLoadNativeModules(
@@ -605,16 +633,16 @@ internal static class BuildCommand
         IReadOnlyList<SourceText> sources,
         DiagnosticFormatter formatter,
         bool useColor,
-        out List<ExternalModuleDeclaration> modules)
+        out List<LoadedNativeModule> loadedModules)
     {
-        modules = [];
+        loadedModules = [];
         foreach (var modulePath in result.GetValue(StandardLibrary) ?? [])
         {
             try
             {
                 foreach (var loaded in NativeModuleLoader.Load(modulePath, target))
                 {
-                    modules.Add(loaded.Module);
+                    loadedModules.Add(loaded);
                     foreach (var note in loaded.Notes)
                         Log.Information("{Note}", note);
                     if (loaded.Warnings.Count > 0)
