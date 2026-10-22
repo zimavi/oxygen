@@ -254,6 +254,32 @@ public sealed class ParserTests
         Assert.Equal("print", call.Name);
     }
 
+    // `p->x` is `(*p).x`: the parser builds the same tree for both, so the analyzer and the backend treat them alike.
+    [Fact]
+    public void ParsesAnArrowAsAMemberAccessOfTheDereferencedPointer()
+    {
+        var unit = Parse("struct Point { i32 x; } i32 main() { Point* p = null; return p->x; }");
+
+        var member = Assert.IsType<MemberAccessExpression>(
+            Assert.IsType<ReturnStatement>(unit.Functions[0].Body.Statements[1]).Value);
+        var dereference = Assert.IsType<UnaryExpression>(member.Target);
+        Assert.Equal(TokenKind.Star, dereference.Operator);
+        Assert.IsType<IdentifierExpression>(dereference.Operand);
+        Assert.Equal("x", member.MemberName);
+    }
+
+    [Fact]
+    public void ParsesAnArrowCallAsACallOnTheDereferencedReceiver()
+    {
+        var unit = Parse("class Counter { i32 get() { return 0; } } i32 main() { Counter* p = null; return p->get(); }");
+
+        var call = Assert.IsType<CallExpression>(
+            Assert.IsType<ReturnStatement>(unit.Functions[0].Body.Statements[1]).Value);
+        Assert.Equal("get", call.Name);
+        var receiver = Assert.IsType<UnaryExpression>(call.Receiver);
+        Assert.Equal(TokenKind.Star, receiver.Operator);
+    }
+
     [Fact]
     public void ParsesThisMemberAccess()
     {

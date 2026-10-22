@@ -24,6 +24,21 @@ public sealed class LexerTests
             kinds);
     }
 
+    // `->` is one token, and `--` followed by `>` is still a decrement and a comparison.
+    [Fact]
+    public void TokenizesArrowAsOneTokenAndKeepsDecrementBeforeGreaterThan()
+    {
+        var kinds = _lexer.Tokenize("a->b a-->b")
+            .Select(token => token.Kind)
+            .ToArray();
+
+        Assert.Equal(
+            [TokenKind.Identifier, TokenKind.Arrow, TokenKind.Identifier,
+                TokenKind.Identifier, TokenKind.MinusMinus, TokenKind.GreaterThan, TokenKind.Identifier,
+                TokenKind.EndOfFile],
+            kinds);
+    }
+
     [Fact]
     public void TokenizesAsKeyword()
     {

@@ -78,6 +78,7 @@ public enum TokenKind
     Colon,
     QuestionMark,
     Dot,
+    Arrow,
     Tilde,
     Semicolon,
     Plus,

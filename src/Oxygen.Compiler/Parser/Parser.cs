@@ -1216,13 +1216,14 @@ public sealed partial class Parser
                     continue;
                 }
                 // Any other `expression.name(...)` calls the method on the value of expression, such as `make().name()`.
-                if (Match(TokenKind.OpenParenthesis))
-                {
-                    var arguments = ParseArguments();
-                    expression = new CallExpression(member.Lexeme, arguments, member.Location, null, expression);
-                    continue;
-                }
-                expression = new MemberAccessExpression(expression, member.Lexeme, expression.Location);
+                expression = ParseMemberSuffix(expression, member);
+            }
+            else if (Match(TokenKind.Arrow))
+            {
+                var member = ConsumeIdentifierLike("Expected an identifier after '->'.");
+                // `pointer->name` is `(*pointer).name`. The parser builds that same tree, so both forms are analyzed and lowered alike.
+                var pointee = new UnaryExpression(TokenKind.Star, expression, expression.Location);
+                expression = ParseMemberSuffix(pointee, member);
             }
             else if (Match(TokenKind.PlusPlus))
             {
@@ -1235,6 +1236,17 @@ public sealed partial class Parser
             else break;
         }
         return expression;
+    }
+
+    // The part of a member access after its receiver: `name(...)` calls a method of the receiver's value, and `name` reads the member.
+    private Expression ParseMemberSuffix(Expression receiver, Token member)
+    {
+        if (Match(TokenKind.OpenParenthesis))
+        {
+            var arguments = ParseArguments();
+            return new CallExpression(member.Lexeme, arguments, member.Location, null, receiver);
+        }
+        return new MemberAccessExpression(receiver, member.Lexeme, receiver.Location);
     }
 
     private Expression ParsePrimaryExpression()

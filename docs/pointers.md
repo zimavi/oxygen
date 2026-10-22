@@ -48,6 +48,40 @@ Pointer indexing has no bounds metadata or runtime bounds check. The pointed-to
 type must be typed rather than `void`; validity and lifetime remain the
 programmer's responsibility.
 
+## Member access through a pointer
+
+`p->name` means `(*p).name`, for a pointer `p` to a class or a struct. The arrow is
+written as `-` followed by `>`, with no space between them. It works wherever the
+dotted form works:
+
+```oxygen
+struct Point {
+    i32 x;
+}
+
+i32 main() {
+    Point point = {0};
+    Point* p = &point;
+    p->x = 5;
+    p->x += 2;
+    return p->x;
+}
+```
+
+- A field is read and written: `p->x`, `p->x = v`, `p->x += v`, `p->x++`.
+- A method is called on the pointed-to object: `p->method(args)`.
+- A property is read and assigned through its accessors, as with `.`.
+- Arrows chain through pointer fields: `p->inner->x` reads `inner` as a pointer, then
+  `x` through it.
+- The dotted form does not dereference a pointer. `p.name` on a pointer is an error,
+  and `p->name` is the only way to reach the member.
+- `->` on a value that is not a pointer is an error, so `value->name` is rejected for
+  an integer, a struct value or a class value.
+- A null pointer is not checked. Dereferencing it is the programmer's responsibility,
+  as for any other pointer, and `p->name` and `(*p).name` both dereference it.
+- A pointer to a class reference that is null reaches the member access of that class,
+  which throws `NullReferenceException` as a null class reference does.
+
 Integers support prefix and postfix `++` and `--`, compound arithmetic and
 bitwise assignment, and the binary bitwise (`&`, `|`, `^`) and shift (`<<`,
 `>>`) operators. Increment and decrement require mutable addressable values.

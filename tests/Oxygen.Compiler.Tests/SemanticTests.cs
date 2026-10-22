@@ -3941,6 +3941,38 @@ public sealed class SemanticTests
         Assert.Contains("must return a class or an interface", exception.Message);
     }
 
+    // The dotted form does not dereference a pointer, so it is rejected and names the struct or class value it needs.
+    [Fact]
+    public void DotDoesNotDereferenceAPointer()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; } i32 main() { Point point = {0}; Point* p = &point; return p.x; }"));
+
+        Assert.Contains("Member access requires a struct or class value", exception.Message);
+    }
+
+    // `->` needs a pointer. It is `(*value).x`, so the error is the one that the dereference gives.
+    [Fact]
+    public void ArrowNeedsAPointerOperand()
+    {
+        var exception = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; } i32 main() { Point point = {0}; return point->x; }"));
+
+        Assert.Contains("The '*' operator requires a pointer operand", exception.Message);
+    }
+
+    // The arrow and the explicit dereference are the same tree, so a program that is wrong in one is wrong in the other, the same way.
+    [Fact]
+    public void ArrowAndExplicitDereferenceReportTheSameError()
+    {
+        var arrow = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; } i32 main() { Point point = {0}; return point->x; }")).Message;
+        var explicitForm = Assert.Throws<SemanticException>(() => Analyze(
+            "struct Point { i32 x; } i32 main() { Point point = {0}; return (*point).x; }")).Message;
+
+        Assert.Equal(explicitForm, arrow);
+    }
+
     private SemanticModel AnalyzeModules(params string[] sources)
     {
         var units = sources.Select(source => new Parser(_tokenizer.Tokenize(source), Log.Logger).Parse()).ToList();
