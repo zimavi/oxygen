@@ -13,15 +13,29 @@ public sealed partial class LlvmModuleGenerator
 
     // Each module-level variable is an internal LLVM global named by its module and name. The module is part of the name, so two
     // modules can declare variables with the same name.
-    private void DeclareGlobalVariables(LLVMModuleRef module, SemanticModel model)
+    // A static field is named by its class, which is its variable's module name, so its global is `module.Class.field`. A static field of a
+    // class that a library defines is declared here; a library exports its own static fields, so one storage serves every program that uses
+    // them. An instance of a generic class has its own static fields, as its code does.
+    private void DeclareGlobalVariables(LLVMModuleRef module, SemanticModel model, string moduleName, bool library)
     {
         _globalVariables.Clear();
         foreach (var variable in model.Globals)
         {
             var type = ToLlvmType(variable.Type, model);
             var global = module.AddGlobal(type, $"{variable.ModuleName}.{variable.Name}");
-            global.Linkage = LLVMLinkage.LLVMInternalLinkage;
             global.IsGlobalConstant = variable.IsConst;
+            var owningClass = model.Classes.GetValueOrDefault(variable.ModuleName);
+            if (owningClass is not null && DefinedByLibrary(owningClass.ModuleName, IsInstantiationName(owningClass.Name), model))
+            {
+                // Declared only: the library defines the storage, and on Windows a program imports it.
+                global.Linkage = LLVMLinkage.LLVMExternalLinkage;
+                if (_target.UsesSeh)
+                    global.DLLStorageClass = LLVMDLLStorageClass.LLVMDLLImportStorageClass;
+                _globalVariables[variable] = global;
+                continue;
+            }
+            var exported = owningClass is not null && library && owningClass.ModuleName == moduleName && !IsInstantiationName(owningClass.Name);
+            global.Linkage = exported ? LLVMLinkage.LLVMExternalLinkage : LLVMLinkage.LLVMInternalLinkage;
             global.Initializer = GlobalInitializer(type, variable);
             _globalVariables[variable] = global;
         }

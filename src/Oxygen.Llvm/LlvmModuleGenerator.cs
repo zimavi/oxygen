@@ -187,7 +187,7 @@ public sealed partial class LlvmModuleGenerator
                 // share one declaration.
                 llvmFunctions[symbol] = DeclareNativeFunction(module, name, functionType);
             }
-            DeclareGlobalVariables(module, model);
+            DeclareGlobalVariables(module, model, moduleName, library);
             foreach (var iface in concreteInterfaces)
             {
                 var slots = GetInterfaceSlots(iface);

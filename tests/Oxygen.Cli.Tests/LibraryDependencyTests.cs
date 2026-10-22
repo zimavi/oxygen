@@ -55,6 +55,36 @@ public sealed class LibraryDependencyTests : IDisposable
         Assert.Equal(9, run.ExitCode);
     }
 
+    // A static field of a library's class has one storage, which the library owns: the program's call changes the value that the program reads.
+    [SkippableFact]
+    public void AProgramAndAnotherLibraryShareTheStaticFieldsOfAClass()
+    {
+        const string counterLibrary = """
+            module mylib;
+
+            public class Counter {
+                public static i32 count = 3;
+
+                public static i32 next(i32 step) {
+                    count = count + step;
+                    return count;
+                }
+            }
+            """;
+
+        var run = BuildAndRunProgram(
+            """
+            import mylib;
+
+            i32 main() {
+                Counter.next(4);
+                return Counter.count;
+            }
+            """, counterLibrary);
+
+        Assert.Equal(7, run.ExitCode);
+    }
+
     [SkippableFact]
     public void AProgramCatchesAnExceptionOfAnotherLibraryAsItsOwnClass()
     {
@@ -78,7 +108,7 @@ public sealed class LibraryDependencyTests : IDisposable
     // Builds the standard library, then the library that uses it, then the program that uses both, and runs the program. The libraries are
     // built beside the program, and the runtime is copied there too. The program finds them: on Windows through the DLL search, and on Linux
     // through the library path, given to the child process only.
-    private (int ExitCode, string Output, string Error) BuildAndRunProgram(string source)
+    private (int ExitCode, string Output, string Error) BuildAndRunProgram(string source, string librarySource = AppLibrary)
     {
         NativeProgram.RequireLibraryToolchain();
         var runtime = Path.Combine(TargetDirectory, Windows ? "oxygenrt.lib" : "liboxygenrt.so");
@@ -88,7 +118,7 @@ public sealed class LibraryDependencyTests : IDisposable
 
         var standardLibrary = BuildStandardLibrary();
         var appSource = Path.Combine(_directory, "mylib.oxy");
-        File.WriteAllText(appSource, AppLibrary);
+        File.WriteAllText(appSource, librarySource);
         var appLibrary = Path.Combine(_directory, "mylib");
         var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
             ["build", appSource, "--library", "--dynamic", "--stdlib", standardLibrary, "-r", runtime, "-o", appLibrary]);
