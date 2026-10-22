@@ -91,9 +91,14 @@ else
     if [ "$SUDO" = ask ]; then
         SUDO=no
         if [ "$UPDATE" = 1 ]; then
-            # The links the install made are refreshed, so an update does not ask again.
+            # The links the install made are refreshed, so an update does not ask again. Without a terminal, sudo cannot ask for its password,
+            # so the links are left as they are and the update says so.
             if system_links_point_here; then
-                SUDO=yes
+                if [ -t 0 ]; then
+                    SUDO=yes
+                else
+                    printf '%s\n' "The system links point at this prefix, but there is no terminal to refresh them with sudo. Run the update in a terminal, or pass --sudo, to refresh them."
+                fi
             fi
         elif [ -t 0 ]; then
             printf '%s' "Link the libraries into /usr/local/lib with sudo, so programs find them without LD_LIBRARY_PATH? [y/N] "
