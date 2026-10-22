@@ -123,7 +123,7 @@ individually.
 
 The `docs/` directory contains language notes for arrays, classes, control flow,
 diagnostics, enums, exceptions, iterators, memory, modules, pointers, strings,
-structs, unions, native-module metadata, and C interop annotations.
+structs, unions, native-module metadata, C interop annotations, and the installed toolchain layout.
 
 Additional runtime details are documented in `runtime/README.md`.
 

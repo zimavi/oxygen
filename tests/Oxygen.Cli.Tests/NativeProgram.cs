@@ -109,10 +109,12 @@ internal static class NativeProgram
     }
 
     // The environment variables in `environment` are set for the child process only, so tests that run in parallel do not see them.
+    // The variables in `unset` are removed from the child's environment.
     public static (int ExitCode, string Output, string Error) RunProcess(
         string fileName,
         IEnumerable<string> arguments,
-        IReadOnlyDictionary<string, string>? environment = null)
+        IReadOnlyDictionary<string, string>? environment = null,
+        IEnumerable<string>? unset = null)
     {
         var startInfo = new ProcessStartInfo(fileName)
         {
@@ -127,6 +129,8 @@ internal static class NativeProgram
             startInfo.ArgumentList.Add(argument);
         // The compiler looks for the standard library under OXYGEN_PATH when the source is outside the repository.
         startInfo.Environment["OXYGEN_PATH"] = RepositoryRoot;
+        foreach (var name in unset ?? [])
+            startInfo.Environment.Remove(name);
         foreach (var (name, value) in environment ?? new Dictionary<string, string>())
             startInfo.Environment[name] = value;
 
