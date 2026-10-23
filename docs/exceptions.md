@@ -132,14 +132,36 @@ is both may only abort. A C function declared with `@extern` can be `@noreturn` 
 that ends the program. The standard library's `std.process.abort()` is one: it ends the program with exit
 code 101, and the message, if any, is written by the caller first.
 
+## The `@throws` annotation
+
+`@throws` on a function or method promises that it may throw. It is the opposite of `@nothrow`, and the two cannot
+be on the same function. The analysis checks the promise: the body must contain something that may throw, such as a
+`throw`, a call of a function that may throw, a dispatched call, or a runtime check. A `@throws` function with
+nothing that may throw is an error, so the annotation is not taken on trust.
+
+A `@throws` function is never inferred `@nothrow`, and a `@nothrow` function may not call it. Its caller catches its
+exceptions as it does those of any function that may throw. Constructors and destructors take no `@throws`.
+
 ## Without exceptions
 
-`--no-exceptions` is rejected with an error, since the feature is work in progress. The compiler
-code for it exists, and it is planned as follows: a throw prints the exception as an uncaught one
-and ends the program with exit code 101, without unwinding; a `try` is its body, with its `finally`
-clause running on every way out; a `catch` clause is type-checked, is not emitted, and gets a
-warning that it never runs; and a runtime failure ends the program with its message. The runtime is
-told the mode at startup, through the flags of `__oxygen_runtime_initialize`.
+`--no-exceptions` builds a program without exception support. Nothing in it unwinds, so the rules are:
+
+- A `throw` in the program's own code reports the exception as an uncaught one, and ends the program with
+  exit code 101. The report says that no stack trace was kept, since the program has no trace stack.
+- A `catch` clause is type-checked, and is not emitted. The analysis warns that it never runs.
+- A `try` statement is its body. Its `finally` clause runs when the body completes normally, returns,
+  breaks or continues.
+- A runtime failure, such as an index out of range or a division by zero, ends the program with its
+  message and exit code 101, instead of raising an exception.
+- Code that was built with exceptions and linked into the program, such as the standard library or a
+  library, may still throw. Such a throw is not caught by the program's `catch` clauses, which never run.
+  It reaches the program's entry point, which reports it and ends the program with exit code 101. Nothing
+  unwinds through the program's own functions on the way, so their `finally` clauses and the destructors
+  of their locals do not run.
+
+The runtime is told the mode at startup, through the flags of `__oxygen_runtime_initialize`, and reports
+the missing trace as described above. The entry point always keeps its handler, so a throw that comes out
+of linked code is reported in every mode.
 
 ## The `@nothrow` annotation
 
@@ -178,10 +200,39 @@ is lowered as a plain block with its `finally` clause. It also has no trace fram
 that is reported can have it on its trace. The one exception is a C function that calls back into an
 Oxygen function that throws: that frame is then missing from the trace, as the C frames are.
 
-Limits of the check, which is conservative: a `@nothrow` annotation is not recorded in library
-metadata, so a function of a library is treated as one that may throw, even if it is marked
-`@nothrow` in its own module. A temporary object whose class has a destructor is not checked: only the
-locals of such a class are.
+The compiler also infers `@nothrow` for a body that is not declared so, when it cannot throw. The
+inference is for a function, method, constructor or destructor of a class that is not generic. A body
+is inferred `@nothrow` when it has none of these, and calls only functions that are `@nothrow`, declared
+or inferred:
+
+- a `throw`, a `delete`, a `for`-in loop, a property access, or a call the compiler cannot check (a call
+  through a function pointer, a union case, a construction whose class has a constructor that may throw);
+- a runtime check: an index, an integer division, remainder or shift (a floating-point operation is not
+  checked), a pointer dereference, a member access or a method call on a class, interface or pointer
+  value, a cast other than between numeric types, or an `is` test;
+- a local of a class whose destructor may throw, or whose subclass's destructor may throw;
+- a temporary of such a class: an object that is not bound to a local, which is created by `new`, or returned by a call.
+  Its destructor runs at the end of its statement, so the rule applies as if the temporary were destroyed. The compiler
+  does not destroy temporaries yet (see the limits below).
+
+A dispatched call (a virtual method, an override, or an interface method) is nothrow only when its method
+is declared `@nothrow`, since an override may throw. A recursive cycle is never inferred, since none of
+its bodies is proven first. A constructor with a `this(...)` or `base(...)` initializer is not inferred,
+and a synthesized constructor is nothrow only when its field initializers are literals. Property accessors,
+lambdas, and the functions and methods of generic classes and generic functions are not inferred.
+
+An inferred body is emitted as a declared one: plain calls, no unwinding, and no trace frame. A declared
+`@nothrow` body keeps its own rules, which allow runtime checks, since they stop the program there. The
+inferred flag is recorded in library metadata, so a program that imports the library treats the function
+as nothrow, as it does a declared one.
+
+The standard library marks the functions that cannot throw as `@nothrow`: the functions of `std.math`, and `std.io`'s `print_char` and `println_char`. The compiler checks each of them like any other `@nothrow` function. The other library functions are not annotated yet, so a `@nothrow` function cannot call them. In particular, `print` and `println` cannot be called from one, since they are generic and dispatch to `Printable.write`, which may throw.
+
+Limits of the check, which is conservative: library metadata records `@nothrow` and `@noreturn` per function,
+but a library built by an older compiler lacks the flags, so its functions are treated as ones that may
+throw and may return. A temporary object is never destroyed: its destructor does not run, so the object
+leaks. That is a separate gap, which the ownership of call results will close. Until then, the rules for
+temporaries are those of a destroyed temporary, so the check does not depend on it.
 
 This is distinct from compiler diagnostics, which are reported before native
 code is generated. Compiler diagnostics are structured reports for invalid

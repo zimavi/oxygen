@@ -63,7 +63,7 @@ internal static class BuildCommand
     };
     public static readonly Option<bool> NoExceptions = new("--no-exceptions")
     {
-        Description = "Build without exception support. Not supported yet: the feature is work in progress, so the build is rejected"
+        Description = "Build without exception support: a throw ends the program with exit code 101, and a catch clause never runs (docs/exceptions.md)"
     };
     public static readonly Option<string> Optimization = new("--optimization", "-O")
     {
@@ -128,8 +128,6 @@ internal static class BuildCommand
         };
         command.Validators.Add(result =>
         {
-            if (result.GetValue(NoExceptions))
-                result.AddError("--no-exceptions is not supported yet: the feature is work in progress. Build without the flag.");
             if (result.GetResult(Unoptimized) is not null && result.GetResult(Optimization) is not null)
                 result.AddError("--unoptimized and --optimization cannot be used together. Use one of them.");
         });

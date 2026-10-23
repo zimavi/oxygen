@@ -350,6 +350,10 @@ static void report_unhandled(void *object)
                 trace->frames[i].function_name == NULL ? "<unknown>" : trace->frames[i].function_name,
                 trace->frames[i].file_name == NULL ? "<unknown>" : trace->frames[i].file_name,
                 trace->frames[i].line, trace->frames[i].column);
+    /* A program built without exceptions keeps no trace frames of its own, so say why the report has none. */
+    if ((trace == NULL || trace->count == 0)
+        && (oxygen_context_current()->runtime_flags & OXYGEN_RUNTIME_EXCEPTIONS_ENABLED) == 0)
+        fputs("\n  (no stack trace: the program was built with --no-exceptions)", oxygen_runtime_error_stream());
     fputc('\n', oxygen_runtime_error_stream());
     fflush(stderr);
 }

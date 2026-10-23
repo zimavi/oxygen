@@ -78,6 +78,9 @@ public sealed record ClassSymbol(
     // belongs to the class that declares the property.
     public bool DeclaresField(string name) =>
         Declaration.Fields.Any(field => field.Name == name) || DeclaredProperties.Any(property => property.Name == name);
+
+    // The fields that the class declares itself, not the ones it inherits from its base class.
+    public IEnumerable<ClassFieldSymbol> OwnFields => Fields.Where(item => DeclaresField(item.Name));
 }
 public sealed record InterfaceSymbol(
     string Name,
@@ -162,11 +165,11 @@ public sealed record FunctionSymbol(
     // A function declared @nothrow promises never to throw (docs/exceptions.md).
     public bool DeclaresNoThrow => Declaration.DeclaredAnnotations.Any(annotation => annotation.Name == "nothrow");
 
-    // Whether a call to the function cannot throw: a @nothrow function, or a C function (@extern), since C does not throw Oxygen exceptions.
-    public bool NeverThrows => DeclaresNoThrow || CInterop?.ExternalName is not null;
-
     // A function declared @noreturn never returns to its caller: every path ends in a throw, a call to a @noreturn function, or a loop that never ends.
     public bool DeclaresNoReturn => Declaration.DeclaredAnnotations.Any(annotation => annotation.Name == "noreturn");
+
+    // A function declared @throws promises that it may throw. It is never inferred @nothrow, and the analysis checks the promise.
+    public bool DeclaresThrows => Declaration.DeclaredAnnotations.Any(annotation => annotation.Name == "throws");
     public IReadOnlyList<string> DeclaredGenericParameters => GenericParameters ?? [];
     public bool IsGeneric => DeclaredGenericParameters.Count != 0;
     public bool IsSpecialized => SpecializationArguments is not null;
@@ -251,8 +254,10 @@ public sealed class SemanticModel
         IReadOnlySet<CatchClause>? freedCatchBindings = null,
         IReadOnlyDictionary<Expression, Expression>? indirectCallees = null,
         IReadOnlyDictionary<Expression, FunctionSymbol>? functionReferences = null,
-        IReadOnlyDictionary<LambdaExpression, FunctionSymbol>? lambdaFunctions = null)
+        IReadOnlyDictionary<LambdaExpression, FunctionSymbol>? lambdaFunctions = null,
+        IReadOnlySet<SyntaxNode>? inferredNoThrow = null)
     {
+        InferredNoThrow = inferredNoThrow ?? new HashSet<SyntaxNode>(ReferenceEqualityComparer.Instance);
         FreedCatchBindings = freedCatchBindings ?? new HashSet<CatchClause>(ReferenceEqualityComparer.Instance);
         IndirectCallees = indirectCallees ?? new Dictionary<Expression, Expression>(ReferenceEqualityComparer.Instance);
         FunctionReferences = functionReferences ?? new Dictionary<Expression, FunctionSymbol>(ReferenceEqualityComparer.Instance);
@@ -315,6 +320,11 @@ public sealed class SemanticModel
 
     // The function that each lambda is compiled to.
     public IReadOnlyDictionary<LambdaExpression, FunctionSymbol> LambdaFunctions { get; }
+
+    // The declarations of the bodies that were inferred @nothrow: they cannot throw, though they are not declared @nothrow. A declared body
+    // is checked with its own annotation (FunctionSymbol.DeclaresNoThrow). Keyed by reference: FunctionDeclaration or ConstructorDeclaration
+    // or DestructorDeclaration.
+    public IReadOnlySet<SyntaxNode> InferredNoThrow { get; }
 
     public IReadOnlyDictionary<SyntaxNode, int[]> ArgumentOrders { get; }
 

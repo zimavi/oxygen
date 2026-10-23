@@ -810,8 +810,9 @@ public sealed class LlvmTests
     [Fact]
     public void EmitsNestedDestructorsInReverseScopeOrder()
     {
+        // The array index keeps main from being inferred @nothrow, so the locals keep their unwind cleanup.
         var model = Analyze(
-            "class Box { ~Box() { } } i32 main() { Box outer = Box(); { Box inner = Box(); } return 0; }");
+            "class Box { ~Box() { } } i32 main() { Box outer = Box(); { Box inner = Box(); } i32[1] values = {0}; return values[0]; }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();

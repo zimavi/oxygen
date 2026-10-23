@@ -134,6 +134,10 @@ public sealed partial class SemanticAnalyzer
                     if (annotation.Arguments.Count != 0)
                         throw Error("Annotation '@noreturn' does not accept arguments", annotation.Location);
                     break;
+                case "throws":
+                    if (annotation.Arguments.Count != 0)
+                        throw Error("Annotation '@throws' does not accept arguments", annotation.Location);
+                    break;
                 case "nothrow":
                     if (annotation.Arguments.Count != 0)
                         throw Error("Annotation '@nothrow' does not accept arguments", annotation.Location);

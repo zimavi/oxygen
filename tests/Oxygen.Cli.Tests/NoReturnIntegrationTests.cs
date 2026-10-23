@@ -97,22 +97,6 @@ public sealed class NoReturnIntegrationTests : IDisposable
         Assert.Equal(2, run.ExitCode);
     }
 
-    // The flag is rejected with a message, and nothing is built.
-    [SkippableFact]
-    public void TheNoExceptionsFlagIsRejectedAsWorkInProgress()
-    {
-        NativeProgram.RequireNativeToolchain();
-        var sourcePath = Path.Combine(_directory, "main.oxy");
-        File.WriteAllText(sourcePath, "i32 main() { return 0; }");
-
-        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
-            ["build", sourcePath, "--no-exceptions", "-r", NativeProgram.RuntimeLibrary, "-o", Path.Combine(_directory, "main.exe")]);
-
-        Assert.NotEqual(0, build.ExitCode);
-        Assert.Contains("--no-exceptions is not supported yet", build.Error);
-        Assert.False(File.Exists(Path.Combine(_directory, "main.exe")));
-    }
-
     // Builds the source as main.oxy, then runs the executable.
     private (int ExitCode, string Output, string Error) BuildAndRun(string source)
     {

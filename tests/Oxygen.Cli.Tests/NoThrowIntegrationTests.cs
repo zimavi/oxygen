@@ -2,7 +2,7 @@ using Xunit;
 
 namespace Oxygen.Cli.Tests;
 
-// The behaviour of @nothrow in a native program (docs/exceptions.md). The --no-exceptions flag is rejected until its feature is finished.
+// The behaviour of @nothrow in a native program (docs/exceptions.md).
 public sealed class NoThrowIntegrationTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "oxygenc-tests", Guid.NewGuid().ToString("N"));
@@ -71,20 +71,102 @@ public sealed class NoThrowIntegrationTests : IDisposable
         Assert.Equal(9, run.ExitCode);
     }
 
-    // The flag is rejected with a message, and nothing is built.
+    // The standard library's print_char and math functions are @nothrow, so a @nothrow function may call them.
     [SkippableFact]
-    public void TheNoExceptionsFlagIsRejectedAsWorkInProgress()
+    public void ANothrowFunctionMayUseTheNothrowStandardLibraryFunctions()
     {
         NativeProgram.RequireNativeToolchain();
-        var sourcePath = Path.Combine(_directory, "main.oxy");
-        File.WriteAllText(sourcePath, "i32 main() { return 0; }");
 
-        var build = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
-            ["build", sourcePath, "--no-exceptions", "-r", NativeProgram.RuntimeLibrary, "-o", Path.Combine(_directory, "main.exe")]);
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.math;
 
-        Assert.NotEqual(0, build.ExitCode);
-        Assert.Contains("--no-exceptions is not supported yet", build.Error);
-        Assert.False(File.Exists(Path.Combine(_directory, "main.exe")));
+            @nothrow
+            f64 scaled(f64 value) {
+                io.println_char('x');
+                return math.max(math.abs(value), 1.5);
+            }
+
+            i32 main() {
+                f64 result = scaled(-2.0);
+                if (result == 2.0) {
+                    return 3;
+                }
+                return 4;
+            }
+            """);
+
+        Assert.Equal(3, run.ExitCode);
+        Assert.Equal("x\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    // A lambda written in a @nothrow function keeps its own unwinding: its catch runs when the lambda is called later.
+    [SkippableFact]
+    public void ALambdaWrittenInANothrowFunctionKeepsItsOwnCatch()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.exception;
+
+            i32 helper() {
+                throw new Exception("x");
+            }
+
+            fn i32 saved();
+
+            @nothrow
+            void store() {
+                saved = fn i32 () {
+                    try {
+                        return helper();
+                    } catch (Exception error) {
+                        return 5;
+                    }
+                };
+            }
+
+            i32 main() {
+                store();
+                return saved();
+            }
+            """);
+
+        Assert.Equal(5, run.ExitCode);
+    }
+
+    // A runtime failure is still caught when the last function of the program is @nothrow, since the failure's helper is not a @nothrow body.
+    [SkippableFact]
+    public void AFailureIsCaughtWhenANothrowFunctionIsTheLastOne()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.exception;
+
+            i32 pick(i32 index) {
+                i32[3] values = {1, 2, 3};
+                return values[index];
+            }
+
+            i32 main() {
+                try {
+                    return pick(7);
+                } catch (IndexOutOfRangeException error) {
+                    return 9;
+                }
+            }
+
+            @nothrow
+            i32 last() {
+                return 1;
+            }
+            """);
+
+        Assert.Equal(9, run.ExitCode);
     }
 
     // Builds the source as main.oxy, then runs the executable.

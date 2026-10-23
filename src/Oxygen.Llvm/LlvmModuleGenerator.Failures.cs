@@ -80,6 +80,8 @@ public sealed partial class LlvmModuleGenerator
     // message in the runtime, then throws an instance of the failure's class that holds it.
     private void EmitFailureHelpers(SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
+        // A helper throws, so it is never a @nothrow body, whatever function was emitted last.
+        _noThrowFunction = false;
         var stringType = ToLlvmType(SemanticType.String, model);
         var messageType = LLVMTypeRef.CreateFunction(_context.VoidType,
             [_context.Int32Type, _context.Int64Type, _context.Int64Type, LLVMTypeRef.CreatePointer(stringType, 0)], false);

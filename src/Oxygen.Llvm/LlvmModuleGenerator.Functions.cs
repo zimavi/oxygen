@@ -13,7 +13,7 @@ public sealed partial class LlvmModuleGenerator
             ClassSymbol cls, ConstructorSymbol ctor, SemanticModel model,
             IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        _noThrowFunction = ctor.DeclaresNoThrow;
+        _noThrowFunction = IsNoThrowConstructor(ctor, model);
         if (UnwindsHere)
             function.PersonalityFn = _personality;
         var entry = function.AppendBasicBlock("entry");
@@ -47,7 +47,7 @@ public sealed partial class LlvmModuleGenerator
             EmitConstructorChain(context, builder, cls, ctor.Declaration, values, storage, model, llvmFunctions);
         if (!delegatesToThis)
         {
-            var ownFields = cls.Fields.Where(field => cls.DeclaresField(field.Name)).ToArray();
+            var ownFields = cls.OwnFields.ToArray();
             if (ctor.IsSynthesized)
             {
                 foreach (var field in ownFields)
@@ -161,16 +161,24 @@ public sealed partial class LlvmModuleGenerator
         return LLVMValueRef.CreateConstInt(ToLlvmType(type, model), 0, false);
     }
 
+    // Whether a function's body is @nothrow: declared so, or inferred. Such a body is emitted with plain calls and no unwinding.
+    private static bool IsNoThrowFunction(FunctionSymbol symbol, SemanticModel model) =>
+        symbol.DeclaresNoThrow || model.InferredNoThrow.Contains(symbol.Declaration);
+
+    private static bool IsNoThrowConstructor(ConstructorSymbol constructor, SemanticModel model) =>
+        constructor.DeclaresNoThrow || model.InferredNoThrow.Contains(constructor.Declaration);
+
     private void EmitDestructor(LLVMContextRef context, LLVMBuilderRef builder, LLVMValueRef function,
             ClassSymbol cls, SemanticModel model, IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
-        if (_usesExceptions)
+        // The flag comes first: a nothrow destructor has no unwinding and no trace frame, as a nothrow function has none.
+        _noThrowFunction = model.InferredNoThrow.Contains(cls.Destructor!);
+        if (UnwindsHere)
             function.PersonalityFn = _personality;
         var entry = function.AppendBasicBlock("entry");
         builder.PositionAtEnd(entry);
         EmitTracePush(builder, cls.Name, cls.ModuleName, cls.Destructor!.Location);
         _currentFunction = function;
-        _noThrowFunction = false;
         var values = new Dictionary<string, LLVMValueRef> { ["this"] = function.GetParam(0) };
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         InitializeClassFieldStorage(builder, values, storage, cls, model);
@@ -182,6 +190,8 @@ public sealed partial class LlvmModuleGenerator
         EmitVoidBody(context, builder, function, cls.Destructor!.Body, values, storage, model, llvmFunctions);
     }
 
+    // The native main calls the Oxygen main with a handler in every mode. A throw from linked code that was built with exceptions (a
+    // library) can reach it even in a program built without exceptions, and then the program is reported and ends (docs/exceptions.md).
     private void EmitNativeMain(
         LLVMContextRef context,
         LLVMBuilderRef builder,
@@ -194,8 +204,7 @@ public sealed partial class LlvmModuleGenerator
         var argvType = LLVMTypeRef.CreatePointer(LLVMTypeRef.CreatePointer(_context.Int8Type, 0), 0);
         var nativeMainType = LLVMTypeRef.CreateFunction(_context.Int32Type, [_context.Int32Type, argvType], false);
         var nativeMain = DeclareNativeFunction(module, "main", nativeMainType);
-        if (_usesExceptions)
-            nativeMain.PersonalityFn = _personality;
+        nativeMain.PersonalityFn = _personality;
         nativeMain.GetParam(0).Name = "argc";
         nativeMain.GetParam(1).Name = "argv";
 
@@ -207,67 +216,56 @@ public sealed partial class LlvmModuleGenerator
         var oxygenMain = model.MainFunction
             ?? throw new InvalidOperationException("Semantic model does not contain a main function.");
         var oxygenMainType = llvmFunctions[oxygenMain].FunctionType;
-        LLVMValueRef result;
-        if (_usesExceptions)
+        var returnsVoid = oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind;
+        var normal = nativeMain.AppendBasicBlock("oxygen.main.normal");
+        var unwind = nativeMain.AppendBasicBlock("oxygen.main.unwind");
+        var result = builder.BuildInvoke2(
+            oxygenMainType,
+            llvmFunctions[oxygenMain],
+            Array.Empty<LLVMValueRef>(),
+            normal,
+            unwind,
+            returnsVoid ? string.Empty : "oxygen.main");
+
+        builder.PositionAtEnd(unwind);
+        if (_target.UsesSeh)
         {
-            var normal = nativeMain.AppendBasicBlock("oxygen.main.normal");
-            var unwind = nativeMain.AppendBasicBlock("oxygen.main.unwind");
-            if (_usesWindowsSeh)
-            {
-                result = builder.BuildInvoke2(oxygenMainType, llvmFunctions[oxygenMain],
-                    Array.Empty<LLVMValueRef>(), normal, unwind,
-                    oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
-                builder.PositionAtEnd(unwind);
-                var catchBody = nativeMain.AppendBasicBlock("main.catchpad");
-                var catchSwitch = builder.BuildCatchSwitch(default, default, 1, "main.catchswitch");
-                catchSwitch.AddHandler(catchBody);
-                builder.PositionAtEnd(catchBody);
-                var catchPad = builder.BuildCatchPad(catchSwitch,
-                    new LLVMValueRef[]
-                    {
-                        LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
-                        LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0))
-                    },
-                    "main.catchpad");
-                using var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad });
-                var exceptionPointer = GetWindowsExceptionPointer(catchPad);
-                var nativeException = builder.BuildCall2(
-                    exceptionPointer.FunctionType, exceptionPointer,
-                    new LLVMValueRef[] { catchPad }, "native.exception");
-                // The runtime takes the native handle, as on POSIX, and extracts the Oxygen object itself. Passing the
-                // extracted object here would make the runtime read it as an EXCEPTION_POINTERS and fault.
-                builder.BuildCallWithOperandBundles(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
-                    new LLVMValueRef[] { nativeException }, new LLVMOperandBundleRef[] { funclet });
-                builder.BuildUnreachable();
-            }
-            else
-            {
-                result = builder.BuildInvoke2(
-                    oxygenMainType,
-                    llvmFunctions[oxygenMain],
-                    Array.Empty<LLVMValueRef>(),
-                    normal,
-                    unwind,
-                    oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
-                builder.PositionAtEnd(unwind);
-                var landingType = _context.GetStructType(
-                    [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type], false);
-                var landingPad = builder.BuildLandingPad(landingType, _personality, 1, "main.landingpad");
-                landingPad.AddClause(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)));
-                var exception = builder.BuildExtractValue(landingPad, 0, "main.exception");
-                builder.BuildCall2(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
-                    new[] { exception }, (ReadOnlySpan<char>)string.Empty);
-                builder.BuildUnreachable();
-            }
-            builder.PositionAtEnd(normal);
+            var catchBody = nativeMain.AppendBasicBlock("main.catchpad");
+            var catchSwitch = builder.BuildCatchSwitch(default, default, 1, "main.catchswitch");
+            catchSwitch.AddHandler(catchBody);
+            builder.PositionAtEnd(catchBody);
+            var catchPad = builder.BuildCatchPad(catchSwitch,
+                new LLVMValueRef[]
+                {
+                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)),
+                    LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0))
+                },
+                "main.catchpad");
+            using var funclet = LLVMOperandBundleRef.Create("funclet", new LLVMValueRef[] { catchPad });
+            var exceptionPointer = GetWindowsExceptionPointer(catchPad);
+            var nativeException = builder.BuildCall2(
+                exceptionPointer.FunctionType, exceptionPointer,
+                new LLVMValueRef[] { catchPad }, "native.exception");
+            // The runtime takes the native handle, as on POSIX, and extracts the Oxygen object itself. Passing the
+            // extracted object here would make the runtime read it as an EXCEPTION_POINTERS and fault.
+            builder.BuildCallWithOperandBundles(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
+                new LLVMValueRef[] { nativeException }, new LLVMOperandBundleRef[] { funclet });
+            builder.BuildUnreachable();
         }
         else
         {
-            result = builder.BuildCall2(
-                oxygenMainType, llvmFunctions[oxygenMain], Array.Empty<LLVMValueRef>(),
-                oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind ? string.Empty : "oxygen.main");
+            var landingType = _context.GetStructType(
+                [LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type], false);
+            var landingPad = builder.BuildLandingPad(landingType, _personality, 1, "main.landingpad");
+            landingPad.AddClause(LLVMValueRef.CreateConstNull(LLVMTypeRef.CreatePointer(_context.Int8Type, 0)));
+            var exception = builder.BuildExtractValue(landingPad, 0, "main.exception");
+            builder.BuildCall2(_exceptionUnhandled.FunctionType, _exceptionUnhandled,
+                new[] { exception }, (ReadOnlySpan<char>)string.Empty);
+            builder.BuildUnreachable();
         }
-        if (oxygenMainType.ReturnType.Kind == LLVMTypeKind.LLVMVoidTypeKind)
+
+        builder.PositionAtEnd(normal);
+        if (returnsVoid)
             builder.BuildRet(LLVMValueRef.CreateConstInt(_context.Int32Type, 0, false));
         else
             builder.BuildRet(result);
@@ -282,7 +280,7 @@ public sealed partial class LlvmModuleGenerator
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         _currentFunction = function;
-        _noThrowFunction = symbol.DeclaresNoThrow;
+        _noThrowFunction = IsNoThrowFunction(symbol, model);
         if (UnwindsHere)
             function.PersonalityFn = _personality;
         var entry = function.AppendBasicBlock("entry");

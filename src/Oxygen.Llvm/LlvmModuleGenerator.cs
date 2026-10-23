@@ -12,7 +12,8 @@ public sealed partial class LlvmModuleGenerator
 {
     // The target of the module. It is the host's target unless one is given.
     private readonly OxygenTarget _target;
-    // False for a program built with --no-exceptions: no exception machinery is emitted, and a throw ends the program.
+    // False for a program built with --no-exceptions: its functions unwind nothing and keep no trace frames, and a throw ends the program.
+    // The native entry point still catches a throw from linked code that was built with exceptions.
     private readonly bool _exceptionsEnabled;
 
     public LlvmModuleGenerator(OxygenTarget? target = null, bool exceptions = true)
@@ -221,8 +222,9 @@ public sealed partial class LlvmModuleGenerator
                 LLVMTypeRef.CreateFunction(_context.Int32Type,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
                         LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int64Type], false));
-            _personality = DeclareNativeFunction(module, _usesWindowsSeh ? "__C_specific_handler" : "__gxx_personality_v0",
-                _usesWindowsSeh
+            // The entry wrapper uses the personality in every mode, so it follows the target and not the exceptions flag.
+            _personality = DeclareNativeFunction(module, _target.UsesSeh ? "__C_specific_handler" : "__gxx_personality_v0",
+                _target.UsesSeh
                     ? LLVMTypeRef.CreateFunction(_context.Int32Type, [], true)
                     : LLVMTypeRef.CreateFunction(_context.Int32Type,
                         [_context.Int32Type, _context.Int32Type, _context.Int64Type,
@@ -383,7 +385,7 @@ public sealed partial class LlvmModuleGenerator
                         .ToArray(),
                     ExternalName = symbol.CInterop?.ExternalName,
                     CallingConvention = symbol.CInterop?.CallingConvention ?? "c",
-                    NoThrow = symbol.DeclaresNoThrow,
+                    NoThrow = IsNoThrowFunction(symbol, model),
                     NoReturn = symbol.DeclaresNoReturn
                 }).ToArray(),
                 Types = TypeMetadataOf(model, moduleName, methodOwners),

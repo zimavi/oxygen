@@ -44,8 +44,8 @@ public sealed class NoThrowConstructorTests
     [Fact]
     public void ACallToAPlainConstructorIsStillAnErrorInANothrowFunction()
     {
-        var result = Analyze(
-            "class Tally { i32 count; public Tally(i32 start) { count = start; } } " +
+        var result = Analyze(Failure +
+            "class Tally { i32 count; public Tally(i32 start) { throw new Failure(); } } " +
             "@nothrow i32 make(i32 start) { Tally tally = new Tally(start); return tally.count; } " +
             "i32 main() { return make(3); }");
 
@@ -76,8 +76,8 @@ public sealed class NoThrowConstructorTests
     [Fact]
     public void ANothrowConstructorMayNotRunABaseConstructor()
     {
-        var result = Analyze(
-            "class Base { public Base() { } } " +
+        var result = Analyze(Failure +
+            "class Base { public Base() { throw new Failure(); } } " +
             "class Child : Base { @nothrow public Child() { } } " +
             "i32 main() { return 0; }");
 
@@ -87,8 +87,8 @@ public sealed class NoThrowConstructorTests
     [Fact]
     public void AFieldInitializerThatMayThrowIsAnErrorInANothrowConstructor()
     {
-        var result = Analyze(
-            "i32 helper() { return 1; } " +
+        var result = Analyze(Failure +
+            "i32 helper() { throw new Failure(); } " +
             "class Tally { i32 count = helper(); @nothrow public Tally() { } } " +
             "i32 main() { return 0; }");
 

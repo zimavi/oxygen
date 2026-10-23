@@ -80,19 +80,23 @@ public sealed partial class LlvmModuleGenerator
         return LLVMTypeRef.CreateFunction(returnType, parameterTypes.ToArray(), false);
     }
 
-    // External functions return string through a trailing out-pointer, because a 16-byte struct return
-    // is classified differently by LLVM and by the C ABI of each target.
+    // C functions return string through a trailing out-pointer, because a 16-byte struct return is classified differently by LLVM and by
+    // the C ABI of each target.
     private bool ReturnsStringThroughPointer(FunctionSymbol symbol) =>
-        symbol.IsExternal && symbol.ReturnType.Kind == SemanticTypeKind.String;
+        IsCFunction(symbol) && symbol.ReturnType.Kind == SemanticTypeKind.String;
 
     private bool IsClassMethod(FunctionSymbol symbol, SemanticModel model) =>
         _accessorSymbols.Contains(symbol)
         || model.Classes.Values.Any(cls => cls.Methods.Contains(symbol))
         || model.Interfaces.Values.Any(iface => iface.Methods.Contains(symbol));
 
-    // The string ABI of external functions: every `string` parameter is passed by pointer to an oxygen_string, and a string result is
-    // returned through a trailing out-pointer. The rule is the same for every external function, so the C side is one rule to document.
-    private bool UsesPointerStringAbi(FunctionSymbol symbol) => symbol.IsExternal;
+    // The string ABI of C functions: every `string` parameter is passed by pointer to an oxygen_string, and a string result is returned
+    // through a trailing out-pointer. The rule is the same for every C function, so the C side is one rule to document.
+    private bool UsesPointerStringAbi(FunctionSymbol symbol) => IsCFunction(symbol);
+
+    // A function of C (@extern), in this program or in an imported library. An imported Oxygen function is external too, since it is
+    // not declared here, but it has no C name, and it takes its arguments in the Oxygen ABI, as its library defines them.
+    private static bool IsCFunction(FunctionSymbol symbol) => symbol.IsExternal && symbol.CInterop?.ExternalName is not null;
 
     private LLVMTypeRef ToLlvmType(SemanticType type, SemanticModel model)
     {

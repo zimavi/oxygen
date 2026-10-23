@@ -6,34 +6,49 @@ namespace Oxygen.Compiler.Semantic;
 // Collection: walks syntax to find the generic uses that need a specialized copy.
 public sealed partial class SemanticAnalyzer
 {
+    // The expressions of a statement, and of every statement nested in it.
     private static IEnumerable<Expression> EnumerateExpressions(Statement? statement) =>
-        statement switch
-        {
-            BlockStatement block => block.Statements.SelectMany(EnumerateExpressions),
-            VariableDeclarationStatement variable => EnumerateExpressions(variable.Initializer),
-            AssignmentStatement assignment => EnumerateExpressions(assignment.Target)
-                .Concat(EnumerateExpressions(assignment.Value)),
-            ReturnStatement @return => EnumerateExpressions(@return.Value),
-            ExpressionStatement expression => EnumerateExpressions(expression.Expression),
-            IfStatement conditional => EnumerateExpressions(conditional.Condition)
-                .Concat(EnumerateExpressions(conditional.Then))
-                .Concat(EnumerateExpressions(conditional.Else)),
-            WhileStatement loop => EnumerateExpressions(loop.Condition).Concat(EnumerateExpressions(loop.Body)),
-            ForStatement loop => EnumerateExpressions(loop.Initializer)
-                .Concat(EnumerateExpressions(loop.Condition))
-                .Concat(EnumerateExpressions(loop.Increment))
-                .Concat(EnumerateExpressions(loop.Body)),
-            ForInStatement loop => EnumerateExpressions(loop.Collection).Concat(EnumerateExpressions(loop.Body)),
-            ThrowStatement @throw => @throw.Value is null ? Array.Empty<Expression>() : EnumerateExpressions(@throw.Value),
-            DeleteStatement @delete => EnumerateExpressions(@delete.Target),
-            TryStatement @try => EnumerateExpressions(@try.Body)
-                .Concat(@try.Catches.SelectMany(item => EnumerateExpressions(item.Body)))
-                .Concat(EnumerateExpressions(@try.Finally)),
-            SwitchStatement @switch => EnumerateExpressions(@switch.Value)
-                .Concat(@switch.Cases.SelectMany(item =>
-                    EnumerateExpressions(item.Value).Concat(EnumerateExpressions(item.Body)))),
-            _ => []
-        };
+        statement is null ? [] : StatementsWithin(statement).SelectMany(OwnExpressions).SelectMany(EnumerateExpressions);
+
+    // The statement and every statement nested in it, in source order.
+    private static IEnumerable<Statement> StatementsWithin(Statement statement)
+    {
+        yield return statement;
+        foreach (var child in ChildStatements(statement))
+        foreach (var nested in StatementsWithin(child))
+            yield return nested;
+    }
+
+    private static IEnumerable<Statement> ChildStatements(Statement statement) => statement switch
+    {
+        BlockStatement block => block.Statements,
+        IfStatement conditional => conditional.Else is null ? [conditional.Then] : [conditional.Then, conditional.Else],
+        WhileStatement loop => [loop.Body],
+        ForStatement loop => new[] { loop.Initializer, loop.Increment, loop.Body }.OfType<Statement>(),
+        ForInStatement loop => [loop.Body],
+        TryStatement tryStatement => new Statement[] { tryStatement.Body }
+            .Concat(tryStatement.Catches.Select(clause => clause.Body))
+            .Concat(tryStatement.Finally is null ? [] : [tryStatement.Finally]),
+        SwitchStatement switchStatement => switchStatement.Cases.Select(item => item.Body),
+        _ => []
+    };
+
+    // The expressions that a statement evaluates itself. The expressions of its nested statements belong to those statements.
+    private static IEnumerable<Expression> OwnExpressions(Statement statement) => statement switch
+    {
+        VariableDeclarationStatement declaration => declaration.Initializer is null ? [] : [declaration.Initializer],
+        AssignmentStatement assignment => [assignment.Target, assignment.Value],
+        ReturnStatement item => item.Value is null ? [] : [item.Value],
+        ExpressionStatement item => [item.Expression],
+        IfStatement item => [item.Condition],
+        WhileStatement item => [item.Condition],
+        ForStatement item => item.Condition is null ? [] : [item.Condition],
+        ForInStatement item => [item.Collection],
+        ThrowStatement item => item.Value is null ? [] : [item.Value],
+        DeleteStatement item => [item.Target],
+        SwitchStatement item => new[] { item.Value }.Concat(item.Cases.Where(@case => @case.Value is not null).Select(@case => @case.Value!)),
+        _ => []
+    };
 
     private static IEnumerable<Expression> EnumerateExpressions(Expression? expression)
     {
@@ -58,6 +73,7 @@ public sealed partial class SemanticAnalyzer
             ArrayLiteralExpression item => item.Elements.SelectMany(EnumerateExpressions),
             StructLiteralExpression item => item.Fields.SelectMany(field => EnumerateExpressions(field.Value)),
             UnionConstructionExpression item => item.Arguments.SelectMany(EnumerateExpressions),
+            IndirectCallExpression item => EnumerateExpressions(item.Callee).Concat(item.Arguments.SelectMany(EnumerateExpressions)),
             _ => []
         };
         return nested.Prepend(expression);
