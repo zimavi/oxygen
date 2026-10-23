@@ -50,9 +50,6 @@ public sealed partial class SemanticAnalyzer
         }
     }
 
-    // A manual iter() call is rejected. Its result is an object that no variable frees: a local takes it without setting
-    // its drop flag, which is set only for `new`, so the object would leak. For-in calls iter() itself and is not affected.
-    // This is a temporary guard, removed once ownership covers interfaces and call results.
     private SemanticType AnalyzeCallExpression(
         CallExpression call,
         Scope scope,
@@ -66,10 +63,6 @@ public sealed partial class SemanticAnalyzer
     {
         var type = AnalyzeCall(call, scope, functions, moduleName, imports, expressionTypes, resolvedCalls, expectedType, allowVoid);
         RequireStackArgumentsNotKept(call, scope, resolvedCalls);
-        if (resolvedCalls.TryGetValue(call, out var callee) && callee.Name == "iter" && callee.Parameters.Count == 0
-            && (callee.ReturnType.IsClass || callee.ReturnType.IsInterface))
-            throw Error("Calling iter() by hand is not supported yet, because its result would never be freed; iterate with for-in instead",
-                call.Location);
         return type;
     }
 
@@ -161,6 +154,8 @@ public sealed partial class SemanticAnalyzer
             };
             if (receiverName == "base")
                 _baseCalls.Add(call);
+            if (receiverType is not null)
+                RecordQualifiedReceiver(call, receiverName, scope);
             // `Class.method(...)` calls a static method of a class. A class name is not a variable.
             if (receiverType is null && FindTypeName(receiverName, call.Location) is { } staticClassName
                 && _classesByName.TryGetValue(staticClassName, out var staticClass))
@@ -203,13 +198,6 @@ public sealed partial class SemanticAnalyzer
                 ? SemanticType.FromPrimitive(PrimitiveType.Void)
                 : AnalyzeExpression(argument, scope, functions, moduleName, imports, expressionTypes, resolvedCalls))
             .ToList();
-        foreach (var argument in call.Arguments)
-        {
-            if (ValueOf(argument) is IdentifierExpression identifier
-                && IsOwnedClass(scope.Lookup(identifier.Name, identifier.Location).Type)
-                && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
-                _escapingClassLocals.Add(declaration);
-        }
         string? inferenceProblem = null;
         if (call.ExplicitTypeArguments.Count != 0)
         {

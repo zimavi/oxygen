@@ -46,7 +46,6 @@ public sealed partial class SemanticAnalyzer
     // For each loop being analyzed, the deletes in its body. A body runs again, so those deletes can repeat.
     private readonly Stack<List<(DeleteStatement Statement, VariableDeclarationStatement Declaration)>> _loopDeletes = new();
 
-    private readonly HashSet<VariableDeclarationStatement> _valueUses = new(ReferenceEqualityComparer.Instance);
 
     private readonly HashSet<VariableDeclarationStatement> _autoFreedLocals = new(ReferenceEqualityComparer.Instance);
 
@@ -166,7 +165,19 @@ public sealed partial class SemanticAnalyzer
         _inferredNoThrow = new HashSet<SyntaxNode>(ReferenceEqualityComparer.Instance);
         _loopDeletes.Clear();
         _autoFreedLocals.Clear();
-        _valueUses.Clear();
+        _analyzedBodies.Clear();
+        _localReferences.Clear();
+        _parameterReferences.Clear();
+        _qualifiedReceivers.Clear();
+        _resultHolders.Clear();
+        _keptReceivers.Clear();
+        _keepsParameter.Clear();
+        _flows.Clear();
+        _returnsOwned.Clear();
+        _keepsThis.Clear();
+        _keepsThisInProgress.Clear();
+        _temporaryReleases.Clear();
+        _ownedIterators.Clear();
         _iteratorProtocols.Clear();
         _callReceiverTypes.Clear();
         _receiverArgumentCalls.Clear();
@@ -794,6 +805,8 @@ public sealed partial class SemanticAnalyzer
 
         // After every body is analysed, so that a body's calls can depend on bodies analysed later.
         CheckNoThrowFunctions(diagnostics);
+        CollectFinalBodies(functionsByName.Values.SelectMany(overloads => overloads), functionSources);
+        CheckOwnership(expressionTypes, resolvedCalls);
 
         _logger.Information("Analyzed {FunctionCount} function(s).", functions.Count);
         _sourceName = null;
@@ -831,7 +844,9 @@ public sealed partial class SemanticAnalyzer
             new Dictionary<Expression, Expression>(_indirectCallees, ReferenceEqualityComparer.Instance),
             new Dictionary<Expression, FunctionSymbol>(_functionReferences, ReferenceEqualityComparer.Instance),
             new Dictionary<LambdaExpression, FunctionSymbol>(_lambdaFunctions, ReferenceEqualityComparer.Instance),
-            _inferredNoThrow);
+            _inferredNoThrow,
+            new HashSet<Expression>(_temporaryReleases, ReferenceEqualityComparer.Instance),
+            new HashSet<ForInStatement>(_ownedIterators, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

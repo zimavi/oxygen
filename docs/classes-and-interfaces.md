@@ -343,14 +343,27 @@ code checks the runtime object type. A failed check reports an invalid-cast
 diagnostic and terminates the process; it does not produce a value of the
 requested type.
 
-Destructor calls are emitted automatically for owned class locals. Locals
-belong to their lexical scope, are destroyed once in reverse declaration
-order, and are cleaned up on block exits, returns, `break`, `continue`, and
-loop exits. Ownership escapes when a class reference is assigned to an outer
-scope, returned from a function, or passed as a function argument; an escaped
-reference is not destroyed by the inner scope. This is a transfer of the
-reference's ownership, not a hidden allocation or `oxygen_free` call, and
-manual pointer management remains unchanged.
+Destructor calls are emitted automatically for owned class and interface locals.
+A local owns the object it is initialized with when that object comes from `new`
+or from a function or method that returns an owned object, and the local is
+never assigned. Locals belong to their lexical scope, are destroyed once in
+reverse declaration order, and are cleaned up on block exits, returns, `break`,
+`continue`, and loop exits.
+
+Each use of a reference decides whether the object escapes. Reading a field,
+comparing, or passing the object to a parameter that the callee does not keep
+does not escape it. Assigning it to an outer scope or a field, or passing it to
+a parameter that the callee stores, does escape it. Returning an owned local
+hands the object to the caller, which then owns it. An escaped object is not
+destroyed by the inner scope, so it is reported as not freed rather than
+risking a use after free. A method that stores `this` keeps its receiver the
+same way, unless the result it stores is held by a local that does not escape:
+then the receiver only has to outlive that local, which is freed first. A
+temporary receiver has no such local, so it is kept. Manual pointer management
+is unchanged.
+
+An object that a full expression creates and does not store is released at the
+end of that expression.
 
 A destructor runs through the object's runtime type, so a `virtual` destructor
 runs for the object's real class when the object is deleted through a base

@@ -163,6 +163,8 @@ OXYGEN_RUNTIME_API void *oxygen_calloc(uint64_t count, uint64_t element_size);
 OXYGEN_RUNTIME_API void oxygen_free(void *pointer);
 
 OXYGEN_RUNTIME_API void oxygen_io_initialize(void);
+/* Starts the leak report when OXYGEN_LEAK_REPORT is set: the allocations that are not freed are printed at exit. */
+OXYGEN_RUNTIME_API void oxygen_memory_initialize(void);
 OXYGEN_RUNTIME_API FILE *oxygen_runtime_error_stream(void);
 OXYGEN_RUNTIME_API void oxygen_write_stdout(const oxygen_string *value);
 OXYGEN_RUNTIME_API void oxygen_write_stderr(const oxygen_string *value);

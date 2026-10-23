@@ -33,8 +33,11 @@ public sealed partial class SemanticAnalyzer
                 CheckAssigned(declaration, identifier.Name, identifier.Location);
             if (_deletedLocals.Contains(declaration))
                 throw Error($"'{identifier.Name}' was deleted and cannot be used", identifier.Location, identifier.Name.Length);
-            if (!_receiverUse)
-                _valueUses.Add(declaration);
+            _localReferences[identifier] = declaration;
+        }
+        else if (symbol.Declaration is ParameterDeclaration parameter)
+        {
+            _parameterReferences[identifier] = parameter;
         }
 
         return symbol.Type;

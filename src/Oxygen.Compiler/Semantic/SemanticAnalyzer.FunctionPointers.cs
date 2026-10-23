@@ -209,11 +209,6 @@ public sealed partial class SemanticAnalyzer
                 throw ErrorWithCode(DiagnosticCode.ConversionMismatch,
                     $"Argument {index + 1} of the function pointer call expects {parameterTypes[index]}, got {argumentType}",
                     arguments[index].Location);
-            // A class object passed to a call that the callee may keep escapes, as it does for a direct call.
-            if (ValueOf(arguments[index]) is IdentifierExpression identifier
-                && IsOwnedClass(scope.Lookup(identifier.Name, identifier.Location).Type)
-                && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
-                _escapingClassLocals.Add(declaration);
         }
         ClassifyDereference(callee, scope, callee.Location);
         _indirectCallees[node] = callee;

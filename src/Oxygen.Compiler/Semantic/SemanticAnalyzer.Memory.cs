@@ -75,6 +75,7 @@ public sealed partial class SemanticAnalyzer
             targetType = AssignmentTargetType(identifier, scope, expressionTypes);
             if (symbol.Declaration is VariableDeclarationStatement declaration)
             {
+                _localReferences[identifier] = declaration;
                 // Delete reads the variable, so a local that may still be unassigned is rejected, as a read of it is.
                 CheckAssigned(declaration, identifier.Name, identifier.Location);
                 if (IsOwnedClass(targetType))
@@ -101,54 +102,6 @@ public sealed partial class SemanticAnalyzer
             throw ErrorWithCode(DiagnosticCode.OperandRequirement, $"'delete' requires a reference to a class object, got {targetType}", statement.Target.Location);
     }
 
-    // A local that holds an object from `new` leaves scope without a `delete` and without escaping, so its memory is leaked.
-    // A `new` object held by a local that is never deleted and never escapes. Such an object is leaked unless the
-    // function frees it, so it is what the leak warning and the automatic free are about.
-    private bool IsUnfreedAllocation(VariableSymbol variable, out VariableDeclarationStatement declaration)
-    {
-        if (variable.Declaration is VariableDeclarationStatement { Initializer: NewExpression } found
-            && IsOwnedClass(variable.Type)
-            && !_deletedLocals.Contains(found)
-            && !_maybeDeletedLocals.Contains(found)
-            && !_escapingClassLocals.Contains(found)
-            && !_valueUses.Contains(found))
-        {
-            declaration = found;
-            return true;
-        }
-
-        declaration = null!;
-        return false;
-    }
-
-    // A `new` object that the function frees at scope end: never read as a value, and not definitely deleted by the end of
-    // the function. A local that may already be deleted at that point gets a runtime flag in the backend.
-    private bool IsAutomaticallyFreedAllocation(VariableSymbol variable, out VariableDeclarationStatement declaration)
-    {
-        if (variable.Declaration is VariableDeclarationStatement { Initializer: NewExpression } found
-            && IsOwnedClass(variable.Type)
-            && !_deletedLocals.Contains(found)
-            && !_escapingClassLocals.Contains(found)
-            && !_valueUses.Contains(found))
-        {
-            declaration = found;
-            return true;
-        }
-
-        declaration = null!;
-        return false;
-    }
-
-    // In an automatic function, an unfreed allocation is freed when its scope ends. This is recorded for the backend.
-    private void CollectAutomaticFrees(FunctionSymbol function)
-    {
-        if (function.Memory != MemoryMode.Automatic)
-            return;
-        foreach (var variable in _declaredVariables)
-            if (IsAutomaticallyFreedAllocation(variable, out var declaration))
-                _autoFreedLocals.Add(declaration);
-    }
-
     // The catch clauses whose exception object the catch frees when its body completes. See CatchBindingEscapes.
     private readonly HashSet<CatchClause> _freedCatchBindings = new(ReferenceEqualityComparer.Instance);
 
@@ -164,17 +117,6 @@ public sealed partial class SemanticAnalyzer
         return expressions.OfType<IdentifierExpression>()
             .Any(identifier => identifier.Name == clause.BindingName && !allowedReceivers.Contains(identifier));
     }
-
-    // Only manual functions warn: an automatic function frees its objects itself, so a missing `delete` is not a leak there.
-    private void WarnAboutUnfreedAllocations(FunctionSymbol function)
-    {
-        if (function.Memory != MemoryMode.Manual)
-            return;
-        foreach (var variable in _declaredVariables)
-            if (IsUnfreedAllocation(variable, out var declaration))
-                ReportWarning($"Memory allocated for '{declaration.Name}' is never freed", declaration.Location, declaration.Name.Length);
-    }
-
 }
 
 // Stack objects. `T(...)` of a reference class builds its object in the current function, which destroys it when the function

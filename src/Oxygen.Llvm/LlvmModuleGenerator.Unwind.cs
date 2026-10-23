@@ -79,7 +79,7 @@ public sealed partial class LlvmModuleGenerator
         if (model.AutomaticallyFreedLocals.Contains(local.Declaration))
         {
             var allocated = builder.BuildLoad2(ToLlvmType(local.Type, model), local.Slot, local.Name);
-            EmitDestroyAndFree(builder, allocated);
+            EmitReleaseOwned(builder, OwnedObjectPointer(builder, allocated, local.Type));
             return;
         }
         if (!local.Type.IsClass || !_destructors.TryGetValue(local.Type.StructName!, out var destructor))
@@ -160,7 +160,7 @@ public sealed partial class LlvmModuleGenerator
         var declaredType = declaration.Type.IsInferred && declaration.Initializer is not null
             ? model.ExpressionTypes[declaration.Initializer]
             : FromTypeSyntax(declaration.Type, model);
-        return declaredType.IsClass && (IsValueClass(declaredType, model)
+        return (declaredType.IsClass || declaredType.IsInterface) && (IsValueClass(declaredType, model)
             || declaration.Initializer is ClassConstructionExpression stackObject && !model.ConstructionCalls.ContainsKey(stackObject)
             || model.AutomaticallyFreedLocals.Contains(declaration));
     }

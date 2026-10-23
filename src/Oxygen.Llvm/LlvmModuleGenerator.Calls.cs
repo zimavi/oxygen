@@ -104,7 +104,8 @@ public sealed partial class LlvmModuleGenerator
             var argument = argumentsWithDefaults[index];
             var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
             arguments.Add(ArgumentForParameter(builder, value, model.ExpressionTypes[argument], function, index, model));
-            if (argument is IdentifierExpression identifier && function.Parameters[index].Type.IsClass)
+            // A class argument is borrowed: the caller keeps the object and releases it. Only a value class is a copy that the callee takes.
+            if (argument is IdentifierExpression identifier && IsValueClass(function.Parameters[index].Type, model))
                 RemoveOwned(identifier.Name);
         }
 

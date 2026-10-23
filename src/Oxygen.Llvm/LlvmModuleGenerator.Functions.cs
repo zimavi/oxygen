@@ -28,6 +28,7 @@ public sealed partial class LlvmModuleGenerator
         var fieldValues = new Dictionary<string, LLVMValueRef>(values, StringComparer.Ordinal);
         var fieldStorage = new Dictionary<string, LLVMValueRef>(storage, StringComparer.Ordinal);
         _ownedScopes = new Stack<List<OwnedLocal>>();
+        _temporaryScopes.Clear();
         _ownedScopes.Push([]);
         _exceptionContexts = new Stack<ExceptionContext>();
         _finallyScopes = new Stack<FinallyScope>();
@@ -184,6 +185,7 @@ public sealed partial class LlvmModuleGenerator
         InitializeClassFieldStorage(builder, values, storage, cls, model);
         // Locals destroyed by a return come from this destructor only, not from the function emitted before it.
         _ownedScopes = new Stack<List<OwnedLocal>>();
+        _temporaryScopes.Clear();
         _ownedScopes.Push([]);
         _exceptionContexts = new Stack<ExceptionContext>();
         _finallyScopes = new Stack<FinallyScope>();
@@ -289,6 +291,7 @@ public sealed partial class LlvmModuleGenerator
         var values = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         var storage = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         _ownedScopes = new Stack<List<OwnedLocal>>();
+        _temporaryScopes.Clear();
         _exceptionContexts = new Stack<ExceptionContext>();
         _finallyScopes = new Stack<FinallyScope>();
         _ownedScopes.Push([]);
@@ -447,6 +450,19 @@ public sealed partial class LlvmModuleGenerator
         }
     }
 
+    // A jump (break or continue) out of the scopes above a depth. The jump releases their locals on its own path only: the code after the jump
+    // is still in those scopes, so the scopes stay as they are.
+    private void CleanupOwnedScopesForJump(
+        LLVMBuilderRef builder,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        int scopeDepth)
+    {
+        foreach (var scope in _ownedScopes.Take(_ownedScopes.Count - scopeDepth).ToList())
+            CleanupOwnedScope(builder, values, storage, model, scope.ToList());
+    }
+
     private void CleanupOwnedScopesTo(
         LLVMBuilderRef builder,
         IReadOnlyDictionary<string, LLVMValueRef> values,
@@ -480,15 +496,24 @@ public sealed partial class LlvmModuleGenerator
                 EmitDestroyAndFree(builder, caught);
                 continue;
             }
+            // An owned iterator of a for-in loop is released when the loop's scope ends, on every way out of the loop.
+            if (owned.Release)
+            {
+                var released = values.TryGetValue(owned.Name, out var directReleased)
+                    ? directReleased
+                    : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
+                EmitReleaseOwned(builder, OwnedObjectPointer(builder, released, owned.Type));
+                continue;
+            }
             // The scope has ended on this path, so an exception from here on must not destroy the local again.
             if (owned.Declaration is { } endingDeclaration)
                 ClearUnwindFlag(builder, endingDeclaration);
             if (owned.Declaration is { } freedDeclaration && model.AutomaticallyFreedLocals.Contains(freedDeclaration))
             {
                 // An allocation the function owns: its destructor runs, then its memory is released.
-                var allocated = values.TryGetValue(owned.Name, out var directAllocated)
+                var allocated = OwnedObjectPointer(builder, values.TryGetValue(owned.Name, out var directAllocated)
                     ? directAllocated
-                    : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
+                    : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name), owned.Type);
                 if (storage.TryGetValue(owned.Name, out var ownedSlot) && _dropFlags.ContainsKey(ownedSlot))
                 {
                     // A local that may have been deleted already releases its object only while the object is alive.
@@ -497,13 +522,13 @@ public sealed partial class LlvmModuleGenerator
                     builder.BuildCondBr(builder.BuildLoad2(_context.Int1Type, _dropFlags[ownedSlot], "scope.alive"),
                         scopeRelease, scopeSkip);
                     builder.PositionAtEnd(scopeRelease);
-                    EmitDestroyAndFree(builder, allocated);
+                    EmitReleaseOwned(builder, allocated);
                     builder.BuildBr(scopeSkip);
                     builder.PositionAtEnd(scopeSkip);
                 }
                 else
                 {
-                    EmitDestroyAndFree(builder, allocated);
+                    EmitReleaseOwned(builder, allocated);
                 }
                 continue;
             }

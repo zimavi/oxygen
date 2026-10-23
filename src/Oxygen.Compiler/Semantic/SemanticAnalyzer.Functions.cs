@@ -132,7 +132,6 @@ public sealed partial class SemanticAnalyzer
             throw ErrorWithCode(DiagnosticCode.MustReturn, $"Function '{function.Name}' must return a value", function.Declaration.Location);
         }
 
-        CollectAutomaticFrees(function);
         if (_diagnostics is not null)
         {
             foreach (var variable in _declaredVariables)
@@ -155,7 +154,6 @@ public sealed partial class SemanticAnalyzer
                 }
             }
 
-            WarnAboutUnfreedAllocations(function);
         }
     }
 

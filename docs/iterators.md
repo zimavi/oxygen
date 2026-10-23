@@ -32,5 +32,13 @@ generic tagged union `Option<T>` (`Some(T)` and `None`).
 storage when it is full, and `get(index)` and `pop()` return an `Option<T>`,
 since an index past the end and an empty list are expected outcomes. Its
 `iter()` returns the interface `Iterator<T>`, and `List<T>` implements
-`Iterable<T>`. The loop does not free the iterator that `iter()` returns, so
-each loop over a list leaves one small iterator object allocated.
+`Iterable<T>`. The iterator refers to its list, so the list must outlive it. A
+`for`-in loop frees the iterator that `iter()` returns when the loop ends, on
+every way out of it. A manual `var it = list.iter();` is freed at the end of its
+scope, and the list is freed after it, since locals are freed in reverse
+declaration order. An iterator that escapes, such as one that is returned or
+stored elsewhere, keeps its list, which is then reported as not freed. The same
+applies to a parameter or `this` that the iterator refers to: a local that holds
+the iterator does not keep the caller's list, but a returned or stored iterator
+does. A temporary list that an iterator refers to is kept as well, since no
+local outlives the temporary.

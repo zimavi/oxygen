@@ -255,9 +255,13 @@ public sealed class SemanticModel
         IReadOnlyDictionary<Expression, Expression>? indirectCallees = null,
         IReadOnlyDictionary<Expression, FunctionSymbol>? functionReferences = null,
         IReadOnlyDictionary<LambdaExpression, FunctionSymbol>? lambdaFunctions = null,
-        IReadOnlySet<SyntaxNode>? inferredNoThrow = null)
+        IReadOnlySet<SyntaxNode>? inferredNoThrow = null,
+        IReadOnlySet<Expression>? temporaryReleases = null,
+        IReadOnlySet<ForInStatement>? ownedIterators = null)
     {
         InferredNoThrow = inferredNoThrow ?? new HashSet<SyntaxNode>(ReferenceEqualityComparer.Instance);
+        TemporaryReleases = temporaryReleases ?? new HashSet<Expression>(ReferenceEqualityComparer.Instance);
+        OwnedIterators = ownedIterators ?? new HashSet<ForInStatement>(ReferenceEqualityComparer.Instance);
         FreedCatchBindings = freedCatchBindings ?? new HashSet<CatchClause>(ReferenceEqualityComparer.Instance);
         IndirectCallees = indirectCallees ?? new Dictionary<Expression, Expression>(ReferenceEqualityComparer.Instance);
         FunctionReferences = functionReferences ?? new Dictionary<Expression, FunctionSymbol>(ReferenceEqualityComparer.Instance);
@@ -325,6 +329,12 @@ public sealed class SemanticModel
     // is checked with its own annotation (FunctionSymbol.DeclaresNoThrow). Keyed by reference: FunctionDeclaration or ConstructorDeclaration
     // or DestructorDeclaration.
     public IReadOnlySet<SyntaxNode> InferredNoThrow { get; }
+
+    // The new objects and calls whose value is released at the end of the full expression that evaluates them: nothing keeps them.
+    public IReadOnlySet<Expression> TemporaryReleases { get; }
+
+    // The for-in loops that own their iterator, which the loop releases when it ends.
+    public IReadOnlySet<ForInStatement> OwnedIterators { get; }
 
     public IReadOnlyDictionary<SyntaxNode, int[]> ArgumentOrders { get; }
 

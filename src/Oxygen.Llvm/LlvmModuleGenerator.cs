@@ -41,7 +41,9 @@ public sealed partial class LlvmModuleGenerator
     private readonly Dictionary<string, IReadOnlyList<FunctionSymbol>> _interfaceSlots = new(StringComparer.Ordinal);
     // An owned local of a scope. A catch binding that the catch frees has no declaration: its clause is kept instead, and its scope end releases
     // the exception (EmitCatchBody).
-    private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type, CatchClause? Catch = null);
+    // An owned local, or an owned temporary of a scope (an iterator of a for-in loop, which is released by name when the scope ends).
+    private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type, CatchClause? Catch = null,
+        bool Release = false);
     private Stack<List<OwnedLocal>> _ownedScopes = new();
     private LLVMValueRef _oxygenAlloc;
     private LLVMValueRef _oxygenFree;

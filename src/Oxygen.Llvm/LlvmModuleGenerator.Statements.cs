@@ -126,7 +126,7 @@ public sealed partial class LlvmModuleGenerator
     {
         if (statement is not (BlockStatement or IfStatement or ForStatement or ForInStatement or SwitchStatement
             or TryStatement))
-            return EmitStatementBody(context, builder, function, statement, values, storage, model, llvmFunctions,
+            return EmitStatementWithTemporaries(context, builder, function, statement, values, storage, model, llvmFunctions,
                 emittedReturnType, loops);
 
         var savedValues = new Dictionary<string, LLVMValueRef>(values, StringComparer.Ordinal);
@@ -188,11 +188,11 @@ public sealed partial class LlvmModuleGenerator
                 if (model.DeletedLocals.Contains(declaration))
                 {
                     _dropFlags[declaredSlot] = BuildEntryAlloca(builder, _context.Int1Type, declaration.Name + ".alive");
-                    SetDropFlag(builder, declaredSlot, declaration.Initializer is NewExpression);
+                    SetDropFlag(builder, declaredSlot, model.AutomaticallyFreedLocals.Contains(declaration));
                 }
                 // A stack object (or a value class) is destroyed at scope end. An object from `new` is not: its owner
                 // releases it with `delete`.
-                if (declaredType.IsClass && (IsValueClass(declaredType, model)
+                if ((declaredType.IsClass || declaredType.IsInterface) && (IsValueClass(declaredType, model)
                     || declaration.Initializer is ClassConstructionExpression stackObject && !model.ConstructionCalls.ContainsKey(stackObject)
                     || model.AutomaticallyFreedLocals.Contains(declaration)))
                 {
@@ -400,6 +400,7 @@ public sealed partial class LlvmModuleGenerator
                     returnValue = CoerceValue(builder,
                         EmitExpression(context, builder, returnStatement.Value, values, storage, model, llvmFunctions),
                         model.ExpressionTypes[returnStatement.Value], emittedReturnType, model);
+                    ReleaseTemporaries(builder, model);
                     if (EmitExitFinallies(context, builder, function, values, storage, model, llvmFunctions,
                             emittedReturnType, loops, 0))
                         return true;
@@ -459,7 +460,8 @@ public sealed partial class LlvmModuleGenerator
                     }
                     else
                     {
-                        condition = EmitExpression(context, builder, conditional.Condition, values, storage, model, llvmFunctions);
+                        condition = EmitScopedCondition(builder, model,
+                            () => EmitExpression(context, builder, conditional.Condition, values, storage, model, llvmFunctions));
                     }
                     builder.BuildCondBr(condition, thenBlock, elseBlock);
                     builder.PositionAtEnd(thenBlock);
@@ -485,7 +487,8 @@ public sealed partial class LlvmModuleGenerator
             case SwitchStatement switchStatement:
                 {
                     var selectorType = model.ExpressionTypes[switchStatement.Value];
-                    var selector = EmitExpression(context, builder, switchStatement.Value, values, storage, model, llvmFunctions);
+                    var selector = EmitScopedCondition(builder, model,
+                        () => EmitExpression(context, builder, switchStatement.Value, values, storage, model, llvmFunctions));
                     var end = function.AppendBasicBlock("switch.end");
                     var bodies = switchStatement.Cases
                         .Select((_, index) => function.AppendBasicBlock($"switch.body{index}"))
@@ -616,7 +619,8 @@ public sealed partial class LlvmModuleGenerator
                     var endBlock = function.AppendBasicBlock("while.end");
                     builder.BuildBr(conditionBlock);
                     builder.PositionAtEnd(conditionBlock);
-                    var condition = EmitExpression(context, builder, whileStatement.Condition, values, storage, model, llvmFunctions);
+                    var condition = EmitScopedCondition(builder, model,
+                        () => EmitExpression(context, builder, whileStatement.Condition, values, storage, model, llvmFunctions));
                     builder.BuildCondBr(condition, bodyBlock, endBlock);
                     builder.PositionAtEnd(bodyBlock);
                     loops.Push((endBlock, conditionBlock, _ownedScopes.Count, true));
@@ -636,6 +640,10 @@ public sealed partial class LlvmModuleGenerator
                             llvmFunctions[protocol.Iter], (ReadOnlySpan<LLVMValueRef>)new[] { protocolCollectionValue },
                             (ReadOnlySpan<char>)"for.in.iter");
                         values[iteratorName] = iteratorValue;
+                        var iteratorScopeDepth = _ownedScopes.Count;
+                        _ownedScopes.Push(model.OwnedIterators.Contains(forInStatement)
+                            ? [new OwnedLocal(null, iteratorName, protocol.IteratorType, null, true)]
+                            : new List<OwnedLocal>());
                         var protocolValueStorage = BuildEntryAlloca(builder, ToLlvmType(protocol.ElementType, model),
                             forInStatement.VariableName + ".addr");
                         storage[forInStatement.VariableName] = protocolValueStorage;
@@ -667,6 +675,11 @@ public sealed partial class LlvmModuleGenerator
                         if (!protocolBodyTerminated) builder.BuildBr(protocolConditionBlock);
                         builder.PositionAtEnd(protocolEndBlock);
                         if (_ownedScopes.Count > protocolScopeDepth)
+                        {
+                            CleanupOwnedScope(builder, values, storage, model);
+                            _ownedScopes.Pop();
+                        }
+                        if (_ownedScopes.Count > iteratorScopeDepth)
                         {
                             CleanupOwnedScope(builder, values, storage, model);
                             _ownedScopes.Pop();
@@ -744,7 +757,8 @@ public sealed partial class LlvmModuleGenerator
                     builder.PositionAtEnd(conditionBlock);
                     var condition = forStatement.Condition is null
                         ? LLVMValueRef.CreateConstInt(_context.Int1Type, 1, false)
-                        : EmitExpression(context, builder, forStatement.Condition, loopValues, loopStorage, model, llvmFunctions);
+                        : EmitScopedCondition(builder, model,
+                            () => EmitExpression(context, builder, forStatement.Condition, loopValues, loopStorage, model, llvmFunctions));
                     builder.BuildCondBr(condition, bodyBlock, endBlock);
                     builder.PositionAtEnd(bodyBlock);
                     var forScopeDepth = _ownedScopes.Count;
@@ -774,7 +788,7 @@ public sealed partial class LlvmModuleGenerator
                 if (EmitExitFinallies(context, builder, function, values, storage, model, llvmFunctions,
                         emittedReturnType, loops, TargetLoopDepth(loops, isContinue: false)))
                     return true;
-                CleanupOwnedScopesTo(builder, values, storage, model, loops.Peek().ScopeDepth);
+                CleanupOwnedScopesForJump(builder, values, storage, model, loops.Peek().ScopeDepth);
                 builder.BuildBr(loops.Peek().Break);
                 return true;
             case ContinueStatement:
@@ -782,7 +796,7 @@ public sealed partial class LlvmModuleGenerator
                 if (EmitExitFinallies(context, builder, function, values, storage, model, llvmFunctions,
                         emittedReturnType, loops, TargetLoopDepth(loops, isContinue: true)))
                     return true;
-                CleanupOwnedScopesTo(builder, values, storage, model, loop.ScopeDepth);
+                CleanupOwnedScopesForJump(builder, values, storage, model, loop.ScopeDepth);
                 builder.BuildBr(loop.Continue);
                 return true;
             case DeleteStatement deleteStatement:
