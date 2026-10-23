@@ -139,7 +139,9 @@ internal static class NativeModuleLoader
                 : Visibility.Private,
             function.ExternalName is null
                 ? null
-                : new CInteropFunctionMetadata(function.ExternalName, function.CallingConvention));
+                : new CInteropFunctionMetadata(function.ExternalName, function.CallingConvention),
+            function.NoThrow,
+            function.NoReturn);
 
     // Decodes a type encoding of the mangling scheme (docs/mangling.md). The encodings of named types and generic parameters
     // need the declarations of their types, which metadata does not carry, so those are reported as unsupported.

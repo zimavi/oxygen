@@ -249,10 +249,52 @@ public sealed class LibraryDependencyTests : IDisposable
         Assert.Equal(10, run.ExitCode);
     }
 
-    // Builds the standard library, then the library that uses it, then the program that uses both, and runs the program.
-    private (int ExitCode, string Output, string Error) BuildAndRunProgram(string source, string librarySource = AppLibrary)
+    // A program built without exceptions has no catch clauses that run, but a throw from a library built with exceptions still reaches the
+    // program's entry point, which reports it and ends the program with exit code 101 (docs/exceptions.md).
+    [SkippableFact]
+    public void AProgramBuiltWithoutExceptionsEndsWhenALibraryThrows()
     {
-        var build = BuildProgram(source, librarySource);
+        var run = BuildAndRunProgram(
+            """
+            import mylib;
+
+            i32 main() {
+                try {
+                    fail();
+                } catch (AppException error) {
+                    return 10;
+                }
+                return 0;
+            }
+            """, AppLibrary, "--no-exceptions");
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Contains("from mylib", run.Error);
+    }
+
+    // println of a string calls the standard library's string overload. An imported function takes a string by pointer, and the call must too.
+    [SkippableFact]
+    public void AProgramPrintsAStringThroughTheSharedStandardLibrary()
+    {
+        var run = BuildAndRunProgram(
+            """
+            import std.io;
+
+            i32 main() {
+                io.println("hello");
+                return 3;
+            }
+            """);
+
+        Assert.Equal(3, run.ExitCode);
+        Assert.Equal("hello\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    // Builds the standard library, then the library that uses it, then the program that uses both, and runs the program.
+    private (int ExitCode, string Output, string Error) BuildAndRunProgram(string source, string librarySource = AppLibrary,
+        params string[] programFlags)
+    {
+        var build = BuildProgram(source, librarySource, programFlags);
         Assert.True(build.ExitCode == 0, $"Building the program failed with exit code {build.ExitCode}:\n{build.Error}");
 
         // The program finds the libraries and the runtime beside it: on Windows through the DLL search, and on Linux through the library
@@ -265,7 +307,7 @@ public sealed class LibraryDependencyTests : IDisposable
 
     // Builds the standard library, then the library that uses it, then the program that uses both, and returns the program's build result.
     // The libraries and the runtime are built beside the program, and the runtime is copied there too.
-    private (int ExitCode, string Output, string Error) BuildProgram(string source, string librarySource)
+    private (int ExitCode, string Output, string Error) BuildProgram(string source, string librarySource, params string[] programFlags)
     {
         NativeProgram.RequireLibraryToolchain();
         var runtime = Path.Combine(TargetDirectory, Windows ? "oxygenrt.lib" : "liboxygenrt.so");
@@ -286,7 +328,7 @@ public sealed class LibraryDependencyTests : IDisposable
         var executable = Path.Combine(_directory, Windows ? "main.exe" : "main");
         var program = NativeProgram.RunProcess(NativeProgram.CompilerExecutable,
             ["build", programSource, "--stdlib", standardLibrary, "--stdlib", appLibrary + (Windows ? ".dll" : ".so"),
-                "-r", runtime, "-o", executable]);
+                "-r", runtime, .. programFlags, "-o", executable]);
 
         File.Copy(runtimeFile, Path.Combine(_directory, Path.GetFileName(runtimeFile)), overwrite: true);
         return program;

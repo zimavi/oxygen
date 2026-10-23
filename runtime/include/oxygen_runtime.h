@@ -72,7 +72,13 @@ typedef struct oxygen_runtime_type_info
     uint32_t supertype_count;
 } oxygen_runtime_type_info;
 
-OXYGEN_RUNTIME_API void __oxygen_runtime_initialize(void);
+/* Flags for __oxygen_runtime_initialize. The compiler sets them from the program's mode. The runtime ignores the bits it does not know. */
+typedef enum oxygen_runtime_flag
+{
+    OXYGEN_RUNTIME_EXCEPTIONS_ENABLED = 1u << 0
+} oxygen_runtime_flag;
+
+OXYGEN_RUNTIME_API void __oxygen_runtime_initialize(uint64_t flags);
 /* Ends the program after a runtime failure with exit code 101. The caller writes the message first. */
 OXYGEN_RUNTIME_API _Noreturn void oxygen_runtime_abort(void);
 OXYGEN_RUNTIME_API void __oxygen_runtime_array_bounds_failure(uint64_t index, uint64_t length);
@@ -142,6 +148,8 @@ OXYGEN_RUNTIME_API void *__oxygen_runtime_exception_object(void *exception_handl
 OXYGEN_RUNTIME_API void __oxygen_runtime_end_catch(void);
 OXYGEN_RUNTIME_API void __oxygen_runtime_rethrow(void);
 OXYGEN_RUNTIME_API void __oxygen_runtime_unhandled_object(void *exception_handle);
+/* A throw in a program built without exceptions: the object is reported, and the program ends with exit code 101. */
+OXYGEN_RUNTIME_API _Noreturn void __oxygen_runtime_unhandled_instance(void *object);
 #if defined(_WIN32)
 OXYGEN_RUNTIME_API uint8_t __oxygen_runtime_exception_matches(
     void *exception_handle,
@@ -155,6 +163,8 @@ OXYGEN_RUNTIME_API void *oxygen_calloc(uint64_t count, uint64_t element_size);
 OXYGEN_RUNTIME_API void oxygen_free(void *pointer);
 
 OXYGEN_RUNTIME_API void oxygen_io_initialize(void);
+/* Starts the leak report when OXYGEN_LEAK_REPORT is set: the allocations that are not freed are printed at exit. */
+OXYGEN_RUNTIME_API void oxygen_memory_initialize(void);
 OXYGEN_RUNTIME_API FILE *oxygen_runtime_error_stream(void);
 OXYGEN_RUNTIME_API void oxygen_write_stdout(const oxygen_string *value);
 OXYGEN_RUNTIME_API void oxygen_write_stderr(const oxygen_string *value);

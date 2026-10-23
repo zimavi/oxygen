@@ -9,7 +9,23 @@ namespace Oxygen.Llvm;
 
 public sealed partial class LlvmModuleGenerator
 {
+    // Evaluates an expression. An object that the ownership pass releases at the end of its full expression is kept until then.
     private LLVMValueRef EmitExpression(
+        LLVMContextRef context,
+        LLVMBuilderRef builder,
+        Expression expression,
+        IReadOnlyDictionary<string, LLVMValueRef> values,
+        IReadOnlyDictionary<string, LLVMValueRef> storage,
+        SemanticModel model,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var value = EmitExpressionValue(context, builder, expression, values, storage, model, llvmFunctions);
+        if (_temporaryScopes.Count > 0 && model.TemporaryReleases.Contains(expression))
+            KeepTemporary(builder, value, model.ExpressionTypes[expression], model);
+        return value;
+    }
+
+    private LLVMValueRef EmitExpressionValue(
         LLVMContextRef context,
         LLVMBuilderRef builder,
         Expression expression,

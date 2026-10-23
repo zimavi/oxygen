@@ -61,6 +61,10 @@ internal static class BuildCommand
     {
         Description = "Treat semantic warnings as errors"
     };
+    public static readonly Option<bool> NoExceptions = new("--no-exceptions")
+    {
+        Description = "Build without exception support: a throw ends the program with exit code 101, and a catch clause never runs (docs/exceptions.md)"
+    };
     public static readonly Option<string> Optimization = new("--optimization", "-O")
     {
         Description = "Clang optimization level, for example O0 or O2. Default: O2"
@@ -112,6 +116,7 @@ internal static class BuildCommand
             Unoptimized,
             WarningsAsErrors,
             ManualMemory,
+            NoExceptions,
             Optimization,
             Jobs,
             Runtime,
@@ -230,7 +235,8 @@ internal static class BuildCommand
         var libraryGenerics = importedLoaded.SelectMany(loaded => loaded.GenericUnits).ToList();
         var semanticResult = new SemanticAnalyzer(Log.Logger.ForContext("SourceContext", "Semantic"))
             {
-                DefaultMemoryMode = result.GetValue(ManualMemory) ? MemoryMode.Manual : MemoryMode.Automatic
+                DefaultMemoryMode = result.GetValue(ManualMemory) ? MemoryMode.Manual : MemoryMode.Automatic,
+                ExceptionsEnabled = !result.GetValue(NoExceptions)
             }
             .AnalyzeWithDiagnostics(
                 resolved.Units.Concat(libraryGenerics.Select(generic => generic.Unit)).ToList(),
@@ -253,7 +259,7 @@ internal static class BuildCommand
         {
             // The program's module is the one its first source file declares, which its metadata names.
             var programModule = resolved.Units.FirstOrDefault()?.ModuleName ?? "program";
-            generated = new LlvmModuleGenerator(target).Generate(programModule, semanticResult.Model!,
+            generated = new LlvmModuleGenerator(target, !result.GetValue(NoExceptions)).Generate(programModule, semanticResult.Model!,
                 GenericsOf(resolved.Units, resolved.Sources, programModule), library);
         }
         catch (LlvmVerificationException exception)
@@ -351,7 +357,7 @@ internal static class BuildCommand
         try
         {
             foreach (var moduleName in moduleNames)
-                modules.Add(new LlvmModuleGenerator(target).Generate(moduleName, model,
+                modules.Add(new LlvmModuleGenerator(target, !result.GetValue(NoExceptions)).Generate(moduleName, model,
                     GenericsOf(units, sources, moduleName), library: true));
             return BuildLibrary(result, standardLibraries, modules, target, sources, formatter, useColor);
         }

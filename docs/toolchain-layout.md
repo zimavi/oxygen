@@ -105,9 +105,19 @@ an installation on a Windows runner and on a Linux runner, checks each one, and 
 - `oxygen-<version>-windows-x86_64.zip`
 - `oxygen-<version>-linux-x86_64.tar.gz`
 
-Each archive holds one folder named after the archive, with `bin`, `lib` and `share` inside it. The
-release is named `v<version>`, and the workflow creates its tag at the commit it built, only after
-every archive has built. The release gets both archives and a `SHA256SUMS` file, which lists the
+Each archive holds one folder named after the archive, with `bin`, `lib` and `share` inside it, and
+an installer beside them: `install.ps1` on Windows, `install.sh` on Linux. The workflow unpacks each
+archive, runs its installer into a prefix, refuses a second install, updates the prefix, checks it,
+and uninstalls it. The installers install into a prefix (`%LOCALAPPDATA%\Oxygen` and `~/.local/oxygen`
+by default). Install copies the installer to `share/oxygen`, so the prefix can be uninstalled after
+the archive is deleted. `-Update` or `--update` replaces the folders that an installation owns: `bin`,
+`lib`, `share/oxygen/stdlib` and the copied installer. `-Uninstall` or `--uninstall` (run from
+`share/oxygen`, or with `--prefix`) removes those folders, and the prefix when nothing else is in it.
+Other files in the prefix are kept. `-AddToPath` (Windows) puts `bin` on the user PATH, which uninstall
+removes again. `--add-to-path` (Linux) links `oxygenc` into `~/.local/bin`, and uninstall removes that
+link when it points into the prefix. `--sudo` (Linux) links the libraries into `/usr/local/lib`, and
+with `--uninstall` it removes those links. The release is named `v<version>`, and the workflow creates
+its tag at the commit it built, only after every archive has built. The release gets both archives and a `SHA256SUMS` file, which lists the
 SHA-256 hash of each archive. The release notes are generated from the commits since the previous
 release.
 
@@ -151,4 +161,4 @@ What is not done yet:
 
 - **Target.** The scripts build the host target only. The release matrix has two targets, and
   ARM64 targets need a backend target entry, a runtime and standard library build, and a runner.
-- **Uninstall** is a later step of the plan.
+- **Uninstall of a source install.** `scripts/install.*` has no uninstall yet, so a prefix built from the source is removed by hand. Archives are uninstalled with their installer.

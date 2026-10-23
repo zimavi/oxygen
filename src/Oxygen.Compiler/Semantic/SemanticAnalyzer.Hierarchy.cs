@@ -90,6 +90,9 @@ public sealed partial class SemanticAnalyzer
             foreach (var method in classSymbol.Methods)
             {
                 var overridden = inherited.FirstOrDefault(candidate => MethodSignature(candidate) == MethodSignature(method));
+                if (overridden is not null && overridden.DeclaresNoThrow && !method.DeclaresNoThrow)
+                    throw DeclarationError(classSymbol.QualifiedName, $"Method '{method.Name}' overrides a @nothrow method, so it must be @nothrow too",
+                        method.Declaration.Location, method.Name.Length);
                 if (method.Declaration.IsOverride)
                 {
                     if (overridden is null)
@@ -133,6 +136,9 @@ public sealed partial class SemanticAnalyzer
                     && SemanticTypeComparer.Instance.Equals(method.ReturnType, contract.ReturnType)).ToList();
                 if (implementations.Count == 0)
                     throw DeclarationError(classSymbol.QualifiedName, $"Class '{classSymbol.Name}' does not implement interface method '{contract.Name}'",
+                        classSymbol.Declaration.Location);
+                if (contract.DeclaresNoThrow && implementations.Any(method => !method.DeclaresNoThrow))
+                    throw DeclarationError(classSymbol.QualifiedName, $"Interface method '{contract.Name}' is @nothrow, so class '{classSymbol.Name}' must implement it as @nothrow",
                         classSymbol.Declaration.Location);
                 // Interface members are public, so the implementation that satisfies the contract must be public too.
                 if (!implementations.Any(method => method.Visibility == Visibility.Public))

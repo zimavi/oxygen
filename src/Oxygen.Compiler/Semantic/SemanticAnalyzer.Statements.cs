@@ -415,6 +415,9 @@ public sealed partial class SemanticAnalyzer
                     var catchAllSeen = false;
                     foreach (var (catchClause, index) in tryStatement.Catches.Select((item, index) => (item, index)))
                     {
+                        if (!ExceptionsEnabled)
+                            ReportWarning("This catch clause never runs, since the program is built without exceptions",
+                                catchClause.Location, "catch".Length);
                         SemanticType? catchType = null;
                         if (catchClause.ExceptionType is not null)
                         {
@@ -497,6 +500,13 @@ public sealed partial class SemanticAnalyzer
                     expressionTypes,
                     resolvedCalls,
                     allowVoid: true);
+                // A call to a @noreturn function ends the path, so the statements after it are unreachable.
+                if (expressionStatement.Expression is CallExpression call && resolvedCalls.TryGetValue(call, out var callee)
+                    && callee.DeclaresNoReturn)
+                {
+                    _reachable = false;
+                    return true;
+                }
                 return false;
             default:
                 throw new InvalidOperationException($"Unsupported statement type {statement.GetType().Name}.");
@@ -815,14 +825,6 @@ public sealed partial class SemanticAnalyzer
         if (assignment.Target is IdentifierExpression assignedIdentifier)
         {
             var variable = scope.Lookup(assignedIdentifier.Name, assignedIdentifier.Location);
-            if (IsOwnedClass(valueType) && assignment.Value is IdentifierExpression sourceIdentifier)
-            {
-                var source = scope.Lookup(sourceIdentifier.Name, sourceIdentifier.Location);
-                if (source.Declaration is VariableDeclarationStatement sourceDeclaration
-                    && scope.LookupDepth(assignedIdentifier.Name, assignedIdentifier.Location)
-                    > scope.LookupDepth(sourceIdentifier.Name, sourceIdentifier.Location))
-                    _escapingClassLocals.Add(sourceDeclaration);
-            }
             // A plain assignment gives the pointer the nullness of its value. A compound one (`p += n`) moves it to an unknown address.
             if ((variable.Type.IsPointer || variable.Type.IsFunctionPointer) && !IsAddressTaken(function, assignedIdentifier.Name))
                 SetPointerNullness(variable, assignment.Operator == TokenKind.Equals
@@ -841,6 +843,9 @@ public sealed partial class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
+        if (function.DeclaresNoReturn)
+            throw Error($"Function '{function.Name}' is @noreturn, so it cannot return", returnStatement.Location, "return".Length);
+
         if (returnStatement.Value is null)
         {
             if (!function.ReturnType.IsVoid)
@@ -859,9 +864,6 @@ public sealed partial class SemanticAnalyzer
         var valueType = AnalyzeExpression(returnStatement.Value, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
             expectedType: function.ReturnType);
         RequireStackObjectNotReturned(returnStatement.Value, scope);
-        if (IsOwnedClass(valueType) && returnStatement.Value is IdentifierExpression identifier
-            && scope.Lookup(identifier.Name, identifier.Location).Declaration is VariableDeclarationStatement declaration)
-            _escapingClassLocals.Add(declaration);
         if (!CanAssign(function.ReturnType, returnStatement.Value, valueType))
         {
             throw ErrorWithCode(DiagnosticCode.ConversionMismatch, 
@@ -910,6 +912,8 @@ public sealed partial class SemanticAnalyzer
     {
         var symbol = scope.Lookup(target.Name, target.Location);
         RecordGlobalReference(target, symbol);
+        if (symbol.Declaration is VariableDeclarationStatement assignedDeclaration)
+            _localReferences[target] = assignedDeclaration;
         var type = symbol.Type;
         expressionTypes[target] = type;
         return type;

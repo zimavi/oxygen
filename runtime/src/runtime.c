@@ -25,10 +25,12 @@ static LONG CALLBACK oxygen_hardware_fault_handler(EXCEPTION_POINTERS *exception
  * no state of its own: it creates the program's context, and the exit handler, the console settings and the fault handler are each
  * program's own registrations. Their effects are idempotent, and the first fault handler to run stops the process, so a second start
  * does not change what a fault does. */
-OXYGEN_RUNTIME_API void __oxygen_runtime_initialize(void)
+OXYGEN_RUNTIME_API void __oxygen_runtime_initialize(uint64_t flags)
 {
     oxygen_context_begin();
+    oxygen_context_current()->runtime_flags = flags;
     oxygen_io_initialize();
+    oxygen_memory_initialize();
 #if defined(_WIN32)
     /* Oxygen strings are bytes. They are written unchanged: no newline becomes a carriage return and a line feed. */
     _setmode(_fileno(stdout), _O_BINARY);

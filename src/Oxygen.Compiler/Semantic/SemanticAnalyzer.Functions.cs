@@ -15,7 +15,8 @@ public sealed partial class SemanticAnalyzer
         IReadOnlyList<ImportDeclaration> imports,
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls,
-        ConstructorDeclaration? constructor = null)
+        ConstructorDeclaration? constructor = null,
+        SyntaxNode? noThrowKey = null)
     {
         // A generic instance is analysed when a call to it is analysed, which can be inside the flow of another body. The
         // outer body's flow state is saved and restored, so the instance starts from a clean state.
@@ -35,6 +36,7 @@ public sealed partial class SemanticAnalyzer
         try
         {
             AnalyzeFunctionBody(function, functions, moduleName, imports, expressionTypes, resolvedCalls, constructor);
+            RecordNoThrowBody(function, noThrowKey, constructor, expressionTypes, resolvedCalls);
         }
         finally
         {
@@ -120,12 +122,16 @@ public sealed partial class SemanticAnalyzer
         AnalyzeBlock(function.Declaration.Body, parameterScope, function, functions, moduleName, imports, expressionTypes, resolvedCalls);
         // A non-void function must not reach its end. Reachability follows every path, including switch fall-through,
         // breaks and loops that never end, so it decides this rather than whether the last statement returns.
-        if (!function.ReturnType.IsVoid && _reachable && !_statementErrorReported)
+        if (function.DeclaresNoReturn && _reachable && !_statementErrorReported)
+        {
+            throw Error($"Function '{function.Name}' is @noreturn, but it can return: every path must end in a throw, a call to a @noreturn function, or a loop that never ends",
+                function.Declaration.Location, function.Name.Length);
+        }
+        if (!function.ReturnType.IsVoid && !function.DeclaresNoReturn && _reachable && !_statementErrorReported)
         {
             throw ErrorWithCode(DiagnosticCode.MustReturn, $"Function '{function.Name}' must return a value", function.Declaration.Location);
         }
 
-        CollectAutomaticFrees(function);
         if (_diagnostics is not null)
         {
             foreach (var variable in _declaredVariables)
@@ -148,7 +154,6 @@ public sealed partial class SemanticAnalyzer
                 }
             }
 
-            WarnAboutUnfreedAllocations(function);
         }
     }
 
@@ -162,10 +167,9 @@ public sealed partial class SemanticAnalyzer
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
         // Inherited fields are initialized by the base class's constructor, which runs before this one.
-        foreach (var field in ownerClass.Fields.Where(field => ownerClass.DeclaresField(field.Name)))
+        foreach (var field in ownerClass.OwnFields)
         {
-            var initializer = _fieldInitializerOverrides?.GetValueOrDefault(field.Declaration)
-                ?? field.Declaration.Initializer;
+            var initializer = FieldInitializer(field);
             if (initializer is null)
                 continue;
             var fieldType = SubstituteGenericType(field.Type, _genericTypes);

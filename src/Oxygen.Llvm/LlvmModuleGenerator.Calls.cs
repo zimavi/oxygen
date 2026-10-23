@@ -103,27 +103,14 @@ public sealed partial class LlvmModuleGenerator
         {
             var argument = argumentsWithDefaults[index];
             var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
-            value = CoerceValue(builder, value, model.ExpressionTypes[argument], function.Parameters[index].Type, model);
-            if (UsesPointerStringAbi(function) && function.Parameters[index].Type.Kind == SemanticTypeKind.String)
-            {
-                var storagePointer = BuildEntryAlloca(builder, ToLlvmStringType(), "cabi.string");
-                builder.BuildStore(value, storagePointer);
-                value = storagePointer;
-            }
-
-            if (argument is IdentifierExpression identifier && function.Parameters[index].Type.IsClass)
+            arguments.Add(ArgumentForParameter(builder, value, model.ExpressionTypes[argument], function, index, model));
+            // A class argument is borrowed: the caller keeps the object and releases it. Only a value class is a copy that the callee takes.
+            if (argument is IdentifierExpression identifier && IsValueClass(function.Parameters[index].Type, model))
                 RemoveOwned(identifier.Name);
-            arguments.Add(value);
         }
 
         if (ReturnsStringThroughPointer(function))
-        {
-            var result = BuildEntryAlloca(builder, ToLlvmStringType(), "cabi.result");
-            arguments.Add(result);
-            EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function],
-                arguments.ToArray(), string.Empty);
-            return builder.BuildLoad2(ToLlvmStringType(), result, "string.result");
-        }
+            return EmitCallReturningString(builder, function, arguments, llvmFunctions);
 
         var resultName = function.ReturnType.IsVoid ? string.Empty : "call";
         // A base call is direct, even when the method is virtual: the base class's own implementation runs.
@@ -175,16 +162,53 @@ public sealed partial class LlvmModuleGenerator
                 ? direct
                 : builder.BuildLoad2(ToLlvmType(receiverType, model), storage[receiverName], receiverName);
         }
-        var arguments = new List<LLVMValueRef> { receiverValue };
+        // The receiver is the first parameter, so the arguments fill the parameters after it.
+        var arguments = new List<LLVMValueRef> { PassStringByPointer(builder, receiverValue, function, 0) };
         for (var index = 0; index < argumentsWithDefaults.Count; index++)
         {
             var argument = argumentsWithDefaults[index];
             var value = EmitExpression(context, builder, argument, values, storage, model, llvmFunctions);
-            arguments.Add(CoerceValue(builder, value, model.ExpressionTypes[argument],
-                function.Parameters[index + 1].Type, model));
+            arguments.Add(ArgumentForParameter(builder, value, model.ExpressionTypes[argument], function, index + 1, model));
         }
+        if (ReturnsStringThroughPointer(function))
+            return EmitCallReturningString(builder, function, arguments, llvmFunctions);
         return EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function],
             arguments.ToArray(), function.ReturnType.IsVoid ? string.Empty : "call");
+    }
+
+    // An argument as the callee's parameter at parameterIndex takes it: converted to the parameter's type, and passed by pointer when it is a
+    // string of an imported function.
+    private LLVMValueRef ArgumentForParameter(
+        LLVMBuilderRef builder,
+        LLVMValueRef value,
+        SemanticType argumentType,
+        FunctionSymbol function,
+        int parameterIndex,
+        SemanticModel model) =>
+        PassStringByPointer(builder, CoerceValue(builder, value, argumentType, function.Parameters[parameterIndex].Type, model),
+            function, parameterIndex);
+
+    // A string passed to an imported function is passed by pointer, which is how the imported declaration takes it (UsesPointerStringAbi).
+    private LLVMValueRef PassStringByPointer(LLVMBuilderRef builder, LLVMValueRef value, FunctionSymbol function, int parameterIndex)
+    {
+        if (!UsesPointerStringAbi(function) || function.Parameters[parameterIndex].Type.Kind != SemanticTypeKind.String)
+            return value;
+        var storagePointer = BuildEntryAlloca(builder, ToLlvmStringType(), "cabi.string");
+        builder.BuildStore(value, storagePointer);
+        return storagePointer;
+    }
+
+    // A function that returns a string through a pointer gets the result's storage as its last argument, and the caller reads it back.
+    private LLVMValueRef EmitCallReturningString(
+        LLVMBuilderRef builder,
+        FunctionSymbol function,
+        List<LLVMValueRef> arguments,
+        IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
+    {
+        var result = BuildEntryAlloca(builder, ToLlvmStringType(), "cabi.result");
+        arguments.Add(result);
+        EmitCallOrInvoke(builder, llvmFunctions[function].FunctionType, llvmFunctions[function], arguments.ToArray(), string.Empty);
+        return builder.BuildLoad2(ToLlvmStringType(), result, "string.result");
     }
 
     // The arguments of a call in the order of the parameters they fill. The binding is the analyzer's: a named argument is
@@ -226,7 +250,8 @@ public sealed partial class LlvmModuleGenerator
         LLVMValueRef[] arguments,
         string resultName)
     {
-        if (_exceptionContexts.Count == 0)
+        // A call in a @nothrow function is a plain call: nothing it calls can throw, and there is nothing to unwind to.
+        if (_noThrowFunction || _exceptionContexts.Count == 0)
             return builder.BuildCall2(functionType, target, arguments, resultName);
 
         var exceptionContext = _exceptionContexts.Peek();

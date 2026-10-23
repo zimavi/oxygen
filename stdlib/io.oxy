@@ -179,10 +179,12 @@ public void println<T : Printable>(T value) {
 }
 
 // Writes a byte as the character it encodes, so 97u8 (or 'a') is written as a. print(value) of a u8 writes its number.
+@nothrow
 public void print_char(u8 value) {
     write_stdout_byte(value);
 }
 
+@nothrow
 public void println_char(u8 value) {
     write_stdout_byte(value);
     write_stdout("\n");

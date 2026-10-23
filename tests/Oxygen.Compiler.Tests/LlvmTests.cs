@@ -810,8 +810,9 @@ public sealed class LlvmTests
     [Fact]
     public void EmitsNestedDestructorsInReverseScopeOrder()
     {
+        // The array index keeps main from being inferred @nothrow, so the locals keep their unwind cleanup.
         var model = Analyze(
-            "class Box { ~Box() { } } i32 main() { Box outer = Box(); { Box inner = Box(); } return 0; }");
+            "class Box { ~Box() { } } i32 main() { Box outer = Box(); { Box inner = Box(); } i32[1] values = {0}; return values[0]; }");
 
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
@@ -898,9 +899,9 @@ public sealed class LlvmTests
 
         Assert.Contains("define double @_Ox_v1_m7program_f9calculate_p1_f64", ir);
         Assert.Contains("fmul", ir);
-        Assert.Contains("declare void @__oxygen_runtime_initialize()", ir);
+        Assert.Contains("declare void @__oxygen_runtime_initialize(i64)", ir);
         Assert.Contains("define i32 @main(i32 %argc, ptr %argv)", ir);
-        Assert.Contains("call void @__oxygen_runtime_initialize()", ir);
+        Assert.Contains("call void @__oxygen_runtime_initialize(i64 1)", ir);
         Assert.Contains("invoke i32 @_Ox_v1_m7program_f4main_p0_()", ir);
     }
 

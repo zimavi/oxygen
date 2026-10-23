@@ -1,0 +1,7 @@
+module std.process;
+
+// Ends the program at once with exit code 101, as every runtime failure does. Nothing is printed here, so the caller writes any message
+// before the call. The C runtime does the work (oxygen_runtime_abort), and the call never returns.
+@extern("oxygen_runtime_abort")
+@noreturn
+public extern void abort();

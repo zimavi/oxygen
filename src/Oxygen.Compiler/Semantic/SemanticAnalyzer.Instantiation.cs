@@ -21,6 +21,10 @@ public sealed partial class SemanticAnalyzer
     // Field initializers of the class instantiation whose constructor is being analyzed.
     private IReadOnlyDictionary<ClassFieldDeclaration, Expression>? _fieldInitializerOverrides;
 
+    // The initializer of a field. A generic instance may replace it with its own, which _fieldInitializerOverrides holds.
+    private Expression? FieldInitializer(ClassFieldSymbol field) =>
+        _fieldInitializerOverrides?.GetValueOrDefault(field.Declaration) ?? field.Declaration.Initializer;
+
     private static bool IsOpenSpecialization(FunctionSymbol symbol) =>
         symbol.SpecializationArguments?.Any(ContainsGenericParameter) == true;
 

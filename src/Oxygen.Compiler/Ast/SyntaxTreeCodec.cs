@@ -419,6 +419,7 @@ public static class SyntaxTreeCodec
             Enum(n.Visibility);
             Loc(n.Location);
             OptNode(n.Initializer);
+            OptItems(n.Annotations, Node);
         }
 
         private void Destructor(DestructorDeclaration n)
@@ -1093,9 +1094,12 @@ public static class SyntaxTreeCodec
             var body = Typed<BlockStatement>();
             var visibility = Enum<Visibility>();
             var location = Loc();
+            var initializer = OptNode<ConstructorInitializer>();
+            var annotations = OptItems(Typed<AnnotationSyntax>);
             return new ConstructorDeclaration(className, parameters, body, visibility, location)
             {
-                Initializer = OptNode<ConstructorInitializer>()
+                Initializer = initializer,
+                Annotations = annotations
             };
         }
 

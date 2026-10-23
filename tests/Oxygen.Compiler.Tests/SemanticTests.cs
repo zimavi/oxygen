@@ -558,14 +558,15 @@ public sealed class SemanticTests
         Assert.Contains("For-in requires a fixed array or iterator-protocol collection", exception.Message);
     }
 
+    // A manual iter() call is an ordinary call. Its result is an object that the local owns, so the local frees it at its scope end.
     [Fact]
-    public void ManualIterCallIsRejectedUntilCallResultsAreOwned()
+    public void AManualIterCallIsAllowedAndItsResultIsOwnedByTheLocal()
     {
-        var exception = Assert.Throws<SemanticException>(() => Analyze(
+        var model = Analyze(
             "class Iter { } class Values { Iter iter() { return new Iter(); } } " +
-            "i32 main() { Values v = new Values(); var it = v.iter(); return 0; }"));
+            "i32 main() { Values v = new Values(); var it = v.iter(); return 0; }");
 
-        Assert.Contains("Calling iter() by hand is not supported yet", exception.Message);
+        Assert.Contains(model.AutomaticallyFreedLocals, declaration => declaration.Name == "it");
     }
 
     [Fact]
@@ -1547,7 +1548,30 @@ public sealed class SemanticTests
         var model = Analyze(
             "class Box { i32 value = 1; } Box make() { Box b = new Box(); return b; } i32 main() { Box x = make(); delete x; return 0; }");
 
-        Assert.Empty(model.AutomaticallyFreedLocals);
+        // The object that make() returns is freed by its caller, not by make(), where the local b is moved out.
+        Assert.DoesNotContain(model.AutomaticallyFreedLocals, declaration => declaration.Name == "b");
+    }
+
+    [Fact]
+    public void AMethodThatStoresItsInstanceKeepsTheVariableItIsCalledOn()
+    {
+        var model = Analyze(
+            "class Node { i32 value = 9; void remember(Holder holder) { holder.item = this; } } " +
+            "class Holder { Node item; } " +
+            "i32 main() { Holder holder = new Holder(); Node node = new Node(); node.remember(holder); return 0; }");
+
+        // The holder refers to node after the call, so node is not freed at the end of main.
+        Assert.DoesNotContain(model.AutomaticallyFreedLocals, declaration => declaration.Name == "node");
+    }
+
+    [Fact]
+    public void AMethodThatOnlyReadsItsInstanceLeavesTheVariableItIsCalledOnOwned()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; i32 read() { return value; } } " +
+            "i32 main() { Box box = new Box(); return box.read(); }");
+
+        Assert.Contains(model.AutomaticallyFreedLocals, declaration => declaration.Name == "box");
     }
 
     [Fact]

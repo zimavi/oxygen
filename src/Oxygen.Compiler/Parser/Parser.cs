@@ -209,6 +209,7 @@ public sealed partial class Parser
         DestructorDeclaration? destructor = null;
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
+            var memberAnnotations = ParseAnnotations();
             var memberVisibility = Visibility.Public;
             var hasVisibility = false;
             var isVirtual = false;
@@ -239,6 +240,7 @@ public sealed partial class Parser
             {
                 if (isStatic)
                     throw Error("A destructor cannot be static.", Current);
+                RejectMemberAnnotations(memberAnnotations, "destructors");
                 var destructorLocation = Advance().Location;
                 var destructorName = Consume(TokenKind.Identifier, "Expected a destructor name.").Lexeme;
                 Consume(TokenKind.OpenParenthesis, "Expected '(' after destructor name.");
@@ -255,12 +257,13 @@ public sealed partial class Parser
             {
                 if (isStatic)
                     throw Error("A constructor cannot be static.", Current);
+                ValidateConstructorAnnotations(memberAnnotations);
                 var constructorLocation = Current.Location;
                 Advance();
                 var parameters = ParseParameters();
                 var initializer = ParseConstructorInitializer();
                 constructors.Add(new ConstructorDeclaration(name, parameters, ParseBlock(), memberVisibility,
-                    constructorLocation) { Initializer = initializer });
+                    constructorLocation) { Initializer = initializer, Annotations = memberAnnotations });
                 continue;
             }
 
@@ -269,6 +272,7 @@ public sealed partial class Parser
             // A function pointer field declares its name inside its form. A method or property returns a type first, so it cannot start here.
             if (IsFunctionPointerDeclarationStart())
             {
+                RejectMemberAnnotations(memberAnnotations, "fields");
                 var (fieldType, fieldName) = ParseDeclaredName(allowInferred: false, "Expected a class member name.");
                 Expression? fieldInitializer = Match(TokenKind.Equals) ? ParseExpression() : null;
                 if (isConst && fieldInitializer is null)
@@ -284,10 +288,12 @@ public sealed partial class Parser
             {
                 var parameters = ParseParameters();
                 methods.Add(new FunctionDeclaration(type, memberName, parameters, ParseBlock(), memberVisibility,
-                    memberLocation, IsVirtual: isVirtual, IsOverride: isOverride, IsStatic: isStatic));
+                    memberLocation, IsVirtual: isVirtual, IsOverride: isOverride, IsStatic: isStatic,
+                    Annotations: memberAnnotations));
             }
             else if (Check(TokenKind.OpenBrace))
             {
+                RejectMemberAnnotations(memberAnnotations, "properties");
                 var propertyToken = Current;
                 var property = ParseProperty(type, memberName, memberVisibility, memberLocation, isVirtual, isOverride);
                 if (!isStatic)
@@ -301,6 +307,7 @@ public sealed partial class Parser
             }
             else
             {
+                RejectMemberAnnotations(memberAnnotations, "fields");
                 if (isVirtual || isOverride)
                     throw Error("Only class methods may use 'virtual' or 'override'.", Current);
                 Expression? initializer = null;
@@ -336,6 +343,25 @@ public sealed partial class Parser
         return type;
     }
 
+    // A constructor takes @nothrow and nothing else.
+    private void ValidateConstructorAnnotations(IReadOnlyList<AnnotationSyntax> annotations)
+    {
+        foreach (var annotation in annotations)
+        {
+            if (annotation.Name != "nothrow")
+                throw Error($"Annotation '@{annotation.Name}' is not supported on constructors.", Current);
+            if (annotation.Arguments.Count != 0)
+                throw Error("Annotation '@nothrow' does not accept arguments.", Current);
+        }
+    }
+
+    // Annotations are accepted on methods only. A member that is not a method names the annotation it cannot take.
+    private void RejectMemberAnnotations(IReadOnlyList<AnnotationSyntax> annotations, string memberKind)
+    {
+        if (annotations.Count > 0)
+            throw Error($"Annotation '@{annotations[0].Name}' is not supported on {memberKind}.", Current);
+    }
+
     private InterfaceDeclaration ParseInterface()
     {
         var location = Current.Location;
@@ -349,6 +375,7 @@ public sealed partial class Parser
         var properties = new List<PropertyDeclaration>();
         while (!Check(TokenKind.CloseBrace) && !Check(TokenKind.EndOfFile))
         {
+            var methodAnnotations = ParseAnnotations();
             var memberVisibility = ParseVisibility(Visibility.Public);
             if (Check(TokenKind.Static))
                 throw Error("An interface cannot declare static members; its contract is per instance.", Current);
@@ -357,13 +384,15 @@ public sealed partial class Parser
             var methodName = ConsumeIdentifierLike("Expected an interface method name.").Lexeme;
             if (Check(TokenKind.OpenBrace))
             {
+                RejectMemberAnnotations(methodAnnotations, "properties");
                 properties.Add(ParseProperty(returnType, methodName, memberVisibility, methodLocation));
                 continue;
             }
             var parameters = ParseParameters();
             Consume(TokenKind.Semicolon, "Expected ';' after interface method.");
             methods.Add(new FunctionDeclaration(returnType, methodName, parameters,
-                new BlockStatement([], methodLocation), memberVisibility, methodLocation, IsExternalDeclaration: true));
+                new BlockStatement([], methodLocation), memberVisibility, methodLocation, IsExternalDeclaration: true,
+                Annotations: methodAnnotations));
         }
         Consume(TokenKind.CloseBrace, "Expected '}' after interface declaration.");
         Match(TokenKind.Semicolon);

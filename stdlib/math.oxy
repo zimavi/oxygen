@@ -1,69 +1,86 @@
 ﻿module std.math;
 
+@nothrow
 public f64 abs(f64 x) {
     return c_fabs_f64(x);
 }
 
+@nothrow
 public f32 floor(f32 x) {
     return c_floor_f32(x);
 }
 
+@nothrow
 public f64 floor(f64 x) {
     return c_floor_f64(x);
 }
 
+@nothrow
 public f32 ceil(f32 x) {
     return c_ceil_f32(x);
 }
 
+@nothrow
 public f64 ceil(f64 x) {
     return c_ceil_f64(x);
 }
 
+@nothrow
 public f32 trunc(f32 x) {
     return c_trunc_f32(x);
 }
 
+@nothrow
 public f64 trunc(f64 x) {
     return c_trunc_f64(x);
 }
 
+@nothrow
 public f32 round(f32 x) {
     return c_round_f32(x);
 }
 
+@nothrow
 public f64 round(f64 x) {
     return c_round_f64(x);
 }
 
+@nothrow
 public f32 fmod(f32 x, f32 y) {
     return c_fmod_f32(x, y);
 }
 
+@nothrow
 public f64 fmod(f64 x, f64 y) {
     return c_fmod_f64(x, y);
 }
 
+@nothrow
 public f32 min(f32 x, f32 y) {
     return c_fmin_f32(x, y);
 }
 
+@nothrow
 public f64 min(f64 x, f64 y) {
     return c_fmin_f64(x, y);
 }
 
+@nothrow
 public f32 max(f32 x, f32 y) {
     return c_fmax_f32(x, y);
 }
 
+@nothrow
 public f64 max(f64 x, f64 y) {
     return c_fmax_f64(x, y);
 }
 
+@nothrow
 public f32 copysign(f32 x, f32 sign) {
     return c_copysign_f32(x, sign);
 }
 
+@nothrow
 public f64 copysign(f64 x, f64 sign) {
     return c_copysign_f64(x, sign);
 }

@@ -85,6 +85,8 @@ jobs:
           $folder = Join-Path $env:RUNNER_TEMP (Join-Path "pkg" $name)
           New-Item -ItemType Directory -Force -Path $folder | Out-Null
           Copy-Item -Path "$env:RUNNER_TEMP\oxygen\*" -Destination $folder -Recurse
+          # The installer goes beside bin, lib and share, since it copies them from there.
+          Copy-Item -LiteralPath "packaging\install.ps1" -Destination $folder
           Compress-Archive -Path $folder -DestinationPath "$name.zip"
 
       - name: Pack the archive (Linux)
@@ -94,7 +96,59 @@ jobs:
           folder="$RUNNER_TEMP/pkg/$name"
           mkdir -p "$folder"
           cp -R "$RUNNER_TEMP/oxygen/." "$folder/"
+          # The installer goes beside bin, lib and share, since it copies them from there.
+          cp packaging/install.sh "$folder/install.sh"
+          chmod +x "$folder/install.sh"
           tar -C "$RUNNER_TEMP/pkg" -czf "$name.tar.gz" "$name"
+
+      - name: Test the archive's installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # Unpacks the archive as a user would, then installs it, refuses a second install, updates it, checks the result, and uninstalls it
+        # with the copy of the installer that install left in the prefix.
+        run: |
+          $name = "oxygen-${env:ARCHIVE_VERSION}-${{ matrix.platform }}"
+          $unpacked = Join-Path $env:RUNNER_TEMP "unpacked"
+          Expand-Archive -LiteralPath "$name.zip" -DestinationPath $unpacked -Force
+          $installer = Join-Path $unpacked "$name\install.ps1"
+          $prefix = Join-Path $env:RUNNER_TEMP "archive-install"
+
+          & $installer -Prefix $prefix
+          $refused = $false
+          try { & $installer -Prefix $prefix } catch { $refused = $true }
+          if (-not $refused) { throw "Installing over an existing installation should fail." }
+          & $installer -Prefix $prefix -Update
+          ./scripts/check-installed.ps1 -Prefix $prefix
+
+          & (Join-Path $prefix "share\oxygen\install.ps1") -Uninstall -Prefix $prefix
+          if (Test-Path -LiteralPath $prefix) { throw "Uninstalling left the prefix at '$prefix'." }
+
+      - name: Test the archive's installer (Linux)
+        if: runner.os == 'Linux'
+        # Unpacks the archive as a user would, then installs it, refuses a second install, updates it, checks the result, and uninstalls it
+        # with the copy of the installer that install left in the prefix.
+        run: |
+          name="oxygen-$ARCHIVE_VERSION-${{ matrix.platform }}"
+          unpacked="$RUNNER_TEMP/unpacked"
+          rm -rf "$unpacked"
+          mkdir -p "$unpacked"
+          tar -C "$unpacked" -xzf "$name.tar.gz"
+          installer="$unpacked/$name/install.sh"
+          prefix="$RUNNER_TEMP/archive-install"
+
+          "$installer" --prefix "$prefix"
+          if "$installer" --prefix "$prefix"; then
+            echo "Installing over an existing installation should fail." >&2
+            exit 1
+          fi
+          "$installer" --prefix "$prefix" --update
+          ./scripts/check-installed.sh --prefix "$prefix"
+
+          "$prefix/share/oxygen/install.sh" --uninstall --prefix "$prefix"
+          if [ -e "$prefix" ]; then
+            echo "Uninstalling left the prefix at $prefix." >&2
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

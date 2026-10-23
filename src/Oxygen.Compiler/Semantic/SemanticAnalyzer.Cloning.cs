@@ -262,6 +262,14 @@ public sealed partial class SemanticAnalyzer
                 resolvedCalls[cloned] = function;
             if (_callReceiverTypes.TryGetValue(call, out var receiverType))
                 _callReceiverTypes[cloned] = SubstituteAggregate(receiverType, substitutions, aggregateNames);
+            // A variable's copy names the same variable, but its declaration is a copy too, so the copy's use is unresolved and keeps by name.
+            // `this` in the copy is the copy's own instance.
+            if (_qualifiedReceivers.TryGetValue(call, out var receiver))
+                _qualifiedReceivers[cloned] = receiver switch
+                {
+                    IdentifierExpression identifier => new IdentifierExpression(identifier.Name, identifier.Location),
+                    _ => new ThisExpression(receiver.Location)
+                };
             if (_receiverArgumentCalls.Contains(call))
                 _receiverArgumentCalls.Add(cloned);
             // A static field or property of one instance is named by a call, so the copy names the same global or accessor.

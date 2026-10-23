@@ -16,7 +16,8 @@ public sealed partial class SemanticAnalyzer
             constructor.Declaration.Parameters,
             constructor.Declaration.Body,
             constructor.Visibility,
-            constructor.Declaration.Location);
+            constructor.Declaration.Location,
+            Annotations: constructor.Declaration.DeclaredAnnotations);
         return new FunctionSymbol(
             constructor.ClassName,
             SemanticType.FromPrimitive(PrimitiveType.Void),
@@ -128,6 +129,18 @@ public sealed partial class SemanticAnalyzer
                     }
                     if (!string.Equals(callingConvention, "c", StringComparison.Ordinal))
                         throw Error($"Unsupported calling convention '{callingConvention}'", annotation.Location);
+                    break;
+                case "noreturn":
+                    if (annotation.Arguments.Count != 0)
+                        throw Error("Annotation '@noreturn' does not accept arguments", annotation.Location);
+                    break;
+                case "throws":
+                    if (annotation.Arguments.Count != 0)
+                        throw Error("Annotation '@throws' does not accept arguments", annotation.Location);
+                    break;
+                case "nothrow":
+                    if (annotation.Arguments.Count != 0)
+                        throw Error("Annotation '@nothrow' does not accept arguments", annotation.Location);
                     break;
                 case "manual_memory":
                 case "auto_memory":
