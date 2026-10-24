@@ -433,21 +433,14 @@ public sealed partial class LlvmModuleGenerator
         CleanupOwnedScopesTo(builder, values, storage, model, 0);
     }
 
+    // A return releases every scope on its own path. The scopes stay as they are, since the code after the return is still in them.
     private void EmitOwnedScopeDestructors(
         LLVMBuilderRef builder,
         IReadOnlyDictionary<string, LLVMValueRef> values,
         IReadOnlyDictionary<string, LLVMValueRef> storage,
         SemanticModel model)
     {
-        var snapshots = _ownedScopes.Select(scope => scope.ToArray()).ToArray();
-        foreach (var scope in snapshots)
-            CleanupOwnedScope(builder, values, storage, model, scope.ToList());
-        var index = 0;
-        foreach (var scope in _ownedScopes)
-        {
-            scope.AddRange(snapshots[index]);
-            index++;
-        }
+        CleanupOwnedScopesForJump(builder, values, storage, model, 0);
     }
 
     // A jump (break or continue) out of the scopes above a depth. The jump releases their locals on its own path only: the code after the jump
