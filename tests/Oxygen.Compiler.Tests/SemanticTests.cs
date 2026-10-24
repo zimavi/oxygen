@@ -566,8 +566,8 @@ public sealed class SemanticTests
             "class Iter { } class Values { Iter iter() { return new Iter(); } } " +
             "i32 main() { Values v = new Values(); var it = v.iter(); return 0; }");
 
-        // A call's result may be shared with a holder, so its owner releases its count rather than freeing the object directly.
-        Assert.Contains(model.ReleasedLocals, declaration => declaration.Name == "it");
+        // The iterator comes from a function that returns a fresh object, so the local frees it directly (step 4).
+        Assert.Contains(model.AutomaticallyFreedLocals, declaration => declaration.Name == "it");
     }
 
     [Fact]
@@ -1551,6 +1551,39 @@ public sealed class SemanticTests
 
         // The object that make() returns is freed by its caller, not by make(), where the local b is moved out.
         Assert.DoesNotContain(model.AutomaticallyFreedLocals, declaration => declaration.Name == "b");
+    }
+
+    [Fact]
+    public void AResultOfAFunctionThatReturnsAFreshObjectIsFreedDirectly()
+    {
+        var model = Analyze(
+            "class Box { i32 value = 1; } Box make() { return new Box(); } i32 main() { Box b = make(); return b.value; }");
+
+        Assert.Contains(model.AutomaticallyFreedLocals, declaration => declaration.Name == "b");
+    }
+
+    [Fact]
+    public void AResultOfAFunctionThatReturnsAFieldIsReleasedByCount()
+    {
+        // The field's object may be held elsewhere, so the local releases its count rather than freeing the object.
+        var model = Analyze(
+            "class Box { i32 value = 1; } class Holder { public Box item; } " +
+            "Box peek(Holder holder) { return holder.item; } " +
+            "i32 main() { Holder holder = new Holder(); Box b = peek(holder); return b.value; }");
+
+        Assert.Contains(model.ReleasedLocals, declaration => declaration.Name == "b");
+        Assert.DoesNotContain(model.AutomaticallyFreedLocals, declaration => declaration.Name == "b");
+    }
+
+    [Fact]
+    public void AFunctionThatReturnsAnotherFunctionsFreshResultIsUniqueToo()
+    {
+        // The fixpoint: wrap returns a local that holds make's fresh object, so the caller of wrap frees its result directly.
+        var model = Analyze(
+            "class Box { i32 value = 1; } Box make() { return new Box(); } " +
+            "Box wrap() { Box b = make(); return b; } i32 main() { Box x = wrap(); return x.value; }");
+
+        Assert.Contains(model.AutomaticallyFreedLocals, declaration => declaration.Name == "x");
     }
 
     [Fact]

@@ -34,6 +34,8 @@ public sealed partial class SemanticAnalyzer
     private readonly HashSet<VariableDeclarationStatement> _ownedDeclarations = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<Expression> _movedReturnValues = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<Expression> _countedTemporaries = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<FunctionDeclaration> _uniqueFunctions = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<CallExpression> _uniqueCalls = new(ReferenceEqualityComparer.Instance);
 
     // Locals released by `delete`; locals whose value is read (not only used as the receiver of a member access); and
     // whether the identifier being analyzed is only a receiver.
@@ -164,6 +166,8 @@ public sealed partial class SemanticAnalyzer
         _ownedDeclarations.Clear();
         _movedReturnValues.Clear();
         _countedTemporaries.Clear();
+        _uniqueFunctions.Clear();
+        _uniqueCalls.Clear();
         _stackObjectLocals.Clear();
         _deletedLocals.Clear();
         _maybeDeletedLocals.Clear();
@@ -869,7 +873,8 @@ public sealed partial class SemanticAnalyzer
             new HashSet<VariableDeclarationStatement>(_releasedLocals, ReferenceEqualityComparer.Instance),
             new HashSet<VariableDeclarationStatement>(_ownedDeclarations, ReferenceEqualityComparer.Instance),
             new HashSet<Expression>(_movedReturnValues, ReferenceEqualityComparer.Instance),
-            new HashSet<Expression>(_countedTemporaries, ReferenceEqualityComparer.Instance));
+            new HashSet<Expression>(_countedTemporaries, ReferenceEqualityComparer.Instance),
+            new HashSet<CallExpression>(_uniqueCalls, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

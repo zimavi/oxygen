@@ -22,7 +22,7 @@ public sealed partial class LlvmModuleGenerator
         var value = EmitExpressionValue(context, builder, expression, values, storage, model, llvmFunctions);
         if (_temporaryScopes.Count > 0 && model.TemporaryReleases.Contains(expression))
             KeepTemporary(builder, value, model.ExpressionTypes[expression], model,
-                expression is CallExpression || model.CountedTemporaries.Contains(expression));
+                expression is CallExpression call && !model.UniqueCalls.Contains(call) || model.CountedTemporaries.Contains(expression));
         return value;
     }
 

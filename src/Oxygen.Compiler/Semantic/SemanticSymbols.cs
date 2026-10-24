@@ -261,7 +261,8 @@ public sealed class SemanticModel
         IReadOnlySet<VariableDeclarationStatement>? releasedLocals = null,
         IReadOnlySet<VariableDeclarationStatement>? ownedDeclarations = null,
         IReadOnlySet<Expression>? movedReturnValues = null,
-        IReadOnlySet<Expression>? countedTemporaries = null)
+        IReadOnlySet<Expression>? countedTemporaries = null,
+        IReadOnlySet<CallExpression>? uniqueCalls = null)
     {
         InferredNoThrow = inferredNoThrow ?? new HashSet<SyntaxNode>(ReferenceEqualityComparer.Instance);
         TemporaryReleases = temporaryReleases ?? new HashSet<Expression>(ReferenceEqualityComparer.Instance);
@@ -304,6 +305,7 @@ public sealed class SemanticModel
         OwnedDeclarations = ownedDeclarations ?? new HashSet<VariableDeclarationStatement>();
         MovedReturnValues = movedReturnValues ?? new HashSet<Expression>();
         CountedTemporaries = countedTemporaries ?? new HashSet<Expression>();
+        UniqueCalls = uniqueCalls ?? new HashSet<CallExpression>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -391,6 +393,9 @@ public sealed class SemanticModel
 
     // The `new` temporaries that are released by count, not freed directly: a callee that borrows them may keep them (step 2b).
     public IReadOnlySet<Expression> CountedTemporaries { get; }
+
+    // The calls whose callee returns a unique object. Their results are freed directly, unless a holder keeps them (step 4).
+    public IReadOnlySet<CallExpression> UniqueCalls { get; }
 
     // Locals that some `delete` releases. Each gets a runtime flag that says whether its object is still alive.
     public IReadOnlySet<VariableDeclarationStatement> DeletedLocals { get; }

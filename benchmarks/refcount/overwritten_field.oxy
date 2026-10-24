@@ -1,0 +1,21 @@
+// A loop that stores a new object into a field each iteration: the store moves the new object in, and the overwrite releases the old one.
+class Box {
+    public i32 value;
+}
+
+class Holder {
+    public Box item;
+}
+
+i32 main() {
+    Holder holder = new Holder();
+    i32 total = 0;
+    i32 i = 0;
+    while (i < 10000000) {
+        holder.item = new Box();
+        holder.item.value = i;
+        total = total + holder.item.value;
+        i = i + 1;
+    }
+    return total % 256;
+}

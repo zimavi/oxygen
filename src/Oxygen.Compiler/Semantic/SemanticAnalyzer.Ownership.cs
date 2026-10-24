@@ -105,6 +105,9 @@ public sealed partial class SemanticAnalyzer
         foreach (var body in _analyzedBodies)
             FlowBody(body.Function.Declaration.Body);
         ComputeReturnsOwned();
+        ComputeUniqueFunctions();
+        foreach (var body in _analyzedBodies)
+            RecordUniqueCalls(body.Function.Declaration);
         foreach (var body in _analyzedBodies)
             ClassifyBody(body);
     }
@@ -486,6 +489,71 @@ public sealed partial class SemanticAnalyzer
     // The functions that return an owned object: every returned value is null, a new object, a call that returns one, or a local that
     // owns its object and is used only in a way that does not keep it elsewhere. Starting from none, the set only grows, so a recursive
     // function returns owned values only when some path proves it.
+    // A function returns a unique object when every value it returns is fresh, so no other reference to it exists: a `new` object, a call
+    // to a unique function, or a local that owns a fresh object and is only read or returned. A caller of a unique function holds the only
+    // count, so it may free the object directly (docs/reference-counting.md, step 4). The set grows, so this is a least fixed point.
+    private void ComputeUniqueFunctions()
+    {
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var body in _analyzedBodies)
+            {
+                var declaration = body.Function.Declaration;
+                if (_uniqueFunctions.Contains(declaration) || body.Function.Memory != MemoryMode.Automatic
+                    || !_returnsOwned.Contains(declaration) || !ReturnsUniqueValues(declaration))
+                    continue;
+                _uniqueFunctions.Add(declaration);
+                changed = true;
+            }
+        }
+    }
+
+    private bool ReturnsUniqueValues(FunctionDeclaration declaration)
+    {
+        var statements = StatementsWithin(declaration.Body).ToList();
+        var returns = statements.OfType<ReturnStatement>().Where(item => item.Value is not null).ToList();
+        if (returns.Count == 0)
+            return false;
+        foreach (var returned in returns)
+        {
+            var value = returned.Value!;
+            if (value is NullLiteralExpression or NewExpression)
+                continue;
+            if (value is CallExpression call && IsUniqueCall(call))
+                continue;
+            if (value is IdentifierExpression identifier && _localReferences.TryGetValue(identifier, out var local)
+                && IsFreshLocal(local, statements))
+                continue;
+            return false;
+        }
+        return true;
+    }
+
+    // A local that is initialized with a fresh object and never assigned, whose every use reads it or returns it, so no other reference exists.
+    private bool IsFreshLocal(VariableDeclarationStatement local, IEnumerable<Statement> statements)
+    {
+        if (!(local.Initializer is NewExpression || local.Initializer is CallExpression initializer && IsUniqueCall(initializer)))
+            return false;
+        return References(statements).Where(reference => reference.Declaration == local)
+            .All(reference => reference.Flow is Flow.Borrow or Flow.Return)
+            && !References(statements).Any(reference => reference.Declaration == local && reference.Flow == Flow.Assign);
+    }
+
+    // A call whose callee is a unique function. A dispatched call may run an implementation that is not analysed here, so it is not unique.
+    private bool IsUniqueCall(CallExpression call) =>
+        _ownershipCalls.TryGetValue(call, out var callee) && callee.CInterop is null && !callee.IsExternal
+        && !IsDispatchedCall(call, callee) && _uniqueFunctions.Contains(callee.Declaration);
+
+    // Records the calls of a body that are unique, so the backend frees their results directly.
+    private void RecordUniqueCalls(FunctionDeclaration declaration)
+    {
+        foreach (var expression in ExpressionsWithReceivers(StatementsWithin(declaration.Body)))
+            if (expression is CallExpression call && IsUniqueCall(call))
+                _uniqueCalls.Add(call);
+    }
+
     // Every function that returns a class or an interface returns a counted reference: a returned owned value moves its count, and any
     // other returned reference is retained first (docs/reference-counting.md, step 2a).
     private void ComputeReturnsOwned()
@@ -497,6 +565,10 @@ public sealed partial class SemanticAnalyzer
                 _returnsOwned.Add(function.Declaration);
         }
     }
+
+    // An initializer that gives its local an object nothing else refers to: a `new` object, or the result of a unique call.
+    private bool IsFreshInitializer(Expression? initializer) =>
+        initializer is NewExpression || initializer is CallExpression call && IsUniqueCall(call);
 
     // The expressions of the statements, each followed by the receiver variable that a qualified call names.
     private IEnumerable<Expression> ExpressionsWithReceivers(IEnumerable<Statement> statements)
@@ -599,7 +671,7 @@ public sealed partial class SemanticAnalyzer
                 _escapingClassLocals.Add(declaration);
             // An object from `new` that nothing else refers to is freed directly. Any other owned object may have been retained by a
             // holder, so its owner releases its count instead. A returned local is moved to the caller, so its scope does not release it.
-            if (automatic && owned && declaration.Initializer is NewExpression && !isEscaping)
+            if (automatic && owned && IsFreshInitializer(declaration.Initializer) && !isEscaping)
                 _autoFreedLocals.Add(declaration);
             else if (automatic && owned && !escapes.Returned.Contains(declaration) && !escapes.Uncertain.Contains(declaration))
                 _releasedLocals.Add(declaration);
@@ -641,7 +713,7 @@ public sealed partial class SemanticAnalyzer
                 if (value is not (NewExpression or CallExpression) || !OwnedExpression(value))
                     continue;
                 _temporaryReleases.Add(value);
-                if (value is NewExpression && _flows.GetValueOrDefault(value, Flow.Escape) == Flow.Escape)
+                if (_flows.GetValueOrDefault(value, Flow.Escape) == Flow.Escape)
                     _countedTemporaries.Add(value);
             }
         }
