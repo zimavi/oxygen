@@ -873,6 +873,11 @@ public sealed partial class LlvmModuleGenerator
                     var thrown = EmitExpression(context, builder, throwStatement.Value!, values, storage, model, llvmFunctions);
                     if (!_usesExceptions)
                         return EmitUnhandledThrow(builder, thrown);
+                    // A thrown local gives its object to the exception, so the unwind cleanup must not destroy it while the exception
+                    // is in flight. The exception's catch releases it.
+                    if (throwStatement.Value is IdentifierExpression thrownIdentifier
+                        && storage.TryGetValue(thrownIdentifier.Name, out var thrownSlot))
+                        ClearUnwindFlagOfSlot(builder, thrownSlot);
                     EmitThrowObject(builder, thrown);
                     return true;
                 }

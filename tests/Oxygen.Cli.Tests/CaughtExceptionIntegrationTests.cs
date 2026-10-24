@@ -197,6 +197,38 @@ public sealed class CaughtExceptionIntegrationTests : IDisposable
         Assert.Equal(232, run.ExitCode);
     }
 
+    // A local that holds the exception gives it to the throw. The unwinding of the function must not destroy the object, so the catch
+    // reads its message and the program ends normally.
+    [SkippableFact]
+    public void ThrowingALocalExceptionFromAFunctionKeepsItForTheCatch()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            void fail() {
+                RuntimeException error = new RuntimeException("local");
+                throw error;
+            }
+
+            i32 main() {
+                try {
+                    fail();
+                } catch (RuntimeException e) {
+                    io.println(e.message);
+                    return 9;
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(9, run.ExitCode);
+        Assert.Equal("local\n", run.Output.Replace("\r\n", "\n"));
+    }
+
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>
         NativeProgram.BuildAndRun(_directory, source);
 }
