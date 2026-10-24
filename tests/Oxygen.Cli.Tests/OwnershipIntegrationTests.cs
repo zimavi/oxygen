@@ -79,6 +79,8 @@ public sealed class OwnershipIntegrationTests : IDisposable
         { "list_elements_are_released_with_the_list", ListElementsAreReleasedWithTheList, 0 },
         { "derived_class_fields_are_released_with_it", DerivedClassFieldsAreReleasedWithIt, 0 },
         { "interface_field_is_released_with_its_holder", InterfaceFieldIsReleasedWithItsHolder, 4 },
+        { "unique_result_is_freed_directly", UniqueResultIsFreedDirectly, 5 },
+        { "unique_result_stored_in_a_holder", UniqueResultStoredInAHolder, 6 },
     };
 
     public static TheoryData<string, string, int> KeptPrograms => new()
@@ -356,6 +358,21 @@ public sealed class OwnershipIntegrationTests : IDisposable
         class Square : Shape { public i32 side = 2; public i32 area() { return side * side; } }
         class Holder { public Shape s; }
         i32 main() { Holder h = new Holder(); h.s = new Square(); return h.s.area(); }
+        """;
+
+    // A function returns a fresh object, so the caller's local frees it directly, with no count operation.
+    private const string UniqueResultIsFreedDirectly = """
+        class Box { public i32 value = 5; }
+        Box make() { return new Box(); }
+        i32 main() { Box b = make(); return b.value; }
+        """;
+
+    // The caller stores the fresh object, so it escapes its local: the local releases its count, and the holder releases the other one.
+    private const string UniqueResultStoredInAHolder = """
+        class Box { public i32 value = 6; }
+        class Holder { public Box item; }
+        Box make() { return new Box(); }
+        i32 main() { Holder h = new Holder(); Box b = make(); h.item = b; return h.item.value; }
         """;
 
     private const string TempArgument = """

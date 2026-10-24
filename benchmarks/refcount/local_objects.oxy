@@ -1,0 +1,16 @@
+// A loop that creates objects which never escape: each is freed directly at the end of its iteration.
+class Box {
+    public i32 value;
+}
+
+i32 main() {
+    i32 total = 0;
+    i32 i = 0;
+    while (i < 10000000) {
+        Box box = new Box();
+        box.value = i;
+        total = total + box.value;
+        i = i + 1;
+    }
+    return total % 256;
+}

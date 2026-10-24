@@ -1,6 +1,6 @@
 # Reference counting for escaping objects
 
-Status: specification (M6a). Steps 0, 1, 2a and 2b are implemented, with object layout version 3, and all of it is uncommitted on `feat/refcount`. The limits at the end of Step 2b rules are the open part. Unique results (step 4) and the benchmark are not done.
+Status: specification (M6a). Steps 0, 1, 2a, 2b and 4 are implemented, with object layout version 3, and all of it is uncommitted on `feat/refcount-unique`. The limits at the end of Step 2b rules are the open part. The atomic forms wait for M6b.
 
 The ownership analysis (`docs/classes-and-interfaces.md`) frees a class object at the end of the scope that owns it, when the object does not escape. An object that escapes (into a field, a container element, or a value that outlives its owner) is currently never freed. This document specifies how such objects are counted and freed when their last reference goes away.
 
@@ -67,7 +67,17 @@ The live-block counter (`OXYGEN_LEAK_REPORT`) counts allocations, not references
 
 ### Unique results
 
-A function returns a unique object when the object was created in that function and never escaped there. Its caller may then free it directly, with no count operation. This is an optimization of the rule above, not a change of meaning: a caller that releases a unique object frees it, and a caller that frees it directly gets the same result. It needs a property beside `ReturnsOwned`, computed in the same fixpoint.
+A function returns a unique object when the object was created in that function and never escaped there. Its caller may then free it directly, with no count operation. This is an optimization of the rule above, not a change of meaning: a caller that releases a unique object frees it, and a caller that frees it directly gets the same result.
+
+A function is unique when it is automatic, returns an owned object, and every value it returns is one of:
+
+- `null`, or a `new` object;
+- the result of a unique call, so uniqueness passes through a chain of calls;
+- a local that is initialized with a `new` object or a unique call, is never assigned, and is only read or returned.
+
+The set is a least fixed point: a function is added only when its callees already are. A call is unique when its callee is in that set and the call is a direct call. A dispatched call (a virtual method or an interface call), an external function, and a C interop call are not unique, because the implementation that runs is not analysed here. A returned field, parameter, or `this` is not unique, because another reference may hold it.
+
+A unique call's result is freed directly when the local that receives it owns it. Given as an argument to a callee that keeps it, the result is counted instead, like any other owned temporary.
 
 ### Destructors and drop glue
 
@@ -121,7 +131,18 @@ A union value holding a counted reference copies that reference. Storing a union
 
 Counts add work only on the paths that escape: a retain at each store of an escaping reference, and a release at each overwrite and destruction. The objects that the analysis keeps local keep their current cost, which is one free at scope end. A unique result adds no count operation.
 
-Before the design is final, measure a loop-heavy benchmark that allocates escaping objects, with and without the counts. The result decides whether unique-result elision and atomic forms are worth their complexity.
+The benchmark programs are in `benchmarks/refcount/`, one per path: `local_objects` (non-escaping objects, freed at scope end), `overwritten_field` (an escaping object stored in a field, then overwritten), `call_result` (objects from a function that returns a fresh object), and `returned_alias` (a field returned through a function, so the caller releases a count).
+
+Each program loops ten million times. Median of 11 interleaved runs, in milliseconds, optimization O2, the compiler before step 4 against the compiler with it, on the development Windows machine:
+
+| Program | Before step 4 | After step 4 |
+|---|---|---|
+| `local_objects` | 282 | 279 |
+| `overwritten_field` | 277 | 283 |
+| `call_result` | 318 | 296 |
+| `returned_alias` | 60 | 61 |
+
+Only `call_result` takes a path that step 4 changes: its object is now freed directly instead of released by count, about 7% faster. The other three paths are unchanged, and their differences are within the run-to-run noise. Most of the time is the allocation and free itself, so the gain from skipping one count operation is small. Unique-result elision is kept because it is one fixpoint over the existing ownership analysis, and it removes the count traffic on the path that calls a fresh-object function.
 
 ## Compatibility
 
@@ -133,7 +154,8 @@ There is no compatibility with earlier builds (decision 8). The object layout ve
 - Native: a container element is freed with its container (the leak report is zero); a field store retains the object, and the object is freed when the last holder goes away; an overwrite releases the old value; a returned value transfers its count; an exception releases a counted local.
 - `delete` frees a counted object whose count is greater than one, and the test documents the dangling reference rather than checking it.
 - Cycles: a test that two objects referring to each other are reported as not freed, which documents the leak.
-- Benchmark: the measurement above, recorded in the milestone plan.
+- Unique results: semantic tests for a fresh result freed directly, a field result released by count, and a unique result through a chain of calls; native tests `unique_result_is_freed_directly` and `unique_result_stored_in_a_holder` (leak report zero).
+- Benchmark: the measurement under Cost, in `benchmarks/refcount/`.
 
 ## Steps
 
@@ -143,7 +165,7 @@ M6a-0. Legacy cleanup, as recorded in the milestone plan. It comes before step 1
 2a. **Done.** The owner protocol: counted release for owners that may be shared, direct free only for a `new` object that nothing retains, retains on every store into memory, retain on return unless the count moves, and the zeroed object. The lifetime pairs of the earlier model are gone, since a retain now does their job. Tests: the held-count cases, and the rule tests in `OwnershipIntegrationTests`.
 2b. **Done.** Drop glue for counted fields and unions, the base destructor chain, and the `release_elements` intrinsic (see Step 2b rules). Tests: list elements, union fields, derived classes, and interface fields are released with their holders; the base destructor runs after the derived one.
 3. Covered by 2a for the escape points and the overwrite rule. An element that is overwritten is still not released, because a buffer's slots are not known to hold a value, so its old value is counted until the owner is freed.
-4. Unique results, and the benchmark. The atomic form waits for M6b.
+4. **Done.** Unique results, and the benchmark (see Unique results and Cost). The atomic form waits for M6b.
 5. `delete` force-free, with its tests. The delete path frees a counted object through its release glue, so the other references dangle, as decided.
 
 ## Open questions

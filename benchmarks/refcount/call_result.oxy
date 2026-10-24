@@ -1,0 +1,21 @@
+// A loop whose objects come from a function that returns a fresh object: the caller's local owns it and frees it at the end of the iteration.
+class Box {
+    public i32 value;
+}
+
+Box make(i32 value) {
+    Box box = new Box();
+    box.value = value;
+    return box;
+}
+
+i32 main() {
+    i32 total = 0;
+    i32 i = 0;
+    while (i < 10000000) {
+        Box box = make(i);
+        total = total + box.value;
+        i = i + 1;
+    }
+    return total % 256;
+}
