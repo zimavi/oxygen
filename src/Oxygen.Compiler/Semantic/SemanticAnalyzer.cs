@@ -30,6 +30,10 @@ public sealed partial class SemanticAnalyzer
     public MemoryMode DefaultMemoryMode { get; set; } = MemoryMode.Automatic;
 
     private readonly HashSet<VariableDeclarationStatement> _escapingClassLocals = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<VariableDeclarationStatement> _releasedLocals = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<VariableDeclarationStatement> _ownedDeclarations = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<Expression> _movedReturnValues = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<Expression> _countedTemporaries = new(ReferenceEqualityComparer.Instance);
 
     // Locals released by `delete`; locals whose value is read (not only used as the receiver of a member access); and
     // whether the identifier being analyzed is only a receiver.
@@ -156,6 +160,10 @@ public sealed partial class SemanticAnalyzer
         _usedFunctions.Clear();
         _declaredVariables.Clear();
         _escapingClassLocals.Clear();
+        _releasedLocals.Clear();
+        _ownedDeclarations.Clear();
+        _movedReturnValues.Clear();
+        _countedTemporaries.Clear();
         _stackObjectLocals.Clear();
         _deletedLocals.Clear();
         _maybeDeletedLocals.Clear();
@@ -169,8 +177,6 @@ public sealed partial class SemanticAnalyzer
         _localReferences.Clear();
         _parameterReferences.Clear();
         _qualifiedReceivers.Clear();
-        _resultHolders.Clear();
-        _keptReceivers.Clear();
         _keepsParameter.Clear();
         _flows.Clear();
         _returnsOwned.Clear();
@@ -751,8 +757,16 @@ public sealed partial class SemanticAnalyzer
 
                 if (classSymbol.Destructor is not null && !fromLibrary)
                 {
+                    // The destructor of a generic class sees the class's type parameters, as its constructors do.
+                    var previousGenericTypes = _genericTypes;
+                    var previousConstraints = _typeParameterConstraints;
+                    _genericTypes = classSymbol.DeclaredTypeParameters.ToDictionary(
+                        parameter => parameter,
+                        SemanticType.GenericParameter,
+                        StringComparer.Ordinal);
                     try
                     {
+                        _typeParameterConstraints = ConstraintsFor(classSymbol.Declaration.DeclaredTypeParameters);
                         AnalyzeFunction(
                             CreateDestructorFunctionSymbol(moduleName, classSymbol.Destructor),
                             functionsByName,
@@ -775,6 +789,11 @@ public sealed partial class SemanticAnalyzer
                                     ? sourceNames[unitIndex]
                                     : null,
                             code: exception.Code);
+                    }
+                    finally
+                    {
+                        _genericTypes = previousGenericTypes;
+                        _typeParameterConstraints = previousConstraints;
                     }
                 }
             }
@@ -846,7 +865,11 @@ public sealed partial class SemanticAnalyzer
             new Dictionary<LambdaExpression, FunctionSymbol>(_lambdaFunctions, ReferenceEqualityComparer.Instance),
             _inferredNoThrow,
             new HashSet<Expression>(_temporaryReleases, ReferenceEqualityComparer.Instance),
-            new HashSet<ForInStatement>(_ownedIterators, ReferenceEqualityComparer.Instance));
+            new HashSet<ForInStatement>(_ownedIterators, ReferenceEqualityComparer.Instance),
+            new HashSet<VariableDeclarationStatement>(_releasedLocals, ReferenceEqualityComparer.Instance),
+            new HashSet<VariableDeclarationStatement>(_ownedDeclarations, ReferenceEqualityComparer.Instance),
+            new HashSet<Expression>(_movedReturnValues, ReferenceEqualityComparer.Instance),
+            new HashSet<Expression>(_countedTemporaries, ReferenceEqualityComparer.Instance));
     }
 
     public SemanticResult AnalyzeWithDiagnostics(

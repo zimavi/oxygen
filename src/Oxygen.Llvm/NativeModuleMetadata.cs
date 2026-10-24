@@ -9,17 +9,16 @@ namespace Oxygen.Llvm;
 
 public sealed record NativeModuleMetadata
 {
-    // Version 2 names symbols with version 1 of the mangling scheme (_Ox_v1_, see docs/mangling.md). Version 1 metadata names
-    // symbols that this compiler does not produce, so it is rejected. Version 3 adds the types and the generics of the module.
-    // Version 2 documents have neither, so they are read as having none.
+    // Version 3 adds the types and the generics of the module. Only this version is read: earlier documents name symbols with a mangling
+    // scheme that this compiler does not produce (see docs/mangling.md).
     public const int CurrentFormatVersion = 3;
-    public const int PreviousFormatVersion = 2;
 
     public int FormatVersion { get; init; } = CurrentFormatVersion;
     // The layout of the objects of the module's classes: where their fields and virtual slots are in memory. A program that uses a class
     // of a library lays the class out by the compiler's rule, so the library must have been built with the same rule, or the program would
-    // read the fields at the wrong places. Version 1 is the layout before the prefix layout, and a document without the field has it.
-    public const int CurrentObjectLayoutVersion = 2;
+    // read the fields at the wrong places. Version 2 is the layout whose objects start with their runtime type. Version 3 puts a reference
+    // count before each counted object (docs/reference-counting.md), so a library of version 2 is rejected.
+    public const int CurrentObjectLayoutVersion = 3;
     public int ObjectLayoutVersion { get; init; } = 1;
     // Every field that names the program is required, so no default such as "program" can stand in for the real name.
     public required string ModuleName { get; init; }
@@ -44,8 +43,8 @@ public sealed record NativeFunctionMetadata
     public IReadOnlyList<string> ParameterTypes { get; init; } = [];
     public string? ExternalName { get; init; }
     public string CallingConvention { get; init; } = "c";
-    // The function annotations that a program needs to check its calls: @nothrow and @noreturn. A library of an older build has neither,
-    // so its functions are treated as ones that may throw and may return.
+    // The function annotations that a program needs to check its calls: @nothrow and @noreturn. A function without them is treated as one
+    // that may throw and may return.
     public bool NoThrow { get; init; }
     public bool NoReturn { get; init; }
 }
@@ -153,9 +152,6 @@ internal partial class NativeModuleMetadataJsonContext : JsonSerializerContext;
 
 public static class NativeModuleMetadataSerializer
 {
-    // Marks the metadata that older builds appended after an archive or object file. The section reader stops at it.
-    internal static readonly byte[] EmbeddedMagic = "OXYGENMETA1"u8.ToArray();
-
     public static string Serialize(NativeModuleMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
@@ -199,91 +195,28 @@ public static class NativeModuleMetadataSerializer
                 NativeModuleMetadataJsonContext.Default.NativeModuleMetadata)
             ?? throw new InvalidDataException("The native metadata document is empty.");
         // An array that the document does not have is read as null, not as the empty default, so the arrays are made empty here.
-        // Version 2 documents have no types or generics at all.
-        // A document without the object layout was built before the prefix layout, so it is layout 1, not the zero that a missing number reads as.
         using var document = JsonDocument.Parse(contents);
-        var hasObjectLayout = document.RootElement.TryGetProperty("objectLayoutVersion", out _);
+        if (!document.RootElement.TryGetProperty("objectLayoutVersion", out _))
+            throw new InvalidDataException("Native metadata must state the object layout it was built with.");
         var metadata = read with
         {
             Functions = read.Functions ?? [],
             Dependencies = read.Dependencies ?? [],
             Types = read.Types ?? [],
-            Generics = read.Generics ?? [],
-            ObjectLayoutVersion = hasObjectLayout ? read.ObjectLayoutVersion : 1
+            Generics = read.Generics ?? []
         };
         Validate(metadata);
         return metadata;
-    }
-
-    public static void Write(string path, NativeModuleMetadata metadata)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-        File.WriteAllText(fullPath, Serialize(metadata), new UTF8Encoding(false));
-    }
-
-    public static NativeModuleMetadata Read(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return Deserialize(File.ReadAllText(path, Encoding.UTF8));
-    }
-
-    public static void Embed(string artifactPath, NativeModuleMetadata metadata)
-    {
-        var fullPath = Path.GetFullPath(artifactPath);
-        var json = Encoding.UTF8.GetBytes(Serialize(metadata));
-        using var stream = new FileStream(fullPath, FileMode.Append, FileAccess.Write, FileShare.Read);
-        stream.Write(EmbeddedMagic);
-        stream.Write(BitConverter.GetBytes(json.Length));
-        stream.Write(json);
-    }
-
-    public static NativeModuleMetadata? ReadEmbedded(string artifactPath)
-    {
-        var bytes = File.ReadAllBytes(Path.GetFullPath(artifactPath));
-        var marker = LastIndexOf(bytes, EmbeddedMagic);
-        if (marker < 0 || marker + EmbeddedMagic.Length + sizeof(int) > bytes.Length)
-            return null;
-        var length = BitConverter.ToInt32(bytes, marker + EmbeddedMagic.Length);
-        var start = marker + EmbeddedMagic.Length + sizeof(int);
-        if (length < 0 || start + length > bytes.Length)
-            throw new InvalidDataException("Embedded Oxygen metadata has an invalid length.");
-        return Deserialize(Encoding.UTF8.GetString(bytes, start, length));
-    }
-
-    public static NativeModuleMetadata ReadArtifact(string artifactPath)
-    {
-        var embedded = ReadEmbedded(artifactPath);
-        if (embedded is not null)
-            return embedded;
-        var sidecar = artifactPath.EndsWith(".oxmeta", StringComparison.OrdinalIgnoreCase)
-            ? artifactPath
-            : artifactPath + ".oxmeta";
-        return Read(sidecar);
-    }
-
-    private static int LastIndexOf(byte[] haystack, byte[] needle)
-    {
-        for (var index = haystack.Length - needle.Length; index >= 0; index--)
-            if (haystack.AsSpan(index, needle.Length).SequenceEqual(needle))
-                return index;
-        return -1;
     }
 
     private static void Validate(NativeModuleMetadata metadata)
     {
         if (metadata.ObjectLayoutVersion < 1)
             throw new InvalidDataException($"Native metadata has object layout {metadata.ObjectLayoutVersion}, but layouts start at 1.");
-        if (metadata.FormatVersion is not (NativeModuleMetadata.PreviousFormatVersion or NativeModuleMetadata.CurrentFormatVersion))
+        if (metadata.FormatVersion != NativeModuleMetadata.CurrentFormatVersion)
             throw new InvalidDataException(
                 $"Unsupported native metadata format version {metadata.FormatVersion}; " +
-                $"this compiler supports versions {NativeModuleMetadata.PreviousFormatVersion} and {NativeModuleMetadata.CurrentFormatVersion}.");
-        if (metadata.FormatVersion == NativeModuleMetadata.PreviousFormatVersion &&
-            (metadata.Types.Count > 0 || metadata.Generics.Count > 0))
-            throw new InvalidDataException("Native metadata of format version 2 cannot contain types or generics.");
+                $"this compiler supports version {NativeModuleMetadata.CurrentFormatVersion}.");
         if (string.IsNullOrWhiteSpace(metadata.ModuleName))
             throw new InvalidDataException("Native metadata must specify a module name.");
         if (string.IsNullOrWhiteSpace(metadata.EntryPoint))

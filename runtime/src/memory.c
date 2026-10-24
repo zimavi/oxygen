@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "oxygen_runtime.h"
 
 // Running out of memory is fatal. The runtime reports it and stops, so no Oxygen code receives NULL.
@@ -90,4 +91,47 @@ void *oxygen_calloc(uint64_t count, uint64_t element_size)
         oxygen_out_of_memory();
     oxygen_live_blocks++;
     return result;
+}
+
+/* The count sits in the word before the object, so the allocation is one block, counted once in the live-block total. The object is
+ * zeroed, so every field holds null until the program stores it, and an overwrite never releases garbage. */
+void *oxygen_object_new(uint64_t size)
+{
+    if (size > UINT64_MAX - sizeof(uint64_t))
+        oxygen_out_of_memory();
+    uint64_t *block = oxygen_alloc(size + sizeof(uint64_t));
+    memset(block, 0, (size_t)(size + sizeof(uint64_t)));
+    block[0] = 1;
+    return block + 1;
+}
+
+void oxygen_object_free(void *object)
+{
+    if (object != NULL)
+        oxygen_free((uint64_t *)object - 1);
+}
+
+void oxygen_retain(void *object)
+{
+    if (object != NULL && ((uint64_t *)object)[-1] != OXYGEN_STACK_OBJECT_COUNT)
+        ((uint64_t *)object)[-1]++;
+}
+
+void oxygen_release(void *object)
+{
+    if (object == NULL)
+        return;
+    uint64_t *count = (uint64_t *)object - 1;
+    /* A stack object is not freed by its counts: its owner destroys it. */
+    if (*count == OXYGEN_STACK_OBJECT_COUNT)
+        return;
+    /* A release without a count would free an object that the program still uses, so the program stops instead. */
+    if (*count == 0)
+        oxygen_runtime_abort();
+    if (--*count != 0)
+        return;
+    const oxygen_runtime_type_info *type = *(const oxygen_runtime_type_info *const *)object;
+    if (type->destructor != NULL)
+        type->destructor(object);
+    oxygen_object_free(object);
 }

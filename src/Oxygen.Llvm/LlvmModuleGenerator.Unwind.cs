@@ -76,10 +76,10 @@ public sealed partial class LlvmModuleGenerator
     // Destroys one owned local the way its scope end does. A local that the function frees releases its memory too.
     private void EmitUnwindDestroy(LLVMBuilderRef builder, UnwindLocal local, SemanticModel model)
     {
-        if (model.AutomaticallyFreedLocals.Contains(local.Declaration))
+        if (model.AutomaticallyFreedLocals.Contains(local.Declaration) || model.ReleasedLocals.Contains(local.Declaration))
         {
             var allocated = builder.BuildLoad2(ToLlvmType(local.Type, model), local.Slot, local.Name);
-            EmitReleaseOwned(builder, OwnedObjectPointer(builder, allocated, local.Type));
+            EmitScopeRelease(builder, OwnedObjectPointer(builder, allocated, local.Type), model.ReleasedLocals.Contains(local.Declaration));
             return;
         }
         if (!local.Type.IsClass || !_destructors.TryGetValue(local.Type.StructName!, out var destructor))
@@ -162,6 +162,6 @@ public sealed partial class LlvmModuleGenerator
             : FromTypeSyntax(declaration.Type, model);
         return (declaredType.IsClass || declaredType.IsInterface) && (IsValueClass(declaredType, model)
             || declaration.Initializer is ClassConstructionExpression stackObject && !model.ConstructionCalls.ContainsKey(stackObject)
-            || model.AutomaticallyFreedLocals.Contains(declaration));
+            || model.AutomaticallyFreedLocals.Contains(declaration) || model.ReleasedLocals.Contains(declaration));
     }
 }

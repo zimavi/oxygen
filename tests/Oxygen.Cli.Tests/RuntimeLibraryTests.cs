@@ -105,6 +105,38 @@ public sealed class RuntimeLibraryTests : IDisposable
         Assert.Equal("x", run.Output);
     }
 
+    [SkippableFact]
+    public void ANewCountedObjectHasOneReferenceBeforeItsPointer()
+    {
+        AssertCasePasses("object-new-counts-one-reference-before-the-object");
+    }
+
+    [SkippableFact]
+    public void ReleasingTheLastReferenceRunsTheDestructorOnce()
+    {
+        AssertCasePasses("object-release-runs-the-destructor-once-at-zero");
+    }
+
+    [SkippableFact]
+    public void OperationsOnANullObjectDoNothing()
+    {
+        AssertCasePasses("null-object-operations-do-nothing");
+    }
+
+    [SkippableFact]
+    public void ReleasingAStackObjectDoesNothing()
+    {
+        AssertCasePasses("release-of-a-stack-object-does-nothing");
+    }
+
+    [SkippableFact]
+    public void ReleasingAnObjectWithoutACountStopsTheProgram()
+    {
+        var run = RunCase("release-without-a-count-stops-the-program");
+
+        Assert.Equal(101, run.ExitCode);
+    }
+
     private void AssertCasePasses(string name)
     {
         var run = RunCase(name);

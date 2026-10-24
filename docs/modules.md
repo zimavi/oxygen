@@ -45,9 +45,38 @@ i32 main() {
 }
 ```
 
-The fully qualified form remains valid, and the module-leaf form is accepted
-for compatibility (`math.add` and `float.pow` above). Importing a nested
-module directly exposes its functions in the same way:
+A call can name a function in three ways, and each resolves to the same
+declaration:
+
+- **Unqualified**, for a function the program sees without a prefix: a function
+  of the importing module, a function of a module imported directly (`pow(...)`
+  after `import math.float;`), or a name listed in a symbol import.
+- **Module-leaf**, the last segment of an imported module, followed by the name.
+  After `import math;`, `float.pow(...)` means `math.float.pow(...)`. After
+  `import stdlib.io;`, `io.print(...)` means `stdlib.io.print(...)`.
+- **Fully qualified**, the module's full name followed by the name:
+  `math.add(...)` and `math.float.pow(...)` above.
+
+The module-leaf form is intended, for two reasons. It makes a call explicit
+about the module that declares the function, so a reader sees which module
+`io.print` comes from. It also resolves an ambiguous name. When two imported
+modules declare a function with the same name, an unqualified call is an
+error (`is ambiguous; use a module prefix`). The programmer then writes a
+prefix that names one module. The leaf form is enough when the leaves differ,
+as with `graphics.color` and `document.text`. When the leaves are the same, as
+in the example below, the full module name is needed:
+
+```oxygen
+import graphics.color;
+import document.color;
+
+i32 main() {
+    // color.parse("red") is ambiguous here: both modules declare parse.
+    return graphics.color.parse("red") + document.color.parse("red");
+}
+```
+
+Importing a nested module directly exposes its functions in the same way:
 
 ```oxygen
 import math.float;
@@ -58,7 +87,8 @@ i32 main() {
 ```
 
 An import may define an explicit source-level alias. This is useful when two
-imports expose the same unqualified function name:
+imports expose the same unqualified function name, or the same leaf. Each alias
+names its module, so the calls below are not ambiguous:
 
 ```oxygen
 import graphics.color as colors;
@@ -91,15 +121,13 @@ module. Public declarations are the API exposed to importing modules.
 
 Compiler-produced native modules carry versioned Oxygen metadata containing
 qualified declarations, type encodings, visibility, native symbol names, and
-link dependencies. The CLI does not write a sidecar `.oxmeta` file or append
-the payload to executables at present. Library builds will embed the metadata
-in a `.oxmeta` object section (see [native module metadata](native-module-metadata.md)).
-Readers still accept a payload that an older build appended, or a sidecar
-`.oxmeta`. Metadata is deterministically ordered and version validated.
+link dependencies. Library builds embed the metadata in a `.oxmeta` object
+section (see [native module metadata](native-module-metadata.md)). Metadata is
+deterministically ordered and version validated.
 
 Native binaries without Oxygen metadata are opaque. They may be linked as
 dependencies, but type-safe calls require an explicit ABI declaration or
-manifest. When a native dependency has valid embedded or sidecar metadata,
+manifest. When a native dependency has valid `.oxmeta` section metadata,
 the CLI imports its public declarations and native symbols for semantic
 checking; the compiler never infers signatures by guessing from native
 exports.

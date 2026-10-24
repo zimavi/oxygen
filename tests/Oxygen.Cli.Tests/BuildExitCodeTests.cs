@@ -45,10 +45,9 @@ public sealed class BuildExitCodeTests : IDisposable
     public void MalformedMetadataExitsWithSourceError()
     {
         var source = WriteSource("i32 main() { return 0; }");
-        // A stand-in library with a sidecar that is not JSON: the metadata is invalid input, not a crash.
-        var library = Path.Combine(_directory, "library.a");
-        File.WriteAllText(library, "not an archive");
-        File.WriteAllText(library + ".oxmeta", "{ this is not json");
+        // A stand-in library whose metadata section is not JSON: the metadata is invalid input, not a crash.
+        var library = Path.Combine(_directory, "library.o");
+        NativeLibraryFixture.WriteObject(library, Oxygen.Llvm.OxygenTarget.Host.Triple, "{ this is not json"u8.ToArray());
 
         var exitCode = RunCompiler("build", source, "--stdlib", library, "--emit-ir", Path.Combine(_directory, "program.ll"));
 

@@ -43,19 +43,6 @@ public sealed partial class SemanticAnalyzer
     // so the call has no receiver expression, and this identifier is what the flow pass reads as the receiver's use.
     private readonly Dictionary<CallExpression, Expression> _qualifiedReceivers = new(ReferenceEqualityComparer.Instance);
 
-    // The local whose initializer is a call. The local holds the call's result, which may refer to the receiver of that call.
-    private readonly Dictionary<CallExpression, VariableDeclarationStatement> _resultHolders = new(ReferenceEqualityComparer.Instance);
-
-    // The holders whose result refers to each receiver: a local, a parameter, or `this` (the function declaration). The receiver must
-    // outlive each holder, so it escapes when a holder escapes, or when the holder is not freed before a local receiver. Recomputed by
-    // each flow round.
-    private readonly Dictionary<object, HashSet<VariableDeclarationStatement>> _lifetimes = new(ReferenceEqualityComparer.Instance);
-
-    // The parameters and `this` that a holder of their result makes escape. A caller's argument, or the receiver of a call, is kept.
-    private readonly HashSet<object> _keptReceivers = new(ReferenceEqualityComparer.Instance);
-
-    // The function whose body is being flowed. `this` in the body names this function as its receiver's owner.
-    private FunctionDeclaration? _flowOwner;
 
     private readonly Dictionary<IdentifierExpression, ParameterDeclaration> _parameterReferences =
         new(ReferenceEqualityComparer.Instance);
@@ -115,38 +102,16 @@ public sealed partial class SemanticAnalyzer
     {
         _ownershipTypes = expressionTypes;
         _ownershipCalls = resolvedCalls;
-        // The flow of a receiver depends on which methods return owned objects, and those depend on the flows. Each round recomputes the
-        // flows from the methods found so far. The set only grows, so the rounds end once a round finds no new method, and the flows of
-        // that last round are computed with the final set.
-        // The kept receivers grow in the same way, and a holder's escape decides them, so the rounds also repeat until they stop growing.
-        int ownedMethods;
-        int keptReceivers;
-        do
-        {
-            ownedMethods = _returnsOwned.Count;
-            keptReceivers = _keptReceivers.Count;
-            _keepsThis.Clear();
-            _keepsParameter.Clear();
-            _lifetimes.Clear();
-            foreach (var body in _analyzedBodies)
-                FlowBody(body.Function.Declaration);
-            ComputeReturnsOwned();
-            foreach (var body in _analyzedBodies)
-                ComputeBodyEscapes(body.Function.Declaration);
-        } while (_returnsOwned.Count != ownedMethods || _keptReceivers.Count != keptReceivers);
+        foreach (var body in _analyzedBodies)
+            FlowBody(body.Function.Declaration.Body);
+        ComputeReturnsOwned();
         foreach (var body in _analyzedBodies)
             ClassifyBody(body);
     }
 
     // ----- Flow -----
 
-    private void FlowBody(FunctionDeclaration function)
-    {
-        var previous = _flowOwner;
-        _flowOwner = function;
-        FlowStatement(function.Body);
-        _flowOwner = previous;
-    }
+    private void FlowBody(BlockStatement body) => FlowStatement(body);
 
     private void FlowStatement(Statement statement)
     {
@@ -157,8 +122,6 @@ public sealed partial class SemanticAnalyzer
                     FlowStatement(item);
                 break;
             case VariableDeclarationStatement declaration when declaration.Initializer is not null:
-                if (declaration.Initializer is CallExpression initializerCall)
-                    _resultHolders[initializerCall] = declaration;
                 FlowExpression(declaration.Initializer, Flow.Escape);
                 break;
             case AssignmentStatement assignment:
@@ -191,9 +154,12 @@ public sealed partial class SemanticAnalyzer
                 FlowStatement(loop.Body);
                 break;
             case ForInStatement loop:
-                // The loop's iterator refers to the collection while the loop runs. A local collection outlives the loop, so it is only
-                // read. A temporary collection is kept, so it is never released while the iterator refers to it.
-                FlowExpression(loop.Collection, loop.Collection is IdentifierExpression ? Flow.Borrow : Flow.Escape);
+                // The loop's iterator refers to the collection while the loop runs. A local collection is only read, unless the iterator
+                // keeps it: its iter() then stores the collection, so the collection escapes and is released by count. A temporary
+                // collection is kept, so it is never released while the iterator refers to it.
+                var iteratorKeepsCollection = !_iteratorProtocols.TryGetValue(loop, out var loopProtocol)
+                    || ReceiverKeepsThis(loopProtocol.IterCall, loopProtocol.Iter);
+                FlowExpression(loop.Collection, loop.Collection is IdentifierExpression && !iteratorKeepsCollection ? Flow.Borrow : Flow.Escape);
                 FlowStatement(loop.Body);
                 break;
             case SwitchStatement switchStatement:
@@ -344,17 +310,17 @@ public sealed partial class SemanticAnalyzer
         var declaration = parameter.Declaration;
         if (_keepsParameter.TryGetValue(declaration, out var known))
             return known;
-        if (_keptReceivers.Contains(declaration))
-            return true;
         if (!_keepsParameterInProgress.Add(declaration))
             return true;
 
-        FlowBody(callee.Declaration);
+        FlowBody(callee.Declaration.Body);
         var keeps = ExpressionsWithReceivers(StatementsWithin(callee.Declaration.Body))
             .OfType<IdentifierExpression>()
             .Where(identifier => identifier.Name == parameter.Name)
             .Any(identifier => _parameterReferences.TryGetValue(identifier, out var referenced)
-                ? referenced == declaration && _flows.GetValueOrDefault(identifier, Flow.Escape) != Flow.Borrow
+                // A specialized copy of the body refers to the parameter declarations of the body it was copied from, so a parameter is
+                // matched by its name: the names of a function's parameters are unique, and the body sees no other parameter of that name.
+                ? referenced.Name == parameter.Name && _flows.GetValueOrDefault(identifier, Flow.Escape) != Flow.Borrow
                 : !_localReferences.ContainsKey(identifier));
         _keepsParameterInProgress.Remove(declaration);
         _keepsParameter[declaration] = keeps;
@@ -383,8 +349,8 @@ public sealed partial class SemanticAnalyzer
     // A receiver is read when the method does not keep its instance. A plain result, or an owned result (a new object that the caller
     // frees), cannot refer into the instance, so the receiver is only read. Any other result may be an alias of the instance, so the
     // receiver has the flow of that result.
-    // A method that keeps its instance makes an owned result refer to it. The receiver then outlives the result when the result is only
-    // read by its statement, or when a local holds it and the receiver is a local (see ClassifyBody). Anything else keeps the receiver.
+    // A method that keeps its instance may store it, so the receiver escapes and its owner releases it by count. A result that is only
+    // read by its statement is a temporary released there, before the receiver's owner can release the receiver.
     private Flow ReceiverFlow(CallExpression call, FunctionSymbol? callee, Flow flow, Expression receiver)
     {
         if (callee is null)
@@ -395,30 +361,13 @@ public sealed partial class SemanticAnalyzer
             return Flow.Escape;
         if (flow == Flow.Borrow)
             return Flow.Borrow;
-        if (_resultHolders.TryGetValue(call, out var holder) && ReceiverOwner(receiver) is { } owner)
-        {
-            AddLifetime(owner, holder);
-            return Flow.Borrow;
-        }
+        // The result may hold a count of the receiver, so the receiver is released by count and not freed directly.
         return Flow.Escape;
     }
 
-    // The declaration that a receiver names, which must outlive the holder of the result: a local, a parameter, or `this` of the function
-    // being flowed. Any other receiver names no declaration, so its result cannot be given a holder.
-    private object? ReceiverOwner(Expression receiver) => receiver switch
-    {
-        IdentifierExpression identifier when _localReferences.TryGetValue(identifier, out var local) => local,
-        IdentifierExpression identifier when _parameterReferences.TryGetValue(identifier, out var parameter) => parameter,
-        ThisExpression => _flowOwner,
-        _ => null
-    };
-
-    private void AddLifetime(object owner, VariableDeclarationStatement holder)
-    {
-        if (!_lifetimes.TryGetValue(owner, out var holders))
-            _lifetimes[owner] = holders = new HashSet<VariableDeclarationStatement>(ReferenceEqualityComparer.Instance);
-        holders.Add(holder);
-    }
+    // Whether an expression is a union value, which a case constructs and keeps its payload in.
+    private bool IsUnionValue(Expression expression) =>
+        _ownershipTypes.TryGetValue(expression, out var type) && type.IsUnion;
 
     // A plain result cannot refer into the object it came from.
     private bool IsPlainResult(Expression expression) =>
@@ -479,10 +428,9 @@ public sealed partial class SemanticAnalyzer
         if (!_keepsThisInProgress.Add(declaration))
             return true;
 
-        FlowBody(declaration);
+        FlowBody(declaration.Body);
         var expressions = ExpressionsWithReceivers(StatementsWithin(declaration.Body)).ToList();
-        var keeps = _keptReceivers.Contains(declaration)
-            || expressions.Any(expression => expression is ThisExpression && _flows.GetValueOrDefault(expression, Flow.Escape) != Flow.Borrow)
+        var keeps = expressions.Any(expression => expression is ThisExpression && _flows.GetValueOrDefault(expression, Flow.Escape) != Flow.Borrow)
             // A call on `this` without a recorded receiver is not flowed, so it is assumed to keep the instance.
             || expressions.OfType<CallExpression>().Any(call => call.Receiver is null && IsImplicitThisCall(call)
                 && !_qualifiedReceivers.ContainsKey(call) && _ownershipCalls.TryGetValue(call, out var callee)
@@ -506,10 +454,11 @@ public sealed partial class SemanticAnalyzer
     private bool OwnedExpression(Expression expression) => expression switch
     {
         NewExpression => _ownershipTypes.TryGetValue(expression, out var created) && IsOwnedClass(created),
+        // A call that returns a class or an interface gives its caller one count. Every such function returns counted references
+        // (docs/reference-counting.md), so the result is owned whether the call is dispatched or not.
         CallExpression call => _ownershipCalls.TryGetValue(call, out var callee)
             && callee.CInterop is null && !callee.IsExternal
-            && !IsDispatchedCall(call, callee)
-            && _returnsOwned.Contains(callee.Declaration),
+            && _ownershipTypes.TryGetValue(call, out var returned) && IsOwnedType(returned),
         _ => false
     };
 
@@ -537,58 +486,17 @@ public sealed partial class SemanticAnalyzer
     // The functions that return an owned object: every returned value is null, a new object, a call that returns one, or a local that
     // owns its object and is used only in a way that does not keep it elsewhere. Starting from none, the set only grows, so a recursive
     // function returns owned values only when some path proves it.
+    // Every function that returns a class or an interface returns a counted reference: a returned owned value moves its count, and any
+    // other returned reference is retained first (docs/reference-counting.md, step 2a).
     private void ComputeReturnsOwned()
     {
-        var changed = true;
-        while (changed)
+        foreach (var body in _analyzedBodies)
         {
-            changed = false;
-            foreach (var body in _analyzedBodies)
-            {
-                var function = body.Function;
-                if (_returnsOwned.Contains(function.Declaration) || function.ReturnType.IsVoid || !IsOwnedType(function.ReturnType))
-                    continue;
-                if (ReturnsOwnedValues(function.Declaration.Body))
-                {
-                    _returnsOwned.Add(function.Declaration);
-                    changed = true;
-                }
-            }
+            var function = body.Function;
+            if (!function.ReturnType.IsVoid && IsOwnedType(function.ReturnType))
+                _returnsOwned.Add(function.Declaration);
         }
     }
-
-    private bool ReturnsOwnedValues(BlockStatement body)
-    {
-        var statements = StatementsWithin(body).ToList();
-        var returns = statements.OfType<ReturnStatement>().Where(item => item.Value is not null).ToList();
-        if (returns.Count == 0)
-            return false;
-        foreach (var returned in returns)
-        {
-            var value = returned.Value!;
-            if (value is NullLiteralExpression)
-                continue;
-            if (value is IdentifierExpression identifier)
-            {
-                if (!_localReferences.TryGetValue(identifier, out var declaration)
-                    || !OwnsItsInitializer(declaration, AssignedIn(declaration, statements)) || !ReferencesOnlyForReturn(declaration, statements))
-                    return false;
-                continue;
-            }
-            if (!OwnedExpression(value))
-                return false;
-        }
-        return true;
-    }
-
-    // Whether a local is assigned anywhere in the statements that use it.
-    private bool AssignedIn(VariableDeclarationStatement declaration, IEnumerable<Statement> statements) =>
-        References(statements).Any(reference => reference.Declaration == declaration && reference.Flow == Flow.Assign);
-
-    // Whether every use of the local is a read or a return: a use that keeps the object elsewhere makes the return a second owner.
-    private bool ReferencesOnlyForReturn(VariableDeclarationStatement declaration, IEnumerable<Statement> statements) =>
-        References(statements).Where(reference => reference.Declaration == declaration)
-            .All(reference => reference.Flow is Flow.Borrow or Flow.Return);
 
     // The expressions of the statements, each followed by the receiver variable that a qualified call names.
     private IEnumerable<Expression> ExpressionsWithReceivers(IEnumerable<Statement> statements)
@@ -620,25 +528,6 @@ public sealed partial class SemanticAnalyzer
             _parameterReferences[identifier] = parameter;
     }
 
-    // Whether the receiver is declared in a block and the holder is declared later in that block, or in a statement nested in it. Locals
-    // are freed in reverse declaration order, so the holder is freed first. A receiver declared in a for loop's initializer is not in a
-    // block, so it is never proven to outlive a holder.
-    private static bool Outlives(VariableDeclarationStatement receiver, VariableDeclarationStatement holder, IEnumerable<Statement> statements)
-    {
-        foreach (var block in statements.OfType<BlockStatement>())
-        {
-            for (var index = 0; index < block.Statements.Count; index++)
-            {
-                if (!ReferenceEquals(block.Statements[index], receiver))
-                    continue;
-                for (var later = index + 1; later < block.Statements.Count; later++)
-                    if (StatementsWithin(block.Statements[later]).Any(item => ReferenceEquals(item, holder)))
-                        return true;
-            }
-        }
-        return false;
-    }
-
     // The identifiers of the statements that refer to a local, with their flows. An identifier that the analysis did not resolve is
     // reported with no declaration, so the caller can match it by name.
     private IEnumerable<(VariableDeclarationStatement? Declaration, string Name, Flow Flow)> References(IEnumerable<Statement> statements)
@@ -655,51 +544,38 @@ public sealed partial class SemanticAnalyzer
     // ----- Classification -----
 
     // Decides which locals of a body own their objects, which temporaries it releases, and which for-in loops own their iterators.
-    // The locals of a function's body that escape, and whether each owns its object. A local's receiver escapes when a holder of the
-    // receiver's call result escapes, is not owned, or is not freed before the receiver. Escaping locals can be holders of other
-    // receivers, so this repeats until no receiver is added. A parameter or `this` with such a holder is kept (see KeepsParameter).
-    private (HashSet<VariableDeclarationStatement> Escaping, Dictionary<VariableDeclarationStatement, bool> Owns) ComputeBodyEscapes(
-        FunctionDeclaration function)
+    // The escape facts of a body's locals: which escape, which own their object, which are returned (moved to the caller), and which
+    // have a name the analysis did not resolve.
+    private sealed record BodyEscapes(
+        HashSet<VariableDeclarationStatement> Escaping,
+        Dictionary<VariableDeclarationStatement, bool> Owns,
+        HashSet<VariableDeclarationStatement> Returned,
+        HashSet<VariableDeclarationStatement> Uncertain);
+
+    private BodyEscapes ComputeBodyEscapes(FunctionDeclaration function)
     {
         var statements = StatementsWithin(function.Body).ToList();
         var references = References(statements).ToList();
         var unresolved = references.Where(reference => reference.Declaration is null).Select(reference => reference.Name)
             .ToHashSet(StringComparer.Ordinal);
         var declarations = statements.OfType<VariableDeclarationStatement>().ToList();
-        var declared = new HashSet<VariableDeclarationStatement>(declarations, ReferenceEqualityComparer.Instance);
         var escaping = new HashSet<VariableDeclarationStatement>(ReferenceEqualityComparer.Instance);
         var owns = new Dictionary<VariableDeclarationStatement, bool>(ReferenceEqualityComparer.Instance);
+        var returned = new HashSet<VariableDeclarationStatement>(ReferenceEqualityComparer.Instance);
+        var uncertain = new HashSet<VariableDeclarationStatement>(ReferenceEqualityComparer.Instance);
         foreach (var declaration in declarations)
         {
             var flows = references.Where(reference => reference.Declaration == declaration).Select(reference => reference.Flow).ToList();
             var assigned = flows.Contains(Flow.Assign);
             if (assigned || flows.Any(flow => flow is Flow.Escape or Flow.Return) || unresolved.Contains(declaration.Name))
                 escaping.Add(declaration);
+            if (flows.Contains(Flow.Return))
+                returned.Add(declaration);
+            if (unresolved.Contains(declaration.Name))
+                uncertain.Add(declaration);
             owns[declaration] = OwnsItsInitializer(declaration, assigned);
         }
-        var changed = true;
-        while (changed)
-        {
-            changed = false;
-            foreach (var (owner, holders) in _lifetimes)
-            {
-                if (owner is not VariableDeclarationStatement receiver || !declared.Contains(receiver) || escaping.Contains(receiver))
-                    continue;
-                if (holders.Any(holder => !declared.Contains(holder) || escaping.Contains(holder) || !owns[holder]
-                    || !Outlives(receiver, holder, statements)))
-                {
-                    escaping.Add(receiver);
-                    changed = true;
-                }
-            }
-        }
-        foreach (var (owner, holders) in _lifetimes)
-        {
-            if (owner is not VariableDeclarationStatement && holders.Any(holder => declared.Contains(holder)
-                && (escaping.Contains(holder) || !owns[holder])))
-                _keptReceivers.Add(owner);
-        }
-        return (escaping, owns);
+        return new BodyEscapes(escaping, owns, returned, uncertain);
     }
 
     private void ClassifyBody(AnalyzedBody body)
@@ -707,31 +583,71 @@ public sealed partial class SemanticAnalyzer
         var function = body.Function;
         var automatic = function.Memory == MemoryMode.Automatic;
         var statements = StatementsWithin(function.Declaration.Body).ToList();
-        var (escaping, owns) = ComputeBodyEscapes(function.Declaration);
+        var escapes = ComputeBodyEscapes(function.Declaration);
         var deletes = References(statements).Where(reference => reference.Declaration is not null && reference.Flow == Flow.Delete)
             .Select(reference => reference.Declaration!).ToHashSet(ReferenceEqualityComparer.Instance);
         foreach (var declaration in statements.OfType<VariableDeclarationStatement>())
         {
-            var owned = owns[declaration];
-            var isEscaping = escaping.Contains(declaration);
+            var owned = escapes.Owns[declaration];
+            var isEscaping = escapes.Escaping.Contains(declaration);
+            if (owned)
+                _ownedDeclarations.Add(declaration);
             if (isEscaping)
                 _escapingClassLocals.Add(declaration);
             // A delete frees the local's object. For a local that does not own it, that delete is the only free, so the object escapes to it.
             if (deletes.Contains(declaration) && !owned)
                 _escapingClassLocals.Add(declaration);
-            if (automatic && owned && !isEscaping)
+            // An object from `new` that nothing else refers to is freed directly. Any other owned object may have been retained by a
+            // holder, so its owner releases its count instead. A returned local is moved to the caller, so its scope does not release it.
+            if (automatic && owned && declaration.Initializer is NewExpression && !isEscaping)
                 _autoFreedLocals.Add(declaration);
+            else if (automatic && owned && !escapes.Returned.Contains(declaration) && !escapes.Uncertain.Contains(declaration))
+                _releasedLocals.Add(declaration);
             // A manual function frees nothing itself, so a `new` object it keeps for no one is leaked.
             if (!automatic && owned && !isEscaping && declaration.Initializer is NewExpression)
                 ReportWarning($"Memory allocated for '{declaration.Name}' is never freed", declaration.Location, declaration.Name.Length,
                     body.SourceName);
         }
 
+        // A returned owned local moves its count to the caller, so its return does not retain it (docs/reference-counting.md).
+        foreach (var returned in statements.OfType<ReturnStatement>())
+        {
+            if (returned.Value is IdentifierExpression returnedIdentifier && _localReferences.TryGetValue(returnedIdentifier, out var returnedLocal)
+                && _ownedDeclarations.Contains(returnedLocal))
+                _movedReturnValues.Add(returnedIdentifier);
+        }
+
         if (!automatic)
             return;
+        // A call or a constructor only borrows the temporaries it is given: the callee retains what it keeps. So an owned temporary that is
+        // given to a call is released when its statement ends, whether or not the callee keeps it. A `new` object that a callee may keep is
+        // released by count, since it may have been retained.
         foreach (var expression in ExpressionsWithReceivers(statements))
         {
-            if (expression is NewExpression or CallExpression && _flows.GetValueOrDefault(expression) == Flow.Borrow
+            IEnumerable<Expression> borrowed = expression switch
+            {
+                // A union case built as `Option.Some(value)` is a call that names no function: its payload is moved into the union, not borrowed.
+                CallExpression call when _ownershipCalls.ContainsKey(call) && !IsUnionValue(call) =>
+                    call.Receiver is null ? call.Arguments : [call.Receiver, .. call.Arguments],
+                CallExpression => [],
+                NewExpression construction => construction.Arguments,
+                // A union case is built as a class construction, and its payload is moved into the union, not borrowed.
+                ClassConstructionExpression construction when !IsUnionValue(construction) => construction.Arguments,
+                _ => []
+            };
+            foreach (var argument in borrowed)
+            {
+                var value = ValueOf(argument);
+                if (value is not (NewExpression or CallExpression) || !OwnedExpression(value))
+                    continue;
+                _temporaryReleases.Add(value);
+                if (value is NewExpression && _flows.GetValueOrDefault(value, Flow.Escape) == Flow.Escape)
+                    _countedTemporaries.Add(value);
+            }
+        }
+        foreach (var expression in ExpressionsWithReceivers(statements))
+        {
+            if (expression is NewExpression or CallExpression && _flows.GetValueOrDefault(expression, Flow.Escape) == Flow.Borrow
                 && OwnedExpression(expression))
                 _temporaryReleases.Add(expression);
         }

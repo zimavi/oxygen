@@ -192,6 +192,80 @@ static int each_thread_sees_only_its_own_trace(void)
     return 0;
 }
 
+static int destructions;
+
+static void count_destruction(void *object)
+{
+    (void)object;
+    destructions++;
+}
+
+static const oxygen_runtime_type_info counted_type = {
+    .name = "counted",
+    .destructor = count_destruction,
+};
+
+/* A counted object whose first word names its runtime type, as the compiler lays objects out. */
+static void *new_counted_object(void)
+{
+    void *object = oxygen_object_new(sizeof(void *));
+    *(const oxygen_runtime_type_info **)object = &counted_type;
+    return object;
+}
+
+static int object_new_counts_one_reference_before_the_object(void)
+{
+    void *object = oxygen_object_new(16);
+    CHECK(((uint64_t *)object)[-1] == 1);
+    CHECK(((uintptr_t)object % sizeof(uint64_t)) == 0);
+    oxygen_object_free(object);
+    return 0;
+}
+
+static int object_release_runs_the_destructor_once_at_zero(void)
+{
+    destructions = 0;
+    void *object = new_counted_object();
+    oxygen_retain(object);
+    CHECK(((uint64_t *)object)[-1] == 2);
+    oxygen_release(object);
+    CHECK(destructions == 0);
+    oxygen_release(object);
+    CHECK(destructions == 1);
+    return 0;
+}
+
+static int null_object_operations_do_nothing(void)
+{
+    oxygen_retain(NULL);
+    oxygen_release(NULL);
+    oxygen_object_free(NULL);
+    return 0;
+}
+
+static int release_of_a_stack_object_does_nothing(void)
+{
+    destructions = 0;
+    /* The word before a stack object holds the stack count, as the compiler lays it out. */
+    uint64_t block[3] = {OXYGEN_STACK_OBJECT_COUNT, 0, 0};
+    void *object = &block[1];
+    *(const oxygen_runtime_type_info **)object = &counted_type;
+    oxygen_retain(object);
+    oxygen_release(object);
+    oxygen_release(object);
+    CHECK(destructions == 0);
+    CHECK(block[0] == OXYGEN_STACK_OBJECT_COUNT);
+    return 0;
+}
+
+static int release_without_a_count_stops_the_program(void)
+{
+    void *object = new_counted_object();
+    ((uint64_t *)object)[-1] = 0;
+    oxygen_release(object);
+    return 1;
+}
+
 typedef struct test_case
 {
     const char *name;
@@ -212,6 +286,11 @@ static const test_case cases[] = {
     {"write-stdout-writes-embedded-zero-bytes", write_stdout_writes_embedded_zero_bytes},
     {"abort-delivers-buffered-stdout", abort_delivers_buffered_stdout},
     {"each-thread-sees-only-its-own-trace", each_thread_sees_only_its_own_trace},
+    {"object-new-counts-one-reference-before-the-object", object_new_counts_one_reference_before_the_object},
+    {"object-release-runs-the-destructor-once-at-zero", object_release_runs_the_destructor_once_at_zero},
+    {"null-object-operations-do-nothing", null_object_operations_do_nothing},
+    {"release-of-a-stack-object-does-nothing", release_of_a_stack_object_does_nothing},
+    {"release-without-a-count-stops-the-program", release_without_a_count_stops_the_program},
 };
 
 int main(int argc, char **argv)

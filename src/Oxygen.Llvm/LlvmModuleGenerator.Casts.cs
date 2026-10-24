@@ -172,7 +172,7 @@ public sealed partial class LlvmModuleGenerator
             ? 0
             : MessageFieldOffset(typeName, FieldOffset(cls!, model, messageField.index));
         // Releasing an object of this type calls the nearest destructor in its class chain, or nothing when there is none.
-        var destructor = FindDestructor(typeName, model) ?? LLVMValueRef.CreateConstNull(pointerType);
+        var destructor = _releaseGlue.TryGetValue(typeName, out var releaseGlue) ? releaseGlue : LLVMValueRef.CreateConstNull(pointerType);
         var supertypes = _runtimeSupertypes[typeName];
         var info = _runtimeTypeInfos[typeName];
         info.Initializer = LLVMValueRef.CreateConstNamedStruct(_runtimeTypeInfoType,
@@ -202,16 +202,6 @@ public sealed partial class LlvmModuleGenerator
         }
     }
 
-    // The destructor that releases an object of `typeName`: the nearest one in its class chain, or null when there is none.
-    private LLVMValueRef? FindDestructor(string typeName, SemanticModel model)
-    {
-        for (var cls = model.Classes.GetValueOrDefault(typeName); cls is not null;
-             cls = cls.BaseTypeName is null ? null : model.Classes.GetValueOrDefault(cls.BaseTypeName))
-            if (_destructors.TryGetValue(cls.QualifiedName, out var destructor))
-                return destructor;
-        return null;
-    }
-
     // Releases the object `reference` points to through its runtime type. The destructor stored in its type information
     // runs first, so a reference typed as a base class still runs the derived destructor; then the memory is freed.
     private void EmitDestroyAndFree(LLVMBuilderRef builder, LLVMValueRef reference)
@@ -231,7 +221,7 @@ public sealed partial class LlvmModuleGenerator
             [reference], string.Empty);
         builder.BuildBr(release);
         builder.PositionAtEnd(release);
-        EmitCallOrInvoke(builder, _oxygenFree.FunctionType, _oxygenFree,
+        EmitCallOrInvoke(builder, _oxygenObjectFree.FunctionType, _oxygenObjectFree,
             [builder.BuildBitCast(reference, pointerType, "free.memory")], string.Empty);
     }
 

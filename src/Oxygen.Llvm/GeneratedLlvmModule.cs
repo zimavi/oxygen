@@ -16,8 +16,6 @@ public sealed class GeneratedLlvmModule(
     public void BuildNative(NativeBuildOptions options, INativeToolRunner? toolRunner = null) =>
         new NativeBuildPipeline(toolRunner).Build(this, options);
 
-    public void WriteMetadata(string path) => NativeModuleMetadataSerializer.Write(path, metadata);
-
     // Puts the metadata into the object's .oxmeta section, so a library built from this module carries it. Adding it twice is an error.
     public void AddMetadataSection() =>
         NativeModuleSection.Add(module, context, Encoding.UTF8.GetBytes(NativeModuleMetadataSerializer.Serialize(metadata)));

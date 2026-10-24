@@ -348,16 +348,17 @@ public sealed class LlvmTests
         Assert.Equal("c", roundTripped.Functions.Single().CallingConvention);
     }
 
-    // Version 1 names symbols with the scheme that version 2 replaced, so its metadata cannot link against this compiler's output.
-    // Versions 2 and 3 are read; a version after 3 is newer than this compiler understands.
+    // Only version 3 is read. Versions 1 and 2 name symbols with schemes that this compiler does not produce, and a version after 3
+    // is newer than this compiler understands.
     [Theory]
     [InlineData(1)]
+    [InlineData(2)]
     [InlineData(4)]
     public void NativeMetadataRejectsOtherFormatVersions(int formatVersion)
     {
         var exception = Assert.Throws<InvalidDataException>(() =>
             NativeModuleMetadataSerializer.Deserialize(
-                $$"""{"formatVersion":{{formatVersion}},"moduleName":"program","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}"""));
+                $$"""{"formatVersion":{{formatVersion}},"objectLayoutVersion":{{NativeModuleMetadata.CurrentObjectLayoutVersion}},"moduleName":"program","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}"""));
 
         Assert.Contains("Unsupported native metadata format version", exception.Message);
     }
@@ -580,41 +581,6 @@ public sealed class LlvmTests
     }
 
     [Fact]
-    public void EmbedsAndReadsNativeMetadataFromAnArtifact()
-    {
-        var path = Path.Combine(Path.GetTempPath(), $"oxygen-metadata-{Guid.NewGuid():N}.bin");
-        try
-        {
-            File.WriteAllBytes(path, [1, 2, 3, 4]);
-            var metadata = new NativeModuleMetadata
-            {
-                ModuleName = "foo.bar",
-                EntryPoint = "main",
-                TargetTriple = "x86_64-pc-windows-msvc",
-                Functions =
-                [
-                    new NativeFunctionMetadata
-                    {
-                        ModuleName = "program",
-                        SourceName = "value",
-                        NativeName = "_Ox_native_value",
-                        ReturnType = "i32"
-                    }
-                ]
-            };
-
-            NativeModuleMetadataSerializer.Embed(path, metadata);
-
-            Assert.Equal(metadata.ModuleName, NativeModuleMetadataSerializer.ReadArtifact(path).ModuleName);
-        }
-        finally
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-    }
-
-    [Fact]
     public void EmitsVoidMainAsVoidAndNativeMainReturnsZero()
     {
         var model = Analyze("void main() { return; }");
@@ -820,8 +786,9 @@ public sealed class LlvmTests
 
         var first = ir.IndexOf(destructor, StringComparison.Ordinal);
         var second = ir.IndexOf(destructor, first + destructor.Length, StringComparison.Ordinal);
-        // Each destructor runs on its scope-end path, and again in the unwind cleanup, which destroys flagged locals.
-        Assert.Equal(4, ir.Split(destructor, StringSplitOptions.None).Length - 1);
+        // Each destructor runs on its scope-end path, and again in the unwind cleanup, which destroys flagged locals. The release glue
+        // of the class calls it once more, when an object of the class is freed (docs/reference-counting.md, step 2b).
+        Assert.Equal(5, ir.Split(destructor, StringSplitOptions.None).Length - 1);
         Assert.True(first >= 0 && second > first);
     }
 
@@ -1079,7 +1046,9 @@ public sealed class LlvmTests
         using var generated = new LlvmModuleGenerator().Generate("program", model);
         var ir = generated.ToString();
 
-        Assert.Contains("call void @oxygen_free", ir);
+        // The object is counted, so it is allocated and freed through the counted-object functions.
+        Assert.Contains("call ptr @oxygen_object_new", ir);
+        Assert.Contains("call void @oxygen_object_free", ir);
     }
 
     [Fact]
@@ -1335,37 +1304,6 @@ public sealed class LlvmTests
         Assert.Contains("define i32 @_Ox_v1_m9program.A_f5value_p0_()", ir);
         Assert.Contains("define i32 @_Ox_v1_m7program_c1A_f5value_p0_(", ir);
         Assert.DoesNotContain(".1(", ir);
-    }
-
-    [Fact]
-    public void AFailedBuildWritesNoMetadataSidecar()
-    {
-        using var generated = new LlvmModuleGenerator().Generate("program", Analyze("i32 main() { return 0; }"));
-        var directory = Path.Combine(Path.GetTempPath(), $"oxygen-test-{Guid.NewGuid():N}");
-        try
-        {
-            var sidecar = Path.Combine(directory, "program.oxmeta");
-
-            Assert.Throws<InvalidOperationException>(() => generated.BuildNative(new NativeBuildOptions
-            {
-                OutputPath = Path.Combine(directory, "program"),
-                MetadataPath = sidecar,
-                Target = "x86_64-pc-windows-msvc"
-            }, new FailingToolRunner()));
-
-            Assert.False(File.Exists(sidecar));
-        }
-        finally
-        {
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    private sealed class FailingToolRunner : INativeToolRunner
-    {
-        public void Run(string executable, IReadOnlyList<string> arguments, string? workingDirectory) =>
-            throw new InvalidOperationException("The native tool failed.");
     }
 
     private static SemanticModel Analyze(string source)

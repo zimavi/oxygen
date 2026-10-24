@@ -68,6 +68,3 @@ code still cannot name the variable.
 - **Names.** The globals of an imported module are in that module's scope only.
   The importing program's functions do not see them, and an unqualified name in
   the program that matches one is an undefined name.
-- **Older libraries.** A library built before this rule has no globals in its
-  metadata. A generic declaration of it that uses a global is reported as before,
-  and the library must be rebuilt.

@@ -12,7 +12,7 @@ using Xunit;
 namespace Oxygen.Compiler.Tests;
 
 // The version 3 document: the types and the sources of a native module, their order, and the checks that reject a type or a
-// source that cannot be used. Version 2 documents are still read, and they have neither.
+// source that cannot be used.
 public sealed class NativeModuleMetadataFormatTests
 {
     private const string Triple = "x86_64-pc-windows-msvc";
@@ -45,24 +45,14 @@ public sealed class NativeModuleMetadataFormatTests
         Assert.Empty(unit.Functions);
     }
 
+    // A document must state its object layout: a layout is never assumed for a document that does not give one.
     [Fact]
-    public void AVersionTwoDocumentIsReadWithoutTypesOrGenerics()
+    public void ADocumentWithoutAnObjectLayoutIsRejected()
     {
-        var metadata = NativeModuleMetadataSerializer.Deserialize(
-            """{"formatVersion":2,"moduleName":"lib","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}""");
+        var exception = Assert.Throws<InvalidDataException>(() => NativeModuleMetadataSerializer.Deserialize(
+            """{"formatVersion":3,"moduleName":"lib","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}"""));
 
-        Assert.Empty(metadata.Types);
-        Assert.Empty(metadata.Generics);
-    }
-
-    // A document without the object layout field was built before the prefix layout, so it has layout 1.
-    [Fact]
-    public void ADocumentWithoutAnObjectLayoutIsLayoutOne()
-    {
-        var metadata = NativeModuleMetadataSerializer.Deserialize(
-            """{"formatVersion":3,"moduleName":"lib","entryPoint":"main","targetTriple":"x86_64-pc-windows-msvc"}""");
-
-        Assert.Equal(1, metadata.ObjectLayoutVersion);
+        Assert.Contains("must state the object layout", exception.Message);
     }
 
     [Fact]
@@ -73,16 +63,6 @@ public sealed class NativeModuleMetadataFormatTests
         var read = NativeModuleMetadataSerializer.Deserialize(NativeModuleMetadataSerializer.Serialize(metadata));
 
         Assert.Equal(NativeModuleMetadata.CurrentObjectLayoutVersion, read.ObjectLayoutVersion);
-    }
-
-    [Fact]
-    public void AVersionTwoDocumentCannotCarryTypesOrGenerics()
-    {
-        var metadata = Module(Struct("Point")) with { FormatVersion = NativeModuleMetadata.PreviousFormatVersion };
-
-        var exception = Assert.Throws<InvalidDataException>(() => NativeModuleMetadataSerializer.Serialize(metadata));
-
-        Assert.Contains("cannot contain types or generics", exception.Message);
     }
 
     [Fact]

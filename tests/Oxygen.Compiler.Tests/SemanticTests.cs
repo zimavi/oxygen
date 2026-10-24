@@ -566,7 +566,8 @@ public sealed class SemanticTests
             "class Iter { } class Values { Iter iter() { return new Iter(); } } " +
             "i32 main() { Values v = new Values(); var it = v.iter(); return 0; }");
 
-        Assert.Contains(model.AutomaticallyFreedLocals, declaration => declaration.Name == "it");
+        // A call's result may be shared with a holder, so its owner releases its count rather than freeing the object directly.
+        Assert.Contains(model.ReleasedLocals, declaration => declaration.Name == "it");
     }
 
     [Fact]
@@ -1550,6 +1551,31 @@ public sealed class SemanticTests
 
         // The object that make() returns is freed by its caller, not by make(), where the local b is moved out.
         Assert.DoesNotContain(model.AutomaticallyFreedLocals, declaration => declaration.Name == "b");
+    }
+
+    [Fact]
+    public void ADestructorOfAGenericClassCanNameItsTypeParameterInACall()
+    {
+        // The destructor is analysed with the class's type parameters in scope, so the explicit type argument T resolves.
+        var model = Analyze(
+            "void touch<T>(T* pointer) { } " +
+            "class Holder<T> { public T* data; public ~Holder() { touch<T>(data); } } " +
+            "i32 main() { Holder<i32> holder = new Holder<i32>(); return 0; }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void AnArgumentThatAGenericMethodKeepsIsACountedTemporary()
+    {
+        // The method belongs to a specialized class, so its parameter is matched by name. The method retains the temporary, so the
+        // caller releases its own count when the statement ends, and the object is not freed while the field holds it.
+        var model = Analyze(
+            "class Box { i32 value = 1; } " +
+            "class Holder<T> { T item; void keep(T value) { item = value; } } " +
+            "i32 main() { Holder<Box> holder = new Holder<Box>(); holder.keep(new Box()); return 0; }");
+
+        Assert.NotEmpty(model.CountedTemporaries);
     }
 
     [Fact]
@@ -3927,6 +3953,52 @@ public sealed class SemanticTests
             "import outer.lib{one}; i32 main() { return lib.one(); }"));
 
         Assert.Contains("lib.one", exception.Message);
+    }
+
+    [Fact]
+    public void ALeafPrefixNamesTheModuleOfAFunction()
+    {
+        // `lib.one` is the leaf of the imported module `outer.lib`, the explicit form of a call to `one` in that module.
+        var model = AnalyzeModules(
+            "module outer.lib; public i32 one() { return 1; }",
+            "import outer.lib; i32 main() { return lib.one(); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void ALeafPrefixThatTwoImportedModulesShareIsAmbiguousAndAFullNameResolvesIt()
+    {
+        var exception = Assert.Throws<SemanticException>(() => AnalyzeModules(
+            "module graphics.color; public i32 parse() { return 1; }",
+            "module document.color; public i32 parse() { return 2; }",
+            "import graphics.color; import document.color; i32 main() { return color.parse(); }"));
+        Assert.Contains("use a module prefix", exception.Message);
+
+        var model = AnalyzeModules(
+            "module graphics.color; public i32 parse() { return 1; }",
+            "module document.color; public i32 parse() { return 2; }",
+            "import graphics.color; import document.color; i32 main() { return graphics.color.parse() + document.color.parse(); }");
+
+        Assert.NotNull(model);
+    }
+
+    [Fact]
+    public void TwoAliasesOfTheSameLeafResolveTheAmbiguityToTheirModules()
+    {
+        // The leaf `color` is shared, so the unqualified leaf form is ambiguous. Each alias names one of the two modules.
+        var model = AnalyzeModules(
+            "module graphics.color; public i32 parse() { return 1; }",
+            "module document.color; public i32 parse() { return 2; }",
+            "import graphics.color as colors; import document.color as document_colors; " +
+            "i32 main() { return colors.parse() + document_colors.parse(); }");
+
+        var modules = model.ResolvedCalls.Values
+            .Where(function => function.Name == "parse")
+            .Select(function => function.ModuleName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(["document.color", "graphics.color"], modules);
     }
 
     [Fact]

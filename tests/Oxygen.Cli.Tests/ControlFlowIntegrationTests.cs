@@ -398,7 +398,8 @@ public sealed class ControlFlowIntegrationTests : IDisposable
             """);
 
         Assert.Equal(0, run.ExitCode);
-        Assert.Equal("derived", run.Output.Replace("\r\n", "\n"));
+        // The derived destructor runs first, and then the base destructor, which the derived class's destructor chains to.
+        Assert.Equal("derivedbase", run.Output.Replace("\r\n", "\n"));
     }
 
     [SkippableFact]

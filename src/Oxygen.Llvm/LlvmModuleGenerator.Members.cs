@@ -11,7 +11,7 @@ public sealed partial class LlvmModuleGenerator
     // NullReferenceException before the store. Fields of a value class are stored by the caller, into the variable.
     private void EmitClassMemberStore(
         LLVMBuilderRef builder, ClassSymbol cls, LLVMValueRef receiver, MemberAccessExpression member,
-        LLVMValueRef assigned, SemanticType assignedType, SemanticType targetType, SemanticModel model,
+        LLVMValueRef assigned, SemanticType assignedType, SemanticType targetType, bool moved, SemanticModel model,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions)
     {
         var property = cls.DeclaredProperties.FirstOrDefault(candidate => candidate.Name == member.MemberName);
@@ -46,6 +46,6 @@ public sealed partial class LlvmModuleGenerator
         EmitNullReferenceCheck(builder, receiver, member.MemberName, "written", model, llvmFunctions);
         var address = builder.BuildStructGEP2(_classTypes[cls.QualifiedName], receiver,
             (uint)FieldOffset(cls, model, fieldIndex), $"field.{member.MemberName}");
-        builder.BuildStore(coerced, address);
+        StoreCounted(builder, address, coerced, targetType, moved, true, model);
     }
 }
