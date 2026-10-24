@@ -100,15 +100,21 @@ OXYGEN_RUNTIME_API void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64
 #define OXYGEN_FAILURE_SIGNED_OVERFLOW 4     /* no values */
 #define OXYGEN_FAILURE_SHIFT_OUT_OF_RANGE 5  /* first: the shift count */
 #define OXYGEN_FAILURE_INVALID_ENUM_VALUE 6  /* first: the value */
+#define OXYGEN_FAILURE_INVALID_CAST 7        /* first: the object that failed the cast (0 for null), second: the target type record */
+#define OXYGEN_FAILURE_FRAME_INDEX 8         /* first: the index, second: the number of frames */
 
 /* Writes the message of a failure into memory from oxygen_alloc, and returns it in message. The memory has the lifetime of the exception
  * that holds the message. */
 OXYGEN_RUNTIME_API void __oxygen_runtime_format_failure(int32_t kind, uint64_t first, uint64_t second, oxygen_string *message);
+/* Formats a failure into the message field of an exception object, which the object then owns. The field is found through the object's
+ * type record, so the caller needs no field layout. Used by the standard library for failures that it raises itself. */
+OXYGEN_RUNTIME_API void __oxygen_runtime_set_failure_message(void *object, int32_t kind, uint64_t first, uint64_t second);
 OXYGEN_RUNTIME_API uint8_t __oxygen_runtime_is_instance(
     const void *object,
     const oxygen_runtime_type_info *expected_type);
+/* Stops the program for a cast that fails where no exception class is loaded. The object is the one that failed the cast, or null. */
 OXYGEN_RUNTIME_API void __oxygen_runtime_invalid_cast(
-    const oxygen_runtime_type_info *source_type,
+    const void *object,
     const oxygen_runtime_type_info *target_type);
 OXYGEN_RUNTIME_API void __oxygen_runtime_trace_push(
     const char *function_name, const char *file_name, uint32_t line, uint32_t column);

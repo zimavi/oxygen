@@ -137,6 +137,18 @@ public sealed class RuntimeLibraryTests : IDisposable
         Assert.Equal(101, run.ExitCode);
     }
 
+    [SkippableFact]
+    public void AFailureMessageIsSetOnTheExceptionObject()
+    {
+        AssertCasePasses("failure-message-is-set-on-the-exception-object");
+    }
+
+    [SkippableFact]
+    public void ACastFailureNamesTheObjectAndItsTarget()
+    {
+        AssertCasePasses("cast-failure-names-the-object-and-its-target");
+    }
+
     private void AssertCasePasses(string name)
     {
         var run = RunCase(name);

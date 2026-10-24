@@ -636,7 +636,7 @@ public sealed class LlvmTests
         // the definition has no linkage keyword. 2 is the interface kind.
         Assert.Matches(@"@oxygen\.type\.info\.program\.Printable = global [^\n]*\{ ptr @oxygen\.type\.name\.program\.Printable, i32 2,", ir);
         Assert.Matches(@"@oxygen\.type\.info\.program\.Item = global [^\n]*\{ ptr @oxygen\.type\.name\.program\.Item,", ir);
-        Assert.Contains("interface.type", ir);
+        Assert.Contains("cast.object", ir);
         Assert.Contains("cast.failure", ir);
     }
 

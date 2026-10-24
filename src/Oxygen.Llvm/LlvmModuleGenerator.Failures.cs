@@ -16,7 +16,8 @@ public sealed partial class LlvmModuleGenerator
         DivideByZero,
         SignedOverflow,
         ShiftOutOfRange,
-        InvalidEnumValue
+        InvalidEnumValue,
+        InvalidCast
     }
 
     // The failure of each arithmetic check.
@@ -31,6 +32,7 @@ public sealed partial class LlvmModuleGenerator
     private const string IndexOutOfRangeClassName = "std.exception.IndexOutOfRangeException";
     private const string DivideByZeroClassName = "std.exception.DivideByZeroException";
     private const string RuntimeExceptionClassName = "std.exception.RuntimeException";
+    private const string InvalidCastClassName = "std.exception.InvalidCastException";
 
     // The class that a failure throws, the failure's number in the runtime (OXYGEN_FAILURE_* in oxygen_runtime.h), and the name of its helper.
     private static (string ClassName, int Kind, string HelperName) DescribeFailure(CatchableFailure failure) => failure switch
@@ -41,6 +43,7 @@ public sealed partial class LlvmModuleGenerator
         CatchableFailure.SignedOverflow => (RuntimeExceptionClassName, 4, "oxygen.fail.signed_overflow"),
         CatchableFailure.ShiftOutOfRange => (RuntimeExceptionClassName, 5, "oxygen.fail.shift_out_of_range"),
         CatchableFailure.InvalidEnumValue => (RuntimeExceptionClassName, 6, "oxygen.fail.invalid_enum_value"),
+        CatchableFailure.InvalidCast => (InvalidCastClassName, 7, "oxygen.fail.invalid_cast"),
         _ => throw new InvalidOperationException($"Internal compiler error: unknown failure '{failure}'.")
     };
 

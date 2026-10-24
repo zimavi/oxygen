@@ -55,6 +55,18 @@ void __oxygen_runtime_null_pointer_failure(void)
     oxygen_runtime_abort();
 }
 
+/* The text of a cast that failed. The object is the one that failed the cast, read for its class, or null when there is none. */
+static int oxygen_write_invalid_cast(char *text, size_t size, const void *object, const oxygen_runtime_type_info *target)
+{
+    const char *target_name = target == NULL || target->name == NULL ? "unknown" : target->name;
+    if (object == NULL)
+        return snprintf(text, size, "Cannot cast a null reference to %s.", target_name);
+    const oxygen_runtime_type_info *actual = *(const oxygen_runtime_type_info *const *)object;
+    const char *actual_name = actual == NULL || actual->name == NULL ? "unknown" : actual->name;
+    return snprintf(text, size, "Cannot cast an object of type %s to %s, because it is not an instance of %s.",
+        actual_name, target_name, target_name);
+}
+
 /* The text of a failure that a catch can handle is formatted with snprintf and copied into memory from oxygen_alloc. The texts are short,
  * so a value that makes one longer than the buffer is cut at the buffer's end. */
 void __oxygen_runtime_format_failure(int32_t kind, uint64_t first, uint64_t second, oxygen_string *message)
@@ -83,6 +95,14 @@ void __oxygen_runtime_format_failure(int32_t kind, uint64_t first, uint64_t seco
         break;
     case OXYGEN_FAILURE_INVALID_ENUM_VALUE:
         written = snprintf(text, sizeof text, "The value %llu is not a case of the enum.", (unsigned long long)first);
+        break;
+    case OXYGEN_FAILURE_INVALID_CAST:
+        written = oxygen_write_invalid_cast(text, sizeof text, (const void *)(uintptr_t)first,
+            (const oxygen_runtime_type_info *)(uintptr_t)second);
+        break;
+    case OXYGEN_FAILURE_FRAME_INDEX:
+        written = snprintf(text, sizeof text, "Stack trace frame %llu does not exist: the trace has %llu frames.",
+            (unsigned long long)first, (unsigned long long)second);
         break;
     default:
         written = snprintf(text, sizeof text, "Oxygen failure %d.", (int)kind);
@@ -119,13 +139,22 @@ void __oxygen_runtime_arithmetic_failure(int32_t kind, uint64_t operand)
     oxygen_runtime_abort();
 }
 
-void __oxygen_runtime_invalid_cast(
-    const oxygen_runtime_type_info *source_type,
-    const oxygen_runtime_type_info *target_type)
+void __oxygen_runtime_invalid_cast(const void *object, const oxygen_runtime_type_info *target_type)
 {
-    fprintf(oxygen_runtime_error_stream(), "Oxygen cannot cast %s to %s\n",
-        source_type == NULL || source_type->name == NULL ? "unknown" : source_type->name,
-        target_type == NULL || target_type->name == NULL ? "unknown" : target_type->name);
+    char text[256];
+    oxygen_write_invalid_cast(text, sizeof text, object, target_type);
+    fprintf(oxygen_runtime_error_stream(), "Oxygen: %s\n", text);
     fflush(stderr);
     oxygen_runtime_abort();
+}
+
+void __oxygen_runtime_set_failure_message(void *object, int32_t kind, uint64_t first, uint64_t second)
+{
+    if (object == NULL)
+        return;
+    oxygen_string text = {NULL, 0};
+    __oxygen_runtime_format_failure(kind, first, second, &text);
+    const oxygen_runtime_type_info *type = *(const oxygen_runtime_type_info *const *)object;
+    *(oxygen_string *)((unsigned char *)object + type->message_offset) = text;
+    __oxygen_runtime_adopt_failure_text(object, (void *)text.data);
 }

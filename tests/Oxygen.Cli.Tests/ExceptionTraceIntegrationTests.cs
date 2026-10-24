@@ -115,8 +115,38 @@ public sealed class ExceptionTraceIntegrationTests : IDisposable
         Assert.Equal("main\ninner\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    // A frame index outside the trace throws an IndexOutOfRangeException whose message gives the index and the count.
     [SkippableFact]
-    public void ReadingAFrameOutsideTheTraceAbortsWithAMessage()
+    public void ReadingAFrameOutsideTheTraceIsCaughtWithItsIndexAndCount()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.io;
+            import std.exception;
+
+            i32 main() {
+                try {
+                    throw new RuntimeException("x");
+                } catch (RuntimeException e) {
+                    try {
+                        io.println(e.stack_trace.frame_at(9).function_name);
+                    } catch (IndexOutOfRangeException error) {
+                        io.println(error.message);
+                        return 9;
+                    }
+                }
+                return 0;
+            }
+            """);
+
+        Assert.Equal(9, run.ExitCode);
+        Assert.Equal("Stack trace frame 9 does not exist: the trace has 1 frames.\n", run.Output.Replace("\r\n", "\n"));
+    }
+
+    [SkippableFact]
+    public void AnUncaughtFrameOutsideTheTraceReportsItsIndexAndCount()
     {
         NativeProgram.RequireNativeToolchain();
 
@@ -136,7 +166,8 @@ public sealed class ExceptionTraceIntegrationTests : IDisposable
             """);
 
         Assert.Equal(101, run.ExitCode);
-        Assert.Contains("Oxygen stack trace frame 9 is out of bounds for 1 frames", run.Error.Replace("\r\n", "\n"));
+        Assert.Contains("Unhandled IndexOutOfRangeException: Stack trace frame 9 does not exist: the trace has 1 frames.",
+            run.Error.Replace("\r\n", "\n"));
     }
 
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>

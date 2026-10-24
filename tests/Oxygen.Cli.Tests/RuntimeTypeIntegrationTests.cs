@@ -91,7 +91,7 @@ public sealed class RuntimeTypeIntegrationTests : IDisposable
 
         Assert.Equal(101, run.ExitCode);
         Assert.Equal(string.Empty, run.Output);
-        Assert.Contains("cannot cast", run.Error);
+        Assert.Contains("Unhandled InvalidCastException: Cannot cast", run.Error);
     }
 
     private (int ExitCode, string Output, string Error) BuildAndRun(string source) =>

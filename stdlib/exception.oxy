@@ -42,14 +42,24 @@ public class Frame {
         get { return std.exception.runtime_trace_count(exception_object); }
     }
 
-    // The frames are numbered from zero, outermost first. The program stops when index is not less than count.
+    // The frames are numbered from zero, outermost first. An index that is not less than count throws an IndexOutOfRangeException, whose
+    // message gives the index and the count. The frame number 8 is OXYGEN_FAILURE_FRAME_INDEX in the runtime.
     public Frame frame_at(u64 index) {
+        u64 frames = this.count;
+        if (index >= frames) {
+            IndexOutOfRangeException error = new IndexOutOfRangeException();
+            std.exception.set_failure_message(error, 8, index, frames);
+            throw error;
+        }
         return new Frame(std.exception.runtime_trace_frame(exception_object, index));
     }
 }
 
 @extern("__oxygen_runtime_exception_trace_count")
 public extern u64 runtime_trace_count(Exception exception_object);
+// Writes the message of a failure into an exception object (the runtime's __oxygen_runtime_set_failure_message).
+@extern("__oxygen_runtime_set_failure_message")
+public extern void set_failure_message(Exception error, i32 kind, u64 first, u64 second);
 @extern("__oxygen_runtime_exception_trace_frame")
 public extern void* runtime_trace_frame(Exception exception_object, u64 index);
 @extern("__oxygen_runtime_trace_frame_function_name")
@@ -96,4 +106,10 @@ public class IndexOutOfRangeException : RuntimeException {
 public class DivideByZeroException : RuntimeException {
     public DivideByZeroException() : base() {}
     public DivideByZeroException(string message) : base(message) {}
+}
+
+// Raised when a reference is cast to a class that the object is not an instance of.
+public class InvalidCastException : RuntimeException {
+    public InvalidCastException() : base() {}
+    public InvalidCastException(string message) : base(message) {}
 }

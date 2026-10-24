@@ -312,11 +312,12 @@ public sealed partial class LlvmModuleGenerator
             var continueBlock = _currentFunction.AppendBasicBlock("cast.continue");
             builder.BuildCondBr(invalid, failureBlock, continueBlock);
             builder.PositionAtEnd(failureBlock);
-            var sourceName = source.IsClass
-                ? GetTypeName(builder, source.StructName!)
-                : builder.BuildLoad2(LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
-                    objectValue, "interface.type");
-            BuildNoThrowCall(builder, _invalidCast, [sourceName, GetTypeName(builder, target.StructName!)]);
+            // The failure gets the object, so its message names the object's class (null when there is none), and the target's type record.
+            // Without std.exception the runtime's hook gets the same two values, and stops.
+            var targetName = GetTypeName(builder, target.StructName!);
+            EmitFailureCall(builder, CatchableFailure.InvalidCast, model, _invalidCast, [objectValue, targetName],
+                builder.BuildPtrToInt(objectValue, _context.Int64Type, "cast.object"),
+                builder.BuildPtrToInt(targetName, _context.Int64Type, "cast.target.record"));
             builder.BuildUnreachable();
             builder.PositionAtEnd(continueBlock);
         }
