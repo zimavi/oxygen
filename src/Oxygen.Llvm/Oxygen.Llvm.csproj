@@ -15,4 +15,8 @@
     <ProjectReference Include="..\Oxygen.Compiler\Oxygen.Compiler.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Oxygen.Cli.Tests" />
+  </ItemGroup>
+
 </Project>

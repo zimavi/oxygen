@@ -6,7 +6,7 @@ using Xunit;
 
 namespace Oxygen.Cli.Tests;
 
-// Reads the Oxygen metadata of native libraries: the type encodings, the embedded copy, the sidecar, and the target check.
+// Reads the Oxygen metadata of native libraries: the type encodings, the metadata section, and the target check.
 public sealed class NativeModuleLoaderTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "oxygenc-tests", Guid.NewGuid().ToString("N"));
@@ -62,26 +62,23 @@ public sealed class NativeModuleLoaderTests : IDisposable
     }
 
     [Fact]
-    public void AnEmbeddedCopyIsReadWhenThereIsNoSidecar()
+    public void TheMetadataSectionOfAnObjectIsRead()
     {
-        var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, [1, 2, 3, 4]);
-        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple, [Function("add", "i32")]));
+        var library = Path.Combine(_directory, "lib.o");
+        NativeLibraryFixture.WriteObject(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple, [Function("add", "i32")]));
 
         var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
 
         Assert.Equal("lib", loaded.Module.ModuleName);
         Assert.Equal("add", Assert.Single(loaded.Module.Functions).Name);
         Assert.Empty(loaded.Warnings);
-        Assert.False(File.Exists(library + ".oxmeta"));
     }
 
     [Fact]
     public void AFunctionWithANamedTypeIsSkippedWithAWarningAndTheRestAreImported()
     {
         var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, [1, 2, 3, 4]);
-        NativeModuleMetadataSerializer.Write(library + ".oxmeta", Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
+        NativeLibraryFixture.WriteObject(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
             [Function("add", "i32", "i32"), Function("move", "v", "S5Point")]));
 
         var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
@@ -97,8 +94,7 @@ public sealed class NativeModuleLoaderTests : IDisposable
     public void MetadataRecordsTheNothrowAndNoreturnAnnotationsOfAFunction()
     {
         var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, [1, 2, 3, 4]);
-        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
+        NativeLibraryFixture.WriteObject(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
             [Function("abort", "v") with { NoReturn = true, NoThrow = true }, Function("add", "i32")]));
 
         var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
@@ -115,8 +111,7 @@ public sealed class NativeModuleLoaderTests : IDisposable
     public void MetadataForAnotherTargetIsRejected()
     {
         var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, [1, 2, 3, 4]);
-        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.LinuxGnuX64.Triple, [Function("add", "i32")]));
+        NativeLibraryFixture.WriteObject(library, Metadata("lib", OxygenTarget.LinuxGnuX64.Triple, [Function("add", "i32")]));
 
         var exception = Assert.Throws<InvalidDataException>(() =>
             NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
@@ -138,8 +133,7 @@ public sealed class NativeModuleLoaderTests : IDisposable
     public void MetadataWithAnotherObjectLayoutIsRejected()
     {
         var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, [1, 2, 3, 4]);
-        NativeModuleMetadataSerializer.Embed(library,
+        NativeLibraryFixture.WriteObject(library,
             Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple, [Function("add", "i32")]) with { ObjectLayoutVersion = 1 });
 
         var exception = Assert.Throws<InvalidDataException>(() =>
@@ -149,25 +143,11 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.Contains("Rebuild the library", exception.Message);
     }
 
-    // An archive that an older build appended metadata to: the section reader stops at the appended record, so the metadata is read.
-    [Fact]
-    public void AnArchiveWithAppendedMetadataGivesItsModule()
-    {
-        var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, "!<arch>\n"u8.ToArray());
-        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple, [Function("add", "i32")]));
-
-        var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
-
-        Assert.Equal("add", Assert.Single(loaded.Module.Functions).Name);
-    }
-
     // Types and generics are read and checked, but the loader does not use them yet, so it reports them rather than dropping them.
     [Fact]
     public void TypesAndGenericsAreNotImportedYetAndTheLibrarySaysSo()
     {
         var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, [1, 2, 3, 4]);
         var at = new SourceLocation(1, 1);
         var box = new StructDeclaration("Box", [], Visibility.Public, at,
             TypeParameters: [new TypeParameterSyntax("T", at)]);
@@ -178,7 +158,7 @@ public sealed class NativeModuleLoaderTests : IDisposable
             Types = [new NativeTypeMetadata { Kind = NativeTypeKind.Struct, ModuleName = "lib", Name = "Point" }],
             Generics = [generic]
         };
-        NativeModuleMetadataSerializer.Embed(library, metadata);
+        NativeLibraryFixture.WriteObject(library, metadata);
 
         var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
 
@@ -214,12 +194,11 @@ public sealed class NativeModuleLoaderTests : IDisposable
     public void AFunctionTakingADeclaredClassIsImportedWithoutAWarning()
     {
         var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, [1, 2, 3, 4]);
         var at = new SourceLocation(1, 1);
         var exception = new ClassDeclaration("Exception", null, [], [], null, [], [], null, Visibility.Public, at);
         var generic = NativeGenericMetadata.Create(
             new CompilationUnit("lib", Visibility.Public, [], [], at) { Classes = [exception] }, "lib.oxy");
-        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
+        NativeLibraryFixture.WriteObject(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
                 [Function("trace_count", "u64", "C13lib.Exception")]) with { Generics = [generic] });
 
         var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
@@ -234,13 +213,12 @@ public sealed class NativeModuleLoaderTests : IDisposable
     public void AFunctionTakingAGenericClassIsStillSkipped()
     {
         var library = Path.Combine(_directory, "lib.a");
-        File.WriteAllBytes(library, [1, 2, 3, 4]);
         var at = new SourceLocation(1, 1);
         var box = new ClassDeclaration("Box", null, [], [], null, [], [], null, Visibility.Public, at,
             TypeParameters: [new TypeParameterSyntax("T", at)]);
         var generic = NativeGenericMetadata.Create(
             new CompilationUnit("lib", Visibility.Public, [], [], at) { Classes = [box] }, "lib.oxy");
-        NativeModuleMetadataSerializer.Embed(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
+        NativeLibraryFixture.WriteObject(library, Metadata("lib", OxygenTarget.WindowsMsvcX64.Triple,
                 [Function("show", "v", "C7lib.Box_a1_i32")]) with { Generics = [generic] });
 
         var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));

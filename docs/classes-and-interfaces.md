@@ -367,9 +367,10 @@ end of that expression.
 
 A destructor runs through the object's runtime type, so a `virtual` destructor
 runs for the object's real class when the object is deleted through a base
-reference. A destructor does not chain to its base class's destructor yet, so
-only the derived destructor runs. Partially initialized-constructor cleanup is
-not yet enabled.
+reference. A derived class's destructor runs first, then its base class's
+destructor, then the release of the counted references its fields hold. Each
+destructor runs once. Partially initialized-constructor cleanup is not yet
+enabled.
 Interface method and property declarations use an explicit receiver ABI.
 Interface calls extract the object word from the fat value before invoking the
 selected callable. Table entries contain the generated class implementation

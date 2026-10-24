@@ -65,3 +65,9 @@ public class Box<T> {
         return pointer;
     }
 }
+
+// Releases the counted references in the first count elements of a buffer of T. The compiler implements it: a class or an interface T
+// releases each element, and any other T has nothing to release. The body is never run (docs/reference-counting.md, step 2b).
+@intrinsic
+public void release_elements<T>(T* pointer, u64 count) {
+}

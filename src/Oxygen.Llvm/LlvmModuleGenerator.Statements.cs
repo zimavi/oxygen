@@ -188,13 +188,14 @@ public sealed partial class LlvmModuleGenerator
                 if (model.DeletedLocals.Contains(declaration))
                 {
                     _dropFlags[declaredSlot] = BuildEntryAlloca(builder, _context.Int1Type, declaration.Name + ".alive");
-                    SetDropFlag(builder, declaredSlot, model.AutomaticallyFreedLocals.Contains(declaration));
+                    SetDropFlag(builder, declaredSlot,
+                        model.AutomaticallyFreedLocals.Contains(declaration) || model.ReleasedLocals.Contains(declaration));
                 }
                 // A stack object (or a value class) is destroyed at scope end. An object from `new` is not: its owner
                 // releases it with `delete`.
                 if ((declaredType.IsClass || declaredType.IsInterface) && (IsValueClass(declaredType, model)
                     || declaration.Initializer is ClassConstructionExpression stackObject && !model.ConstructionCalls.ContainsKey(stackObject)
-                    || model.AutomaticallyFreedLocals.Contains(declaration)))
+                    || model.AutomaticallyFreedLocals.Contains(declaration) || model.ReleasedLocals.Contains(declaration)))
                 {
                     _ownedScopes.Peek().Add(new OwnedLocal(declaration, declaration.Name, declaredType));
                     RegisterUnwindLocal(builder, declaration, declaredType, declaredSlot);
@@ -216,8 +217,9 @@ public sealed partial class LlvmModuleGenerator
                 if (assignment.Target is IdentifierExpression identifier)
                 {
                     var address = VariableAddress(identifier, storage, model);
-                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                        model.ExpressionTypes[assignment.Target], model), address);
+                    StoreCounted(builder, address, CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                        model.ExpressionTypes[assignment.Target], model), model.ExpressionTypes[assignment.Target],
+                        IsOwnedTemporary(assignment.Value), false, model);
                     // Assigning a new object makes the local alive again; any other value leaves it not owning an object.
                     if (_dropFlags.ContainsKey(address))
                         SetDropFlag(builder, address, assignment.Value is NewExpression);
@@ -232,8 +234,10 @@ public sealed partial class LlvmModuleGenerator
                 else if (assignment.Target is MemberAccessExpression staticField && model.GlobalReferences.ContainsKey(staticField))
                 {
                     // `Class.field = value` stores to the static field's global.
-                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                        model.ExpressionTypes[assignment.Target], model), _globalVariables[model.GlobalReferences[staticField]]);
+                    StoreCounted(builder, _globalVariables[model.GlobalReferences[staticField]],
+                        CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                            model.ExpressionTypes[assignment.Target], model),
+                        model.ExpressionTypes[assignment.Target], IsOwnedTemporary(assignment.Value), true, model);
                 }
                 else if (assignment.Target is CallExpression bareProperty && model.StaticPropertySetters.ContainsKey(bareProperty))
                 {
@@ -245,8 +249,10 @@ public sealed partial class LlvmModuleGenerator
                 else if (assignment.Target is CallExpression bareStatic && model.GlobalReferences.ContainsKey(bareStatic))
                 {
                     // `Class<T>.field = value` stores to the static field of that instance.
-                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                        model.ExpressionTypes[assignment.Target], model), _globalVariables[model.GlobalReferences[bareStatic]]);
+                    StoreCounted(builder, _globalVariables[model.GlobalReferences[bareStatic]],
+                        CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                            model.ExpressionTypes[assignment.Target], model),
+                        model.ExpressionTypes[assignment.Target], IsOwnedTemporary(assignment.Value), true, model);
                 }
                 else if (assignment.Target is MemberAccessExpression member
                     && member.Target is IdentifierExpression targetIdentifier)
@@ -287,6 +293,8 @@ public sealed partial class LlvmModuleGenerator
                                 model.ExpressionTypes[assignment.Target], model);
                             var current = builder.BuildLoad2(ToLlvmType(targetType, model),
                                 storage[targetIdentifier.Name], targetIdentifier.Name);
+                            if (!IsOwnedTemporary(assignment.Value))
+                                EmitRetainValue(builder, coerced, model.ExpressionTypes[assignment.Target], model);
                             var updated = builder.BuildInsertValue(current, coerced, (uint)fieldIndex, "value.update");
                             builder.BuildStore(updated, storage[targetIdentifier.Name]);
                         }
@@ -297,7 +305,7 @@ public sealed partial class LlvmModuleGenerator
                                 : builder.BuildLoad2(ToLlvmType(targetType, model), storage[targetIdentifier.Name], targetIdentifier.Name);
                             EmitClassMemberStore(builder, cls, receiver, member, assigned,
                                 model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target],
-                                model, llvmFunctions);
+                                IsOwnedTemporary(assignment.Value), model, llvmFunctions);
                         }
                     }
                     else
@@ -309,6 +317,8 @@ public sealed partial class LlvmModuleGenerator
                         var fieldIndex = model.Structs[targetType.StructName!].Fields
                             .Select((field, index) => (field, index))
                             .First(pair => pair.field.Name == member.MemberName).index;
+                        if (!IsOwnedTemporary(assignment.Value))
+                            EmitRetainValue(builder, assigned, model.ExpressionTypes[assignment.Target], model);
                         var updated = builder.BuildInsertValue(current, assigned, (uint)fieldIndex, "struct.update");
                         builder.BuildStore(updated, storage[targetIdentifier.Name]);
                     }
@@ -337,8 +347,9 @@ public sealed partial class LlvmModuleGenerator
                         return false;
                     }
                     var address = storage["this." + thisMember.MemberName];
-                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                        model.ExpressionTypes[assignment.Target], model), address);
+                    StoreCounted(builder, address, CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                        model.ExpressionTypes[assignment.Target], model), model.ExpressionTypes[assignment.Target],
+                        IsOwnedTemporary(assignment.Value), true, model);
                 }
                 else if (assignment.Target is MemberAccessExpression nestedMember
                     && model.ExpressionTypes[nestedMember.Target].IsClass
@@ -349,7 +360,7 @@ public sealed partial class LlvmModuleGenerator
                     var objectType = model.ExpressionTypes[nestedMember.Target];
                     var receiver = EmitExpression(context, builder, nestedMember.Target, values, storage, model, llvmFunctions);
                     EmitClassMemberStore(builder, model.Classes[objectType.StructName!], receiver, nestedMember, assigned,
-                        model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target], model, llvmFunctions);
+                        model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target], IsOwnedTemporary(assignment.Value), model, llvmFunctions);
                 }
                 else if (assignment.Target is MemberAccessExpression
                          {
@@ -360,19 +371,25 @@ public sealed partial class LlvmModuleGenerator
                     // A field of a struct, or of a value class, that is itself a field, an element or the target of a dereference, as in
                     // line.b.y = v and (*pointer).y = v. The object is read, the field is replaced, and the object is written back through
                     // its place. Reference classes are stored through their object above, so only value classes reach here.
-                    EmitPlace(context, builder, assignment.Target, values, storage, model, llvmFunctions).Store(
-                        CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value], model.ExpressionTypes[assignment.Target], model));
+                    var placeValue = CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                        model.ExpressionTypes[assignment.Target], model);
+                    // The struct keeps a counted value it stores, and is never released, so the count is kept (see step 2a).
+                    if (!IsOwnedTemporary(assignment.Value))
+                        EmitRetainValue(builder, placeValue, model.ExpressionTypes[assignment.Target], model);
+                    EmitPlace(context, builder, assignment.Target, values, storage, model, llvmFunctions).Store(placeValue);
                 }
                 else if (assignment.Target is UnaryExpression { Operator: TokenKind.Star, Operand: var operand })
-                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
-                        model.ExpressionTypes[assignment.Target], model),
-                        EmitCheckedPointer(context, builder, operand, values, storage, model, llvmFunctions));
+                    StoreCounted(builder, EmitCheckedPointer(context, builder, operand, values, storage, model, llvmFunctions),
+                        CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                            model.ExpressionTypes[assignment.Target], model),
+                        model.ExpressionTypes[assignment.Target], IsOwnedTemporary(assignment.Value), false, model);
                 else if (assignment.Target is IndexExpression index)
                     // The value is converted to the element type: a literal keeps its i32 type otherwise, and storing
                     // that into an i8 element would write past it.
-                    builder.BuildStore(CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                    StoreCounted(builder, EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions),
+                        CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                             model.ExpressionTypes[assignment.Target], model),
-                        EmitArrayAddress(context, builder, index, values, storage, model, llvmFunctions));
+                        model.ExpressionTypes[assignment.Target], IsOwnedTemporary(assignment.Value), false, model);
                 else
                     throw new InvalidOperationException("Unsupported assignment target.");
                 return false;
@@ -400,6 +417,10 @@ public sealed partial class LlvmModuleGenerator
                     returnValue = CoerceValue(builder,
                         EmitExpression(context, builder, returnStatement.Value, values, storage, model, llvmFunctions),
                         model.ExpressionTypes[returnStatement.Value], emittedReturnType, model);
+                    // The caller gets one count for the value: a returned owned local or call result moves its count, and any other
+                    // counted value is retained now, before the temporaries and the locals that may hold it are released.
+                    if (!IsOwnedTemporary(returnStatement.Value) && !model.MovedReturnValues.Contains(returnStatement.Value))
+                        EmitRetainValue(builder, returnValue.Value, emittedReturnType, model);
                     ReleaseTemporaries(builder, model);
                     if (EmitExitFinallies(context, builder, function, values, storage, model, llvmFunctions,
                             emittedReturnType, loops, 0))

@@ -15,7 +15,6 @@ public sealed record NativeDependency(string Path, NativeDependencyKind Kind);
 public sealed record NativeBuildOptions
 {
     public required string OutputPath { get; init; }
-    public string? MetadataPath { get; init; }
     public string CompilerPath { get; init; } = "clang";
     // The archiver of a library build. It takes the rcs arguments of llvm-ar, which GNU ar also accepts.
     public string ArchiverPath { get; init; } = "llvm-ar";
@@ -120,27 +119,7 @@ public sealed class NativeBuildPipeline(INativeToolRunner? toolRunner = null)
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(options);
-        // The metadata is embedded in the file that the link writes, so the output is named before anything else.
         options = options with { OutputPath = ExecutablePath(options.OutputPath, options.Target) };
-        if (!string.IsNullOrWhiteSpace(options.MetadataPath))
-        {
-            var metadata = module.Metadata with
-            {
-                Dependencies = options.Dependencies
-                    .Select(dependency => new NativeDependencyMetadata
-                    {
-                        Path = dependency.Path,
-                        Kind = dependency.Kind
-                    })
-                    .ToArray()
-            };
-            // The sidecar and the embedded copy are written only once the link has succeeded, so a failed build leaves no metadata
-            // that describes an executable which does not exist.
-            Build(module.ToString(), options);
-            NativeModuleMetadataSerializer.Write(options.MetadataPath, metadata);
-            NativeModuleMetadataSerializer.Embed(options.OutputPath, metadata);
-            return;
-        }
         Build(module.ToString(), options);
     }
 

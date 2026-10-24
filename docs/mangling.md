@@ -13,6 +13,7 @@ symbol         := "_Ox_v1_" "m" name(module) [ "_c" name(type) | "_i" name(type)
 member         := "_f" name(function) signature [ specialization ]     function or method
                 | "_k" signature                                       constructor
                 | "_d"                                                 destructor
+                | "_r"                                                 release glue of a class (what an object releases when it is freed)
 signature      := "_p" count "_" type*
 specialization := "_g" count "_" type*
 name(x)        := length(x) x
@@ -57,6 +58,7 @@ different modules encode differently.
 | `i32 value()` in module `program.A` | `_Ox_v1_m9program.A_f5value_p0_` |
 | constructor `A(i32 x)` of class `A` | `_Ox_v1_m7program_c1A_k_p1_i32` |
 | destructor of class `A` | `_Ox_v1_m7program_c1A_d` |
+| release glue of class `A` | `_Ox_v1_m7program_c1A_r` |
 
 The last two rows of the method examples show why methods have a class segment:
 `A.value` and the function `value` of module `program.A` would otherwise be

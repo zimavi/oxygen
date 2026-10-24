@@ -21,9 +21,8 @@ internal sealed record LoadedGenericUnit(CompilationUnit Unit, string SourceName
 internal static class NativeModuleLoader
 {
     // Loads the modules of a native library. A library built by oxygenc carries one metadata document per module, in the .oxmeta
-    // section of each object, and each document is a module. An older library has its metadata appended, or in a sidecar, and is one
-    // module. A library without metadata is opaque, and gives no modules. Metadata for another target is rejected, since its symbols
-    // belong to a different platform.
+    // section of each object, and each document is a module. A library without metadata is opaque, and gives no modules. Metadata for
+    // another target is rejected, since its symbols belong to a different platform.
     public static IReadOnlyList<LoadedNativeModule> Load(FileInfo file, OxygenTarget target)
     {
         var documents = ReadMetadata(file);
@@ -41,25 +40,15 @@ internal static class NativeModuleLoader
         return documents.Select(metadata => Decode(file, metadata)).ToList();
     }
 
-    // The metadata documents of a library: one per object with the .oxmeta section, then the copy that older builds appended, then
-    // the sidecar. A metadata file given directly is read as it is. Malformed metadata is invalid input.
+    // The metadata documents of a library: one per object or archive member with the .oxmeta section. A file that is neither an object
+    // nor an archive has none, and is not an error here. Malformed metadata is invalid input.
     private static IReadOnlyList<NativeModuleMetadata> ReadMetadata(FileInfo file)
     {
         try
         {
-            if (file.FullName.EndsWith(".oxmeta", StringComparison.OrdinalIgnoreCase))
-                return [NativeModuleMetadataSerializer.Read(file.FullName)];
-
-            var payloads = ReadSectionPayloads(file.FullName);
-            if (payloads.Count > 0)
-                return payloads.Select(payload => NativeModuleMetadataSerializer.Deserialize(Encoding.UTF8.GetString(payload))).ToList();
-
-            var embedded = NativeModuleMetadataSerializer.ReadEmbedded(file.FullName);
-            if (embedded is not null)
-                return [embedded];
-
-            var sidecar = file.FullName + ".oxmeta";
-            return File.Exists(sidecar) ? [NativeModuleMetadataSerializer.Read(sidecar)] : [];
+            if (!NativeModuleSection.TryReadPayloads(file.FullName, out var payloads))
+                return [];
+            return payloads.Select(payload => NativeModuleMetadataSerializer.Deserialize(Encoding.UTF8.GetString(payload))).ToList();
         }
         catch (JsonException exception)
         {
@@ -68,11 +57,6 @@ internal static class NativeModuleLoader
                 $"The native module metadata for '{file.FullName}' is not valid JSON: {exception.Message}", exception);
         }
     }
-
-    // The .oxmeta payloads of a file. A file that is neither an object nor an archive has none, and it may still carry older metadata
-    // or none, so it is not an error here.
-    private static IReadOnlyList<byte[]> ReadSectionPayloads(string path) =>
-        NativeModuleSection.TryReadPayloads(path, out var payloads) ? payloads : [];
 
     private static LoadedNativeModule Decode(FileInfo file, NativeModuleMetadata metadata)
     {

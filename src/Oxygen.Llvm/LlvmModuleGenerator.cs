@@ -45,8 +45,10 @@ public sealed partial class LlvmModuleGenerator
     private sealed record OwnedLocal(VariableDeclarationStatement? Declaration, string Name, SemanticType Type, CatchClause? Catch = null,
         bool Release = false);
     private Stack<List<OwnedLocal>> _ownedScopes = new();
-    private LLVMValueRef _oxygenAlloc;
-    private LLVMValueRef _oxygenFree;
+    private LLVMValueRef _oxygenObjectNew;
+    private LLVMValueRef _oxygenObjectFree;
+    private LLVMValueRef _oxygenRetain;
+    private LLVMValueRef _oxygenRelease;
     private LLVMValueRef _memcmp;
     private LLVMTypeRef _runtimeTypeInfoType;
     private LLVMValueRef _exceptionThrow;
@@ -173,6 +175,7 @@ public sealed partial class LlvmModuleGenerator
                     LLVMTypeRef.CreatePointer(_context.Int8Type, 0), _context.Int32Type], false);
             _constructors.Clear();
             _destructors.Clear();
+            _releaseGlue.Clear();
             foreach (var cls in concreteClasses)
                 _classTypes[cls.QualifiedName] = context.CreateNamedStruct($"class.{cls.QualifiedName}");
             foreach (var cls in concreteClasses)
@@ -214,12 +217,14 @@ public sealed partial class LlvmModuleGenerator
             }
             var allocType = LLVMTypeRef.CreateFunction(
                 LLVMTypeRef.CreatePointer(_context.Int8Type, 0), [_context.Int64Type], false);
-            _oxygenAlloc = DeclareNativeFunction(
-                module, "oxygen_alloc", allocType);
+            _oxygenObjectNew = DeclareNativeFunction(
+                module, "oxygen_object_new", allocType);
             var freeType = LLVMTypeRef.CreateFunction(_context.VoidType,
                 [LLVMTypeRef.CreatePointer(_context.Int8Type, 0)], false);
-            _oxygenFree = DeclareNativeFunction(
-                module, "oxygen_free", freeType);
+            _oxygenObjectFree = DeclareNativeFunction(
+                module, "oxygen_object_free", freeType);
+            _oxygenRetain = DeclareNativeFunction(module, "oxygen_retain", freeType);
+            _oxygenRelease = DeclareNativeFunction(module, "oxygen_release", freeType);
             _memcmp = DeclareNativeFunction(module, "memcmp",
                 LLVMTypeRef.CreateFunction(_context.Int32Type,
                     [LLVMTypeRef.CreatePointer(_context.Int8Type, 0),
@@ -292,6 +297,11 @@ public sealed partial class LlvmModuleGenerator
                         LLVMTypeRef.CreateFunction(_context.VoidType,
                             [LLVMTypeRef.CreatePointer(_classTypes[cls.QualifiedName], 0)], false));
             }
+            foreach (var cls in concreteClasses.Where(cls => !cls.IsValue))
+                _releaseGlue[cls.QualifiedName] = DeclareNativeFunction(module,
+                    OxygenNameMangler.MangleReleaseGlue(cls.ModuleName, cls),
+                    LLVMTypeRef.CreateFunction(_context.VoidType,
+                        [LLVMTypeRef.CreatePointer(_classTypes[cls.QualifiedName], 0)], false));
             var boundsFailureType = LLVMTypeRef.CreateFunction(
                 _context.VoidType, [_context.Int64Type, _context.Int64Type], false);
             _arrayBoundsFailure = DeclareNativeFunction(module, "__oxygen_runtime_array_bounds_failure", boundsFailureType);
@@ -345,6 +355,12 @@ public sealed partial class LlvmModuleGenerator
                     EmitDestructor(context, builder, destructor, cls, model, llvmFunctions);
                     if (library && IsInstantiationName(cls.Name))
                         destructor.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
+                }
+                if (!cls.IsValue && _releaseGlue.TryGetValue(cls.QualifiedName, out var releaseGlue))
+                {
+                    EmitReleaseGlue(builder, releaseGlue, cls, model);
+                    if (library && IsInstantiationName(cls.Name))
+                        releaseGlue.Linkage = LLVMLinkage.LLVMLinkOnceODRLinkage;
                 }
             }
 

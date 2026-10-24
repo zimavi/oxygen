@@ -502,13 +502,14 @@ public sealed partial class LlvmModuleGenerator
                 var released = values.TryGetValue(owned.Name, out var directReleased)
                     ? directReleased
                     : builder.BuildLoad2(ToLlvmType(owned.Type, model), storage[owned.Name], owned.Name);
-                EmitReleaseOwned(builder, OwnedObjectPointer(builder, released, owned.Type));
+                EmitReleaseCounted(builder, OwnedObjectPointer(builder, released, owned.Type));
                 continue;
             }
             // The scope has ended on this path, so an exception from here on must not destroy the local again.
             if (owned.Declaration is { } endingDeclaration)
                 ClearUnwindFlag(builder, endingDeclaration);
-            if (owned.Declaration is { } freedDeclaration && model.AutomaticallyFreedLocals.Contains(freedDeclaration))
+            if (owned.Declaration is { } freedDeclaration
+                && (model.AutomaticallyFreedLocals.Contains(freedDeclaration) || model.ReleasedLocals.Contains(freedDeclaration)))
             {
                 // An allocation the function owns: its destructor runs, then its memory is released.
                 var allocated = OwnedObjectPointer(builder, values.TryGetValue(owned.Name, out var directAllocated)
@@ -522,13 +523,13 @@ public sealed partial class LlvmModuleGenerator
                     builder.BuildCondBr(builder.BuildLoad2(_context.Int1Type, _dropFlags[ownedSlot], "scope.alive"),
                         scopeRelease, scopeSkip);
                     builder.PositionAtEnd(scopeRelease);
-                    EmitReleaseOwned(builder, allocated);
+                    EmitScopeRelease(builder, allocated, model.ReleasedLocals.Contains(freedDeclaration));
                     builder.BuildBr(scopeSkip);
                     builder.PositionAtEnd(scopeSkip);
                 }
                 else
                 {
-                    EmitReleaseOwned(builder, allocated);
+                    EmitScopeRelease(builder, allocated, model.ReleasedLocals.Contains(freedDeclaration));
                 }
                 continue;
             }

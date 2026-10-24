@@ -257,7 +257,11 @@ public sealed class SemanticModel
         IReadOnlyDictionary<LambdaExpression, FunctionSymbol>? lambdaFunctions = null,
         IReadOnlySet<SyntaxNode>? inferredNoThrow = null,
         IReadOnlySet<Expression>? temporaryReleases = null,
-        IReadOnlySet<ForInStatement>? ownedIterators = null)
+        IReadOnlySet<ForInStatement>? ownedIterators = null,
+        IReadOnlySet<VariableDeclarationStatement>? releasedLocals = null,
+        IReadOnlySet<VariableDeclarationStatement>? ownedDeclarations = null,
+        IReadOnlySet<Expression>? movedReturnValues = null,
+        IReadOnlySet<Expression>? countedTemporaries = null)
     {
         InferredNoThrow = inferredNoThrow ?? new HashSet<SyntaxNode>(ReferenceEqualityComparer.Instance);
         TemporaryReleases = temporaryReleases ?? new HashSet<Expression>(ReferenceEqualityComparer.Instance);
@@ -296,6 +300,10 @@ public sealed class SemanticModel
         AutomaticallyFreedLocals = automaticallyFreedLocals ?? new HashSet<VariableDeclarationStatement>();
         DeletedLocals = deletedLocals ?? new HashSet<VariableDeclarationStatement>();
         RuntimeCheckedDeletes = runtimeCheckedDeletes ?? new HashSet<DeleteStatement>();
+        ReleasedLocals = releasedLocals ?? new HashSet<VariableDeclarationStatement>();
+        OwnedDeclarations = ownedDeclarations ?? new HashSet<VariableDeclarationStatement>();
+        MovedReturnValues = movedReturnValues ?? new HashSet<Expression>();
+        CountedTemporaries = countedTemporaries ?? new HashSet<Expression>();
     }
 
     public IReadOnlyDictionary<FunctionDeclaration, FunctionSymbol> Functions { get; }
@@ -370,6 +378,19 @@ public sealed class SemanticModel
     // Locals holding a `new` object in an automatic function that is never deleted and never escapes: the compiler frees
     // the object when the local's scope ends.
     public IReadOnlySet<VariableDeclarationStatement> AutomaticallyFreedLocals { get; }
+
+    // The owned locals that release their count at scope end (see docs/reference-counting.md, step 2a). A local that is not here and is
+    // owned is freed directly, or moved by a return.
+    public IReadOnlySet<VariableDeclarationStatement> ReleasedLocals { get; }
+
+    // Every local that owns its object: it is initialized with an owned value and never assigned, whether it is freed, released, or moved.
+    public IReadOnlySet<VariableDeclarationStatement> OwnedDeclarations { get; }
+
+    // The return values that are owned locals. Their count moves to the caller, so the return does not retain them.
+    public IReadOnlySet<Expression> MovedReturnValues { get; }
+
+    // The `new` temporaries that are released by count, not freed directly: a callee that borrows them may keep them (step 2b).
+    public IReadOnlySet<Expression> CountedTemporaries { get; }
 
     // Locals that some `delete` releases. Each gets a runtime flag that says whether its object is still alive.
     public IReadOnlySet<VariableDeclarationStatement> DeletedLocals { get; }

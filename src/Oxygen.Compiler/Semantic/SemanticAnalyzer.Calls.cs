@@ -607,7 +607,7 @@ public sealed partial class SemanticAnalyzer
                 var leaf = import.Name[(import.Name.LastIndexOf('.') + 1)..];
                 if (name.StartsWith(leaf + ".", StringComparison.Ordinal))
                 {
-                    // The legacy module-leaf prefix remains valid:
+                    // The module-leaf prefix names the imported module explicitly:
                     // import stdlib.io; io.print(...) -> stdlib.io.print(...).
                     keys.Add($"{import.Name}.{name[(leaf.Length + 1)..]}");
                 }

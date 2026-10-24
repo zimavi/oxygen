@@ -1,13 +1,12 @@
 # Native module metadata
 
 The metadata document is UTF-8 JSON and has a versioned `formatVersion` field.
-The build no longer writes it as a sidecar file; the `--emit-metadata` flag was
-removed, and library builds embed it in an object section (see below). Format version `3` is the current one. It
-contains the source module name, the platform entry point, generated function
-symbols (named as described in [native symbol names](mangling.md)), link
-dependencies, and two arrays that version 2 does not have: `types` and
-`generics`. Format version `2` is still read, and such a document has neither
-array. Format version `1` used the earlier symbol scheme, so readers reject it.
+Library builds embed it in the `.oxmeta` section of each object (see below).
+Format version `3` is the only one that is read. It contains the source module
+name, the platform entry point, generated function symbols (named as described
+in [native symbol names](mangling.md)), link dependencies, and the `types` and
+`generics` arrays. A document must state its `objectLayoutVersion`, and a
+document of any other format version is rejected.
 
 ## Types and generics (version 3)
 
@@ -65,9 +64,9 @@ native symbol and dependencies by kind and path, so equivalent metadata
 produces byte-identical output. Readers reject unsupported format versions
 rather than silently interpreting a newer schema.
 
-When a native library is imported, the compiler reads its embedded metadata,
-or the sidecar when the library has no embedded copy. A library without either
-is opaque and contributes no declarations. The metadata must name the target
+When a native library is imported, the compiler reads the metadata in its
+`.oxmeta` section. A library without one is opaque and contributes no
+declarations. The metadata must name the target
 that the library was built for, and a library for another target is rejected.
 
 Primitive types, `string`, pointers and fixed-size arrays are described by the
@@ -80,9 +79,7 @@ it as a warning that names the function.
 
 A library module's functions are declared to a program only when the program
 imports that module, directly or through the imported generic units. The warnings
-of a module the program does not import are not shown. The sidecar and the
-embedded copy are written only after the link succeeds, so a failed build leaves
-neither behind.
+of a module the program does not import are not shown.
 
 The generated module exposes its metadata through `GeneratedLlvmModule.Metadata`
 and writes it when `NativeBuildOptions.MetadataPath` is supplied. Metadata

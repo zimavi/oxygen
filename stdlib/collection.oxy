@@ -137,6 +137,7 @@ public class List<T> : Iterable<T> {
     }
 
     public ~List() {
+        memory.release_elements(data, length);
         memory.free(data);
     }
 }

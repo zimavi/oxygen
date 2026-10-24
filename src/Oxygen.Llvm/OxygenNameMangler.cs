@@ -67,6 +67,10 @@ public static class OxygenNameMangler
     public static string MangleDestructor(string moduleName, ClassSymbol cls) =>
         $"{ManglingPrefix}m{Name(moduleName)}_c{Name(cls.Name)}_d";
 
+    // The release glue of a class: what it releases when it is freed (docs/reference-counting.md, step 2b).
+    public static string MangleReleaseGlue(string moduleName, ClassSymbol cls) =>
+        $"{ManglingPrefix}m{Name(moduleName)}_c{Name(cls.Name)}_r";
+
     // An identifier with its length in front, so the identifier ends where its length says.
     private static string Name(string identifier) => identifier.Length + identifier;
 

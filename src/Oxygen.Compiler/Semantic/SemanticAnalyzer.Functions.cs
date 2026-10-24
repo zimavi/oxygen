@@ -134,9 +134,11 @@ public sealed partial class SemanticAnalyzer
 
         if (_diagnostics is not null)
         {
+            // An intrinsic's body is never run, so its parameters are not used by design (docs/reference-counting.md, step 2b).
+            var intrinsic = function.Declaration.Annotations?.Any(annotation => annotation.Name == "intrinsic") == true;
             foreach (var variable in _declaredVariables)
             {
-                if (!_usedVariables.Contains(variable))
+                if (!_usedVariables.Contains(variable) && !(intrinsic && variable.Declaration is ParameterDeclaration))
                 {
                     var name = variable.Declaration switch
                     {

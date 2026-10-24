@@ -47,11 +47,6 @@ public sealed class OwnershipIntegrationTests : IDisposable
 
     public static TheoryData<string, string, int> FreedPrograms => new()
     {
-        { "list_for_in", ListForIn, 3 },
-        { "for_in_break", ForInBreak, 0 },
-        { "for_in_return", ForInReturn, 4 },
-        { "manual_iter", ManualIter, 0 },
-        { "manual_walk", ManualWalk, 7 },
         { "discarded_iter", DiscardedIter, 0 },
         { "temp_argument", TempArgument, 0 },
         { "discarded_new", DiscardedNew, 0 },
@@ -68,9 +63,22 @@ public sealed class OwnershipIntegrationTests : IDisposable
         { "break_out_of_loop_owned", BreakOutOfLoopOwned, 3 },
         { "delete_then_scope", DeleteThenScope, 2 },
         { "exception_unwinds_owned", ExceptionUnwindsOwned, 10 },
+        { "list_for_in", ListForIn, 3 },
+        { "for_in_break", ForInBreak, 0 },
+        { "for_in_return", ForInReturn, 4 },
+        { "manual_iter", ManualIter, 0 },
+        { "manual_walk", ManualWalk, 7 },
         { "parameter_walk", ParameterWalk, 3 },
         { "this_walk", ThisWalk, 8 },
         { "this_returned_holder", ThisReturnedHolder, 4 },
+        { "stored_object_outlives_its_owner_scope", StoredObjectOutlivesItsOwnerScope, 9 },
+        { "overwrite_releases_the_old_value", OverwriteReleasesTheOldValue, 0 },
+        { "returned_field_alias_is_retained", ReturnedFieldAliasIsRetained, 5 },
+        { "self_assignment_keeps_the_object", SelfAssignmentKeepsTheObject, 4 },
+        { "union_payload_is_released_with_its_holder", UnionPayloadIsReleasedWithItsHolder, 0 },
+        { "list_elements_are_released_with_the_list", ListElementsAreReleasedWithTheList, 0 },
+        { "derived_class_fields_are_released_with_it", DerivedClassFieldsAreReleasedWithIt, 0 },
+        { "interface_field_is_released_with_its_holder", InterfaceFieldIsReleasedWithItsHolder, 4 },
     };
 
     public static TheoryData<string, string, int> KeptPrograms => new()
@@ -263,6 +271,91 @@ public sealed class OwnershipIntegrationTests : IDisposable
         }
         Peek viaParam(Box b) { return b.keep(); }
         i32 main() { Box bx = new Box(); Peek p = viaParam(bx); return p.read(); }
+        """;
+
+    // A holder keeps the object that its owner's scope releases, so the object outlives the owner and is still read.
+    private const string StoredObjectOutlivesItsOwnerScope = """
+        class Box { public i32 value = 0; }
+        class Holder { public Box item; }
+        i32 main() {
+            Holder keep = new Holder();
+            {
+                Box b = new Box();
+                b.value = 9;
+                keep.item = b;
+            }
+            return keep.item.value;
+        }
+        """;
+
+    // The first object is released by the overwrite, so only the second one is still held.
+    private const string OverwriteReleasesTheOldValue = """
+        class Box { public i32 value = 0; }
+        class Holder { public Box item; }
+        i32 main() {
+            Holder h = new Holder();
+            h.item = new Box();
+            h.item = new Box();
+            return 0;
+        }
+        """;
+
+    // The returned alias is retained by the return, so the caller's local releases its own count and the holder still has one.
+    private const string ReturnedFieldAliasIsRetained = """
+        class Box { public i32 value = 0; }
+        class Holder { public Box item; }
+        Box get(Holder h) { return h.item; }
+        i32 main() {
+            Holder h = new Holder();
+            h.item = new Box();
+            h.item.value = 5;
+            Box x = get(h);
+            return x.value;
+        }
+        """;
+
+    // The new value is retained before the old one is released, so storing the object into itself keeps it alive.
+    private const string SelfAssignmentKeepsTheObject = """
+        class Box { public i32 value = 0; }
+        class Holder { public Box item; }
+        i32 main() {
+            Holder h = new Holder();
+            h.item = new Box();
+            h.item.value = 4;
+            h.item = h.item;
+            return h.item.value;
+        }
+        """;
+
+    // The holder's union releases the payload it holds when the holder is freed.
+    private const string UnionPayloadIsReleasedWithItsHolder = """
+        import std.collection;
+        class Box { public i32 value = 3; }
+        class Holder { public Option<Box> item; }
+        i32 main() { Holder h = new Holder(); h.item = Option.Some(new Box()); return 0; }
+        """;
+
+    // The list releases each element it holds when it is freed.
+    private const string ListElementsAreReleasedWithTheList = """
+        import std.collection;
+        class Box { public i32 value = 3; }
+        i32 main() { List<Box> boxes = new List<Box>(); boxes.append(new Box()); boxes.append(new Box()); return 0; }
+        """;
+
+    // A derived object releases the fields of its base class and its own, and both destructors run as part of the release.
+    private const string DerivedClassFieldsAreReleasedWithIt = """
+        class Inner { public i32 v = 1; }
+        class Base { public Inner a; }
+        class Derived : Base { public Inner b; }
+        i32 main() { Derived d = new Derived(); d.a = new Inner(); d.b = new Inner(); return 0; }
+        """;
+
+    // An interface-typed field is released through its object, with the object's own destructor.
+    private const string InterfaceFieldIsReleasedWithItsHolder = """
+        interface Shape { i32 area(); }
+        class Square : Shape { public i32 side = 2; public i32 area() { return side * side; } }
+        class Holder { public Shape s; }
+        i32 main() { Holder h = new Holder(); h.s = new Square(); return h.s.area(); }
         """;
 
     private const string TempArgument = """

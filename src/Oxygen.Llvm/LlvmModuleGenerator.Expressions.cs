@@ -21,7 +21,8 @@ public sealed partial class LlvmModuleGenerator
     {
         var value = EmitExpressionValue(context, builder, expression, values, storage, model, llvmFunctions);
         if (_temporaryScopes.Count > 0 && model.TemporaryReleases.Contains(expression))
-            KeepTemporary(builder, value, model.ExpressionTypes[expression], model);
+            KeepTemporary(builder, value, model.ExpressionTypes[expression], model,
+                expression is CallExpression || model.CountedTemporaries.Contains(expression));
         return value;
     }
 
@@ -229,13 +230,21 @@ public sealed partial class LlvmModuleGenerator
         LLVMValueRef instance;
         if (heapAllocated)
         {
-            var raw = builder.BuildCall2(_oxygenAlloc.FunctionType, _oxygenAlloc,
+            var raw = builder.BuildCall2(_oxygenObjectNew.FunctionType, _oxygenObjectNew,
                 new[] { _classTypes[className].SizeOf }, "object");
             instance = builder.BuildBitCast(raw, ClassPointerType(className), "object.cast");
         }
         else
         {
-            instance = BuildEntryAlloca(builder, _classTypes[className], "object.addr");
+            // A stack object is not counted. A word before it holds the stack marker, which the runtime's counts ignore, so a holder that
+            // releases it does nothing (docs/reference-counting.md).
+            // The struct is made in this generator's context: LLVMTypeRef.CreateStruct would use LLVM's global context, which the class types
+            // do not belong to.
+            var withCount = _context.GetStructType([_context.Int64Type, _classTypes[className]], false);
+            var block = BuildEntryAlloca(builder, withCount, "object.block");
+            builder.BuildStore(LLVMValueRef.CreateConstInt(_context.Int64Type, ulong.MaxValue, false), block);
+            instance = builder.BuildGEP2(_context.Int8Type, block,
+                [LLVMValueRef.CreateConstInt(_context.Int64Type, sizeof(ulong), false)], (ReadOnlySpan<char>)"object.addr");
         }
         if (!cls.IsValue)
         {
@@ -269,11 +278,13 @@ public sealed partial class LlvmModuleGenerator
         if (construction.Arguments.Count == 1)
         {
             var slot = UnionPayloadSlot(unionType, model, construction.CaseName);
-            result = builder.BuildInsertValue(result,
-                CoerceValue(builder,
-                    EmitExpression(context, builder, construction.Arguments[0], values, storage, model, llvmFunctions),
-                    model.ExpressionTypes[construction.Arguments[0]], slot.Type, model),
-                slot.Field, "union.payload");
+            var payload = CoerceValue(builder,
+                EmitExpression(context, builder, construction.Arguments[0], values, storage, model, llvmFunctions),
+                model.ExpressionTypes[construction.Arguments[0]], slot.Type, model);
+            // The payload is a copy that the union keeps, so a counted payload is retained unless it is moved in (see step 2a).
+            if (!IsOwnedTemporary(construction.Arguments[0]))
+                EmitRetainValue(builder, payload, slot.Type, model);
+            result = builder.BuildInsertValue(result, payload, slot.Field, "union.payload");
         }
         return result;
     }
@@ -295,6 +306,9 @@ public sealed partial class LlvmModuleGenerator
         {
             var element = EmitExpression(context, builder, literal.Elements[i], values, storage, model, llvmFunctions);
             element = CoerceValue(builder, element, model.ExpressionTypes[literal.Elements[i]], elementType, model);
+            // An element that the array does not own is retained, as a store into a slot is (see step 2a).
+            if (!IsOwnedTemporary(literal.Elements[i]))
+                EmitRetainValue(builder, element, elementType, model);
             result = builder.BuildInsertValue(result, element, (uint)i, "array.element");
         }
         return result;
@@ -390,6 +404,9 @@ public sealed partial class LlvmModuleGenerator
             var fieldType = NormalizeAggregateType(structure.Fields[index].Type, model);
             var value = CoerceValue(builder, EmitExpression(context, builder, field.Value, values, storage, model, llvmFunctions),
                 model.ExpressionTypes[field.Value], fieldType, model);
+            // A counted field value is retained unless it is moved in: the struct keeps the count (see step 2a).
+            if (!IsOwnedTemporary(field.Value))
+                EmitRetainValue(builder, value, fieldType, model);
             result = builder.BuildInsertValue(result, value, (uint)index, $"struct.{field.Name}");
         }
         return result;

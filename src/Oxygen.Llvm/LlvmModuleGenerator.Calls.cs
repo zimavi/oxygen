@@ -37,6 +37,14 @@ public sealed partial class LlvmModuleGenerator
             return result;
         }
         var function = model.ResolvedCalls[expression];
+        if (IsReleaseElements(function))
+        {
+            var buffer = EmitExpression(context, builder, expression.Arguments[0], values, storage, model, llvmFunctions);
+            var count = CoerceValue(builder, EmitExpression(context, builder, expression.Arguments[1], values, storage, model, llvmFunctions),
+                model.ExpressionTypes[expression.Arguments[1]], function.Parameters[1].Type, model);
+            EmitReleaseElements(builder, function, buffer, count, model);
+            return default;
+        }
         var argumentsWithDefaults = ArgumentsInParameterOrder(model, expression, function.Parameters, expression.Arguments);
         if (model.ReceiverArgumentCalls.Contains(expression))
             return EmitReceiverArgumentCall(context, builder, expression, function, values, storage, model, llvmFunctions);

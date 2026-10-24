@@ -162,6 +162,16 @@ OXYGEN_RUNTIME_API void *oxygen_realloc(void *pointer, uint64_t size);
 OXYGEN_RUNTIME_API void *oxygen_calloc(uint64_t count, uint64_t element_size);
 OXYGEN_RUNTIME_API void oxygen_free(void *pointer);
 
+/* A counted object is an instance of a class that the program counts (docs/reference-counting.md). Its count is a u64 in the word before
+ * the object, so the program's pointer is the object's, and every field keeps its offset. A new object has one reference. */
+/* A stack object (a class instance built without new) has this count, which no count operation changes. */
+#define OXYGEN_STACK_OBJECT_COUNT UINT64_MAX
+OXYGEN_RUNTIME_API void *oxygen_object_new(uint64_t size);
+OXYGEN_RUNTIME_API void oxygen_object_free(void *object);
+OXYGEN_RUNTIME_API void oxygen_retain(void *object);
+/* Releases one reference. When the last one goes, the object's destructor runs through its runtime type, and then the object is freed. */
+OXYGEN_RUNTIME_API void oxygen_release(void *object);
+
 OXYGEN_RUNTIME_API void oxygen_io_initialize(void);
 /* Starts the leak report when OXYGEN_LEAK_REPORT is set: the allocations that are not freed are printed at exit. */
 OXYGEN_RUNTIME_API void oxygen_memory_initialize(void);
