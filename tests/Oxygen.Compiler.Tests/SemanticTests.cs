@@ -3516,6 +3516,17 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void RejectsACastOfTheNullLiteralToAClass()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "class Base { } class Leaf : Base { } i32 main() { Leaf leaf = cast<Leaf>(null); return 0; }");
+
+        var diagnostic = Assert.Single(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Contains("Cannot cast the null literal to Leaf", diagnostic.Message);
+        Assert.Equal(DiagnosticCode.NullReferenceCast, diagnostic.Code);
+    }
+
+    [Fact]
     public void ABareNameOfAPropertyWithABodyIsRejectedForReadsAndWrites()
     {
         var read = AnalyzeWithDiagnostics(

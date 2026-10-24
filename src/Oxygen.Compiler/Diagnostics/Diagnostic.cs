@@ -155,6 +155,8 @@ internal static class DiagnosticAdvice
             "A binary operator needs operands with one common type. An operand converts implicitly only to a type that holds every one of its values, such as i32 to i64. No other numeric conversion is implicit, so for example u64 and i32 have no common type.",
         DiagnosticCode.MixedFlagsTypes =>
             "The bitwise operators |, & and ^ combine the values of one @flags enum, so both operands have that enum type. An integer or a value of another enum is not combined implicitly.",
+        DiagnosticCode.NullReferenceCast =>
+            "A cast to a class or an interface checks that the object is an instance of the target. A null reference is not an instance of any class, so a cast of the null literal always fails.",
         _ => null
     };
 
@@ -206,6 +208,8 @@ internal static class DiagnosticAdvice
             "Convert one operand to the other operand's type with cast<T>(value), such as cast<u64>(count) + total, so that both operands have the same type.",
         DiagnosticCode.MixedFlagsTypes =>
             "Give both operands the same @flags enum type. An integer converts to that enum with cast<E>(value), where E is the enum.",
+        DiagnosticCode.NullReferenceCast =>
+            "Write the null reference as a value of the target type, such as Leaf leaf = null;, or test the object with `is` before the cast.",
         _ => null
     };
 }

@@ -21,6 +21,10 @@ public sealed partial class SemanticAnalyzer
         var target = ResolveType(cast.TargetType);
         var operand = AnalyzeExpression(cast.Operand, scope, functions, moduleName, imports, expressionTypes, resolvedCalls,
             expectedType: target);
+        // A cast of the null literal can never succeed (see docs/exceptions.md), so the compiler rejects it rather than emit a failure.
+        if (cast.Operand is NullLiteralExpression && (target.IsClass || target.IsInterface))
+            throw ErrorWithCode(DiagnosticCode.NullReferenceCast,
+                $"Cannot cast the null literal to {target}, because a null reference is not an instance of {target}", cast.Location);
         if (target.IsEnum)
         {
             var enumSymbol = _enumsByName[target.EnumName!];

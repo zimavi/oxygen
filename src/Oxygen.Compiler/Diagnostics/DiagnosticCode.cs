@@ -29,4 +29,5 @@ public static class DiagnosticCode
     public const string AmbiguousType = "OX0211";
     public const string MixedOperandTypes = "OX0212";
     public const string MixedFlagsTypes = "OX0213";
+    public const string NullReferenceCast = "OX0214";
 }

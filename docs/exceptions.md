@@ -96,6 +96,7 @@ an array or a string, the shift count, or the enum value. An enum value is shown
 an unsigned number. A failed cast names the object's class and the target, as
 `Cannot cast an object of type program.Base to program.Leaf, because it is not an instance of program.Leaf.`,
 and a null reference reads `Cannot cast a null reference to program.Leaf.` (names are module-qualified).
+A cast of the null literal, such as `cast<Leaf>(null)`, is a compile error (`OX0214`), since it can never succeed.
 A variable that holds null still fails at run time, because the compiler cannot know its value. A frame index
 shows the index and the number of frames, as
 `Stack trace frame 9 does not exist: the trace has 1 frames.`. The exception captures the stack
