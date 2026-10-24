@@ -25,6 +25,11 @@ public sealed partial class SemanticAnalyzer
         {
             throw Error($"Instance field '{identifier.Name}' cannot be used in a static method", identifier.Location, identifier.Name.Length);
         }
+        catch (SemanticException) when (_currentOwnerClass is not null && IsBodyBackedProperty(_currentOwnerClass, identifier.Name))
+        {
+            throw Error($"Property '{identifier.Name}' has a body, so its bare name is not a variable here: write this.{identifier.Name}",
+                identifier.Location, identifier.Name.Length);
+        }
         RecordGlobalReference(identifier, symbol);
         if (symbol.Declaration is VariableDeclarationStatement declaration)
         {

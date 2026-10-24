@@ -74,7 +74,7 @@ public sealed partial class LlvmModuleGenerator
             if (owner is not null)
             {
                 var ownerProperty = owner.DeclaredProperties.First(candidate => candidate.Name == member.MemberName);
-                return PropertyPlace(builder, owner, ownerProperty, values["this"], model, llvmFunctions);
+                return PropertyPlace(builder, owner, ownerProperty, ThisReceiver(builder, owner, values), model, llvmFunctions);
             }
             return MemoryPlace(builder, memberType, storage["this." + member.MemberName], member.MemberName);
         }
@@ -127,6 +127,12 @@ public sealed partial class LlvmModuleGenerator
     private void EmitStaticPropertySet(LLVMBuilderRef builder, FunctionSymbol setter, LLVMValueRef value,
         IReadOnlyDictionary<FunctionSymbol, LLVMValueRef> llvmFunctions) =>
         EmitCallOrInvoke(builder, llvmFunctions[setter].FunctionType, llvmFunctions[setter], [value], string.Empty);
+
+    // The receiver of a call on `this`. A value class is passed by value, so its `this`, which is stored, is loaded for the call.
+    private LLVMValueRef ThisReceiver(LLVMBuilderRef builder, ClassSymbol owner, IReadOnlyDictionary<string, LLVMValueRef> values) =>
+        owner.IsValue
+            ? builder.BuildLoad2(_classTypes[owner.QualifiedName], values["this"], "this.value")
+            : values["this"];
 
     // A property of a class object, read through its getter and written through its setter, with the receiver evaluated once.
     private Place PropertyPlace(

@@ -342,7 +342,7 @@ public sealed partial class LlvmModuleGenerator
                                 slotAddress, "property.vtable.target");
                         }
                         EmitCallOrInvoke(builder, setterType, setterTarget,
-                            [values["this"], CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
+                            [ThisReceiver(builder, owner, values), CoerceValue(builder, assigned, model.ExpressionTypes[assignment.Value],
                                 thisProperty.Type, model)], string.Empty);
                         return false;
                     }

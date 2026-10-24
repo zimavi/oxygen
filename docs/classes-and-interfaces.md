@@ -222,6 +222,10 @@ class Person : Named {
 }
 ```
 
+Inside its class, a property with a body is read and written as `this.name`. A bare
+`name` is an error, since the storage under that name is not the property. An auto
+property is different: its bare name is its own backing storage, so it works.
+
 Property reads use the getter and assignments use the setter or constructor
 initializer. This remains true for explicit bodies, inherited properties,
 base-typed references, and interface-typed references.

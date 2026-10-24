@@ -3516,6 +3516,28 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ABareNameOfAPropertyWithABodyIsRejectedForReadsAndWrites()
+    {
+        var read = AnalyzeWithDiagnostics(
+            "class Box { i32 v; public i32 value { get { return v; } } public i32 get_it() { return value; } } i32 main() { return 0; }");
+        Assert.Contains("write this.value", Assert.Single(read.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).Message);
+
+        var write = AnalyzeWithDiagnostics(
+            "class Box { i32 v; public i32 value { get { return v; } set { v = value; } } public void put() { value = 5; } } i32 main() { return 0; }");
+        Assert.Contains("write this.value", Assert.Single(write.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).Message);
+    }
+
+    [Fact]
+    public void APropertyWithABodyIsReadThroughThisAndAnAutoPropertyByItsName()
+    {
+        var result = AnalyzeWithDiagnostics(
+            "class Box { i32 v; public i32 value { get { return v; } } public i32 auto_value { get; set; } " +
+            "public i32 twice() { auto_value = 2; return this.value * 2 + auto_value; } } i32 main() { return 0; }");
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
     public void AcceptsCallsThatOmitTrailingParametersWithDefaults()
     {
         var result = AnalyzeWithDiagnostics(

@@ -454,8 +454,10 @@ public sealed partial class LlvmModuleGenerator
             {
                 var property = owner.DeclaredProperties.First(property => property.Name == member.MemberName);
                 if (_propertyAccessors.TryGetValue((owner.QualifiedName, property.Name, PropertyAccessorKind.Get), out var getter))
+                {
                     return EmitCallOrInvoke(builder, ToLlvmFunctionType(getter, model), llvmFunctions[getter],
-                        [values["this"]], "property.get");
+                        [ThisReceiver(builder, owner, values)], "property.get");
+                }
             }
             var address = storage["this." + member.MemberName];
             return builder.BuildLoad2(ToLlvmType(model.ExpressionTypes[member], model), address,
