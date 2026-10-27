@@ -152,6 +152,28 @@ public sealed class SourceModuleResolverTests : IDisposable
     }
 
     // The file names of every resolved source, so the tests can tell which standard modules were loaded.
+    // A subfolder that cannot be read is a warning, and the rest of the folder still resolves. Its files are not loaded, since none is read.
+    [SkippableFact]
+    public void AnUnreadableSubfolderIsSkippedWithAWarning()
+    {
+        var locked = Path.Combine(_directory, "locked");
+        Directory.CreateDirectory(locked);
+        File.WriteAllText(Path.Combine(locked, "hidden.oxy"), "module hidden;\ni32 unused() { return 1; }");
+        var main = new SourceText(Path.Combine(_directory, "main.oxy"), "i32 main() { return 0; }");
+
+        using var folder = UnreadableFolder.Create(locked);
+        Skip.IfNot(folder.Effective, "The current user can still read the folder, so it cannot be made unreadable here.");
+        var resolved = new SourceModuleResolver(new Tokenizer(Log.Logger), Log.Logger)
+            .Resolve([main], oxygenPath: null, loadStandardLibrary: false);
+
+        Assert.DoesNotContain(resolved.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        var warning = Assert.Single(resolved.Diagnostics);
+        Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
+        Assert.Contains("locked", warning.Message);
+        Assert.Contains(resolved.Sources, source => Path.GetFileName(source.Name) == "main.oxy");
+        Assert.DoesNotContain(resolved.Sources, source => Path.GetFileName(source.Name) == "hidden.oxy");
+    }
+
     private static List<string> StandardFileNames(ResolvedSourceModules resolved) =>
         resolved.Sources.Select(source => Path.GetFileName(source.Name)).ToList();
 

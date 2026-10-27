@@ -54,6 +54,22 @@ public sealed class BuildExitCodeTests : IDisposable
         Assert.Equal(ExitCodes.SourceError, exitCode);
     }
 
+    // A folder under the source folder that cannot be read is a warning: the build of the program still succeeds.
+    [SkippableFact]
+    public void AnUnreadableSubfolderDoesNotStopTheBuild()
+    {
+        var source = WriteSource("i32 main() { return 0; }");
+        var locked = Path.Combine(_directory, "locked");
+        Directory.CreateDirectory(locked);
+        File.WriteAllText(Path.Combine(locked, "hidden.oxy"), "module hidden;\ni32 unused() { return 1; }");
+
+        using var folder = UnreadableFolder.Create(locked);
+        Skip.IfNot(folder.Effective, "The current user can still read the folder, so it cannot be made unreadable here.");
+        var exitCode = RunCompiler("build", source, "--emit-ir", Path.Combine(_directory, "program.ll"));
+
+        Assert.Equal(0, exitCode);
+    }
+
     private string WriteSource(string text)
     {
         var path = Path.Combine(_directory, "main.oxy");
