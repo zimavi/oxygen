@@ -189,6 +189,34 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.Throws<NativeModuleLoader.UnsupportedNativeTypeException>(() => NativeModuleLoader.DecodeType("S13lib.Exception", declared));
     }
 
+    // A generic class that the library declares, with its type arguments, decodes to an instance of it. Its declaration gives the arity.
+    [Fact]
+    public void AGenericInstanceOfADeclaredClassDecodesToTheInstance()
+    {
+        var declared = new Dictionary<string, SemanticType>
+        {
+            ["lib.Box"] = SemanticType.Class("lib.Box", [SemanticType.GenericParameter("T")]),
+        };
+
+        Assert.Equal(SemanticType.Class("lib.Box", [SemanticType.FromPrimitive(PrimitiveType.I32)]),
+            NativeModuleLoader.DecodeType("C7lib.Box_a1_i32", declared));
+    }
+
+    // The arguments must match the declaration: a count that the declaration does not take, or a generic class without arguments, is not
+    // decoded.
+    [Theory]
+    [InlineData("C7lib.Box_a2_i32i32")]
+    [InlineData("C7lib.Box")]
+    public void AGenericClassWithTheWrongArgumentsIsNotDecoded(string encoding)
+    {
+        var declared = new Dictionary<string, SemanticType>
+        {
+            ["lib.Box"] = SemanticType.Class("lib.Box", [SemanticType.GenericParameter("T")]),
+        };
+
+        Assert.Throws<NativeModuleLoader.UnsupportedNativeTypeException>(() => NativeModuleLoader.DecodeType(encoding, declared));
+    }
+
     // A function whose parameter is a class that its library declares is imported, and no warning is given for it.
     [Fact]
     public void AFunctionTakingADeclaredClassIsImportedWithoutAWarning()
@@ -208,9 +236,9 @@ public sealed class NativeModuleLoaderTests : IDisposable
         Assert.Empty(loaded.Warnings);
     }
 
-    // A generic class is not declared in the form the loader reads, so a function that takes it is still skipped with a warning.
+    // An instance of a generic class that the library declares is imported with its type arguments, and no warning is given for it.
     [Fact]
-    public void AFunctionTakingAGenericClassIsStillSkipped()
+    public void AFunctionTakingAnInstanceOfAGenericClassIsImported()
     {
         var library = Path.Combine(_directory, "lib.a");
         var at = new SourceLocation(1, 1);
@@ -223,8 +251,9 @@ public sealed class NativeModuleLoaderTests : IDisposable
 
         var loaded = Assert.Single(NativeModuleLoader.Load(new FileInfo(library), OxygenTarget.WindowsMsvcX64));
 
-        Assert.Empty(loaded.Module.Functions);
-        Assert.Contains("generic instance", Assert.Single(loaded.Warnings));
+        var function = Assert.Single(loaded.Module.Functions);
+        Assert.Equal(SemanticType.Class("lib.Box", [SemanticType.FromPrimitive(PrimitiveType.I32)]), function.ParameterTypes[0]);
+        Assert.Empty(loaded.Warnings);
     }
 
     private static NativeModuleMetadata Metadata(string moduleName, string triple, NativeFunctionMetadata[] functions) => new()

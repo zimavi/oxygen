@@ -341,6 +341,14 @@ The same syntax is available in switch cases (`case is Cat cat:`). A pattern
 matches derived classes and implemented interfaces, and its binding is only
 available in the matching branch.
 
+A type is the same type in every module that uses it, so `is` and `catch` agree
+across a library boundary. A class of a library is defined once, by the library,
+and a program refers to that definition. An instance of a generic class, which
+more than one module may instantiate, is defined in each of them, and the copies
+name the same type: names are module-qualified, so two copies with one name are
+one type. A class that a program derives from a library class is an instance of
+that library class.
+
 An implicit downcast and a cast between unrelated reference types are compile
 errors. When the compiler cannot prove an explicit downcast safe, the generated
 code checks the runtime object type. A failed check reports an invalid-cast

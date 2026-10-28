@@ -290,6 +290,84 @@ public sealed class LibraryDependencyTests : IDisposable
         Assert.Equal("hello\n", run.Output.Replace("\r\n", "\n"));
     }
 
+    // An instance of a generic class is one type for both sides: each object passes the `is` check of the side that did not create it, and
+    // the program reads the field of the library's object. The instance is defined in both modules, so its record is a copy in one of them.
+    private const string GenericLibrary = """
+        module mylib;
+
+        public class Box<T> {
+            public T value;
+
+            public Box(T v) {
+                value = v;
+            }
+        }
+
+        public Box<i32> make_box() {
+            return new Box<i32>(5);
+        }
+
+        public bool is_box_of_i32(Box<i32> value) {
+            return value is Box<i32>;
+        }
+        """;
+
+    [SkippableFact]
+    public void AnInstanceOfAGenericClassIsTheSameTypeInTheLibraryAndTheProgram()
+    {
+        var run = BuildAndRunProgram(
+            """
+            import mylib;
+
+            i32 main() {
+                i32 score = 0;
+                Box<i32> made = make_box();
+                if (made is Box<i32>) { score += 1; }
+                if (is_box_of_i32(made)) { score += 2; }
+                Box<i32> mine = new Box<i32>(7);
+                if (is_box_of_i32(mine)) { score += 4; }
+                if (mine is Box<i32>) { score += 8; }
+                return score + made.value;
+            }
+            """,
+            GenericLibrary);
+
+        Assert.Equal(20, run.ExitCode);
+    }
+
+    // A class that the program derives from a class of another library is an instance of its base class for that library.
+    [SkippableFact]
+    public void AProgramClassDerivedFromAnotherLibraryClassIsAnInstanceOfItForThatLibrary()
+    {
+        var run = BuildAndRunProgram(
+            """
+            import mylib;
+
+            class Ferret : Animal { }
+
+            i32 main() {
+                Animal ferret = new Ferret();
+                if (is_animal(ferret)) {
+                    return 5;
+                }
+                return 0;
+            }
+            """,
+            """
+            module mylib;
+
+            public class Animal {
+                public i32 legs = 4;
+            }
+
+            public bool is_animal(Animal value) {
+                return value is Animal;
+            }
+            """);
+
+        Assert.Equal(5, run.ExitCode);
+    }
+
     // Builds the standard library, then the library that uses it, then the program that uses both, and runs the program.
     private (int ExitCode, string Output, string Error) BuildAndRunProgram(string source, string librarySource = AppLibrary,
         params string[] programFlags)
