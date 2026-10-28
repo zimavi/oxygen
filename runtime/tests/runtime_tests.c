@@ -318,6 +318,18 @@ static int cast_failure_names_the_object_and_its_target(void)
     return 0;
 }
 
+/* A record of a type that another module defines is a copy at another address. It names the same type, so an object of that type is an
+ * instance of it, and an object is not an instance of a type with another name. */
+static int a_copy_of_a_type_record_names_the_same_type(void)
+{
+    void *object = new_counted_object();
+    static const oxygen_runtime_type_info copy_of_counted = {.name = "counted"};
+    static const oxygen_runtime_type_info other_type = {.name = "other"};
+    CHECK(__oxygen_runtime_is_instance(object, &copy_of_counted) == 1);
+    CHECK(__oxygen_runtime_is_instance(object, &other_type) == 0);
+    return 0;
+}
+
 static const test_case cases[] = {
     {"c-string-from-null", c_string_from_null},
     {"c-string-from-text", c_string_from_text},
@@ -339,6 +351,7 @@ static const test_case cases[] = {
     {"release-without-a-count-stops-the-program", release_without_a_count_stops_the_program},
     {"failure-message-is-set-on-the-exception-object", failure_message_is_set_on_the_exception_object},
     {"cast-failure-names-the-object-and-its-target", cast_failure_names_the_object_and_its_target},
+    {"a-copy-of-a-type-record-names-the-same-type", a_copy_of_a_type_record_names_the_same_type},
 };
 
 int main(int argc, char **argv)

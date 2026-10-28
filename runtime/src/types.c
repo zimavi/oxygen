@@ -18,6 +18,10 @@ uint8_t __oxygen_runtime_is_instance(
         return 0;
     if (actual_type == expected_type)
         return 1;
+    /* A copy of the record, in an object that another module compiled, names the same type. A copy exists for an instance of a generic
+     * class, which every module that uses the instance defines. */
+    if (actual_type->name != NULL && expected_type->name != NULL && strcmp(actual_type->name, expected_type->name) == 0)
+        return 1;
     for (uint32_t index = 0; index < actual_type->supertype_count; index++)
         if (strcmp(actual_type->supertype_names[index], expected_type->name) == 0)
             return 1;

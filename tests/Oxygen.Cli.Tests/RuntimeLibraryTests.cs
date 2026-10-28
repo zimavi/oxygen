@@ -149,6 +149,12 @@ public sealed class RuntimeLibraryTests : IDisposable
         AssertCasePasses("cast-failure-names-the-object-and-its-target");
     }
 
+    [SkippableFact]
+    public void ACopyOfATypeRecordNamesTheSameType()
+    {
+        AssertCasePasses("a-copy-of-a-type-record-names-the-same-type");
+    }
+
     private void AssertCasePasses(string name)
     {
         var run = RunCase(name);
