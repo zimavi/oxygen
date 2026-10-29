@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <stdatomic.h>
 #if defined(_WIN32)
 #include <windows.h>
@@ -272,6 +273,63 @@ typedef struct test_case
     int (*run)(void);
 } test_case;
 
+/* An exception object as the compiler lays it out: its type record, then its message field. */
+typedef struct test_exception
+{
+    const oxygen_runtime_type_info *type;
+    oxygen_string message;
+} test_exception;
+
+static const oxygen_runtime_type_info index_failure_type = {
+    .name = "std.exception.IndexOutOfRangeException",
+    .message_offset = offsetof(test_exception, message),
+};
+
+static const oxygen_runtime_type_info target_type = {
+    .name = "program.Leaf",
+};
+
+static const oxygen_runtime_type_info object_type = {
+    .name = "program.Other",
+};
+
+static int text_is(oxygen_string text, const char *expected)
+{
+    return text.length == strlen(expected) && memcmp(text.data, expected, (size_t)text.length) == 0;
+}
+
+static int failure_message_is_set_on_the_exception_object(void)
+{
+    test_exception error = {&index_failure_type, {NULL, 0}};
+    __oxygen_runtime_set_failure_message(&error, OXYGEN_FAILURE_FRAME_INDEX, 9, 1);
+    CHECK(text_is(error.message, "Stack trace frame 9 does not exist: the trace has 1 frames."));
+    return 0;
+}
+
+static int cast_failure_names_the_object_and_its_target(void)
+{
+    oxygen_string text = {NULL, 0};
+    test_exception other = {&object_type, {NULL, 0}};
+    __oxygen_runtime_format_failure(OXYGEN_FAILURE_INVALID_CAST, (uint64_t)(uintptr_t)&other,
+        (uint64_t)(uintptr_t)&target_type, &text);
+    CHECK(text_is(text, "Cannot cast an object of type program.Other to program.Leaf, because it is not an instance of program.Leaf."));
+    __oxygen_runtime_format_failure(OXYGEN_FAILURE_INVALID_CAST, 0, (uint64_t)(uintptr_t)&target_type, &text);
+    CHECK(text_is(text, "Cannot cast a null reference to program.Leaf."));
+    return 0;
+}
+
+/* A record of a type that another module defines is a copy at another address. It names the same type, so an object of that type is an
+ * instance of it, and an object is not an instance of a type with another name. */
+static int a_copy_of_a_type_record_names_the_same_type(void)
+{
+    void *object = new_counted_object();
+    static const oxygen_runtime_type_info copy_of_counted = {.name = "counted"};
+    static const oxygen_runtime_type_info other_type = {.name = "other"};
+    CHECK(__oxygen_runtime_is_instance(object, &copy_of_counted) == 1);
+    CHECK(__oxygen_runtime_is_instance(object, &other_type) == 0);
+    return 0;
+}
+
 static const test_case cases[] = {
     {"c-string-from-null", c_string_from_null},
     {"c-string-from-text", c_string_from_text},
@@ -291,6 +349,9 @@ static const test_case cases[] = {
     {"null-object-operations-do-nothing", null_object_operations_do_nothing},
     {"release-of-a-stack-object-does-nothing", release_of_a_stack_object_does_nothing},
     {"release-without-a-count-stops-the-program", release_without_a_count_stops_the_program},
+    {"failure-message-is-set-on-the-exception-object", failure_message_is_set_on_the_exception_object},
+    {"cast-failure-names-the-object-and-its-target", cast_failure_names_the_object_and_its_target},
+    {"a-copy-of-a-type-record-names-the-same-type", a_copy_of_a_type_record_names_the_same_type},
 };
 
 int main(int argc, char **argv)

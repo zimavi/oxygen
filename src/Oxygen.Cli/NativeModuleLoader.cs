@@ -92,23 +92,30 @@ internal static class NativeModuleLoader
         return new LoadedGenericUnit(decoded.Unit, decoded.SourceName);
     }
 
-    // The named types that the generic units declare without bodies: the non-generic classes, structs and interfaces, keyed by their
-    // qualified name, which is how the mangled encodings name them. Enums and unions are not declared in the units, so they stay unsupported.
+    // The named types that the generic units declare, keyed by their qualified name, which is how the mangled encodings name them. A
+    // generic declaration is entered with placeholders for its type parameters, so an encoding can be checked against its arity. Enums
+    // and unions are not declared in the units, so they stay unsupported.
     private static IReadOnlyDictionary<string, SemanticType> DeclaredNamedTypes(IEnumerable<CompilationUnit> units)
     {
         var declared = new Dictionary<string, SemanticType>(StringComparer.Ordinal);
         foreach (var unit in units)
         {
             var module = unit.ModuleName ?? "program";
-            foreach (var cls in unit.Classes.Where(cls => cls.TypeParameters is null or { Count: 0 }))
-                declared.TryAdd($"{module}.{cls.Name}", SemanticType.Class($"{module}.{cls.Name}"));
-            foreach (var structure in unit.Structs.Where(structure => structure.TypeParameters is null or { Count: 0 }))
-                declared.TryAdd($"{module}.{structure.Name}", SemanticType.Struct($"{module}.{structure.Name}"));
-            foreach (var iface in unit.Interfaces.Where(iface => iface.TypeParameters is null or { Count: 0 }))
-                declared.TryAdd($"{module}.{iface.Name}", SemanticType.Interface($"{module}.{iface.Name}"));
+            foreach (var cls in unit.Classes)
+                declared.TryAdd($"{module}.{cls.Name}", SemanticType.Class($"{module}.{cls.Name}", Placeholders(cls.DeclaredTypeParameters)));
+            foreach (var structure in unit.Structs)
+                declared.TryAdd($"{module}.{structure.Name}",
+                    SemanticType.Struct($"{module}.{structure.Name}", Placeholders(structure.DeclaredTypeParameters)));
+            foreach (var iface in unit.Interfaces)
+                declared.TryAdd($"{module}.{iface.Name}",
+                    SemanticType.Interface($"{module}.{iface.Name}", Placeholders(iface.DeclaredTypeParameters)));
         }
         return declared;
     }
+
+    // The type parameters of a generic declaration as placeholders, or null for a declaration without type parameters.
+    private static IReadOnlyList<SemanticType>? Placeholders(IReadOnlyList<TypeParameterSyntax> parameters) =>
+        parameters.Count == 0 ? null : parameters.Select(parameter => SemanticType.GenericParameter(parameter.Name)).ToArray();
 
     private static ExternalFunctionDeclaration DecodeFunction(
         NativeFunctionMetadata function,
@@ -196,8 +203,9 @@ internal static class NativeModuleLoader
             throw new InvalidDataException($"Unsupported Oxygen metadata type '{encoding}'.");
         }
 
-        // A class ('C'), struct ('S') or interface ('I') by its qualified name. It decodes only when the library declares it without type
-        // arguments; a generic instance, or a type of another library, is reported as unsupported.
+        // A class ('C'), struct ('S') or interface ('I') by its qualified name, with its type arguments when it is a generic instance. The
+        // library's declaration gives the arity, and the program instantiates the declaration itself. A type of another library, or a
+        // generic type without arguments, is reported as unsupported.
         private SemanticType ReadDeclaredType()
         {
             var tag = encoding[_position++];
@@ -212,11 +220,31 @@ internal static class NativeModuleLoader
                 'S' => (SemanticTypeKind.Struct, "struct"),
                 _ => (SemanticTypeKind.Interface, "interface")
             };
+            IReadOnlyList<SemanticType>? arguments = null;
             if (TryConsume("_a"))
-                throw new UnsupportedNativeTypeException($"it uses a generic instance of the {word} '{name}', which is not imported yet.");
-            if (declared.TryGetValue(name, out var type) && type.Kind == kind)
-                return type;
-            throw new UnsupportedNativeTypeException($"it uses the {word} '{name}', which the library does not declare.");
+            {
+                var count = ReadNumber();
+                Expect("_");
+                arguments = Enumerable.Range(0, count).Select(_ => ReadType()).ToArray();
+            }
+            if (!declared.TryGetValue(name, out var declaration) || declaration.Kind != kind)
+                throw new UnsupportedNativeTypeException($"it uses the {word} '{name}', which the library does not declare.");
+            var parameterCount = declaration.TypeArguments?.Count ?? 0;
+            if (arguments is null)
+            {
+                if (parameterCount > 0)
+                    throw new UnsupportedNativeTypeException($"it uses the generic {word} '{name}' without type arguments.");
+                return declaration;
+            }
+            if (arguments.Count != parameterCount)
+                throw new UnsupportedNativeTypeException(
+                    $"it uses the {word} '{name}' with {arguments.Count} type argument(s), and it takes {parameterCount}.");
+            return kind switch
+            {
+                SemanticTypeKind.Class => SemanticType.Class(name, arguments),
+                SemanticTypeKind.Struct => SemanticType.Struct(name, arguments),
+                _ => SemanticType.Interface(name, arguments)
+            };
         }
 
         private bool TryConsume(string code)

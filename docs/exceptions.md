@@ -46,6 +46,9 @@ constructors create the trace, and a derived exception class reaches them throug
 its constructor's `base(...)` call, or through the implicit parameterless base
 call.
 
+A `throw` of a local, such as `throw error;`, gives the local's object to the exception. The unwinding of the
+function does not destroy it, and the catch that handles the exception releases it.
+
 A caught exception is released when the catch that handles it is finished with it.
 The catch frees the exception object, after running its destructor, when the
 binding of the catch is not kept elsewhere. The binding is kept elsewhere when the
@@ -85,18 +88,26 @@ by the compiled code, and each one throws an instance of its class:
 | Signed division that overflows (the minimum value divided by -1) | `std.exception.RuntimeException` |
 | A shift count out of range for the shifted type | `std.exception.RuntimeException` |
 | An enum value that is not one of the enum's cases | `std.exception.RuntimeException` |
+| A reference cast to a class that the object is not an instance of | `std.exception.InvalidCastException` |
+| A stack trace frame index that is not less than the number of frames (`StackTrace.frame_at`) | `std.exception.IndexOutOfRangeException` |
 
 The message describes the failure and gives its values: the index and the length of
 an array or a string, the shift count, or the enum value. An enum value is shown as
-an unsigned number. The exception captures the stack
+an unsigned number. A failed cast names the object's class and the target, as
+`Cannot cast an object of type program.Base to program.Leaf, because it is not an instance of program.Leaf.`,
+and a null reference reads `Cannot cast a null reference to program.Leaf.` (names are module-qualified).
+A cast of the null literal, such as `cast<Leaf>(null)`, is a compile error (`OX0214`), since it can never succeed.
+A variable that holds null still fails at run time, because the compiler cannot know its value. A frame index
+shows the index and the number of frames, as
+`Stack trace frame 9 does not exist: the trace has 1 frames.`. The exception captures the stack
 trace where the failure happened, as a `throw` does. A build without
 `std.exception` (`--no-std`) has no class to throw, so these failures end the
 program with exit code 101, as they always did.
 
 Other runtime failures end the program with exit code 101 and do not raise an
 exception that a catch can handle: a failed allocation, a failed write to standard
-output or error, and a stack trace frame out of range. Out of memory cannot build
-an exception, and a failed write has nowhere to report one.
+output or error. Out of memory cannot build an exception, and a failed write has
+nowhere to report one.
 
 An uncaught exception, of either kind, is reported as described above, and ends the
 program with exit code 101, as the other runtime failures do.

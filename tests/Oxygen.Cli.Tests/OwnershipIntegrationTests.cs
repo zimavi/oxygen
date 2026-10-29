@@ -81,6 +81,7 @@ public sealed class OwnershipIntegrationTests : IDisposable
         { "interface_field_is_released_with_its_holder", InterfaceFieldIsReleasedWithItsHolder, 4 },
         { "unique_result_is_freed_directly", UniqueResultIsFreedDirectly, 5 },
         { "unique_result_stored_in_a_holder", UniqueResultStoredInAHolder, 6 },
+        { "two_returns_release_a_counted_local_once", TwoReturnsReleaseACountedLocalOnce, 2 },
     };
 
     public static TheoryData<string, string, int> KeptPrograms => new()
@@ -368,6 +369,24 @@ public sealed class OwnershipIntegrationTests : IDisposable
         """;
 
     // The caller stores the fresh object, so it escapes its local: the local releases its count, and the holder releases the other one.
+    // Each return releases the counted local on its own path. A return must not add the scope's locals to the scope, or the return after it
+    // releases the local a second time, and the program stops.
+    private const string TwoReturnsReleaseACountedLocalOnce = """
+        class Base { }
+        class Other : Base { }
+        class Holder { public Base item; }
+        i32 pick(i32 x) {
+            Holder h = new Holder();
+            Base b = new Other();
+            h.item = b;
+            if (x == 1) {
+                return 1;
+            }
+            return 2;
+        }
+        i32 main() { return pick(0); }
+        """;
+
     private const string UniqueResultStoredInAHolder = """
         class Box { public i32 value = 6; }
         class Holder { public Box item; }

@@ -17,8 +17,11 @@ functions are combined into one module. The compiled files are the files that
 were given on the command line, the files that declare a module the program
 needs, and, transitively, the files that declare each module that a compiled
 file imports. A file that the program does not need is not compiled, so a
-syntax error in it does not stop the build. Imports are checked against the
-set of compiled modules before name lookup.
+syntax error in it does not stop the build. The files are searched in the
+folders below the given files, and a folder that cannot be read is skipped with
+a warning; a module that the program needs from such a folder is then reported
+as missing at its import. Imports are checked against the set of compiled
+modules before name lookup.
 
 Nested modules are independent modules. For example, `math.float` can provide
 floating-point operations:

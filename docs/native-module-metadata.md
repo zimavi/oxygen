@@ -71,11 +71,14 @@ that the library was built for, and a library for another target is rejected.
 
 Primitive types, `string`, pointers and fixed-size arrays are described by the
 metadata. A class, struct or interface is described by the library's generic
-units, which declare its non-generic classes, structs and interfaces without
-bodies. A function can use such a type when its own module declares it, and it is
-then imported with that type. A function with an enum, a union, a generic instance,
-or a type that its module does not declare, is not imported. The compiler reports
-it as a warning that names the function.
+units, which declare its classes, structs and interfaces: the non-generic ones
+without bodies, and the generic ones with their bodies. A function can use such a
+type when its own module declares it, and it is then imported with that type. A
+generic instance, such as `Box<i32>`, is imported with its type arguments, and the
+program instantiates the declaration itself; the arguments must match the
+declaration's type parameters. An instance of an enum or a union, or a type that
+its module does not declare, is not imported. The compiler reports it as a
+warning that names the function.
 
 A library module's functions are declared to a program only when the program
 imports that module, directly or through the imported generic units. The warnings

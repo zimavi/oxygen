@@ -86,6 +86,10 @@ public sealed partial class SemanticAnalyzer
                 // A private field belongs to the class that declares it, so a subclass cannot name it.
                 if (field.Visibility == Visibility.Private && !IsDeclaredBy(field, ownerClass))
                     continue;
+                // A property with a body has storage under its name that its accessors do not use, so the bare name is not declared (see
+                // ReadIdentifier for the message).
+                if (IsBodyBackedProperty(ownerClass, field.Name))
+                    continue;
                 scope.Declare(field.Name, new VariableSymbol(SubstituteGenericType(field.Type, _genericTypes),
                     field.IsConst, field.Declaration, false));
             }

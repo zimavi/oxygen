@@ -37,6 +37,22 @@ public sealed partial class SemanticAnalyzer
         cls.Declaration.Fields.Any(declared => ReferenceEquals(declared, field.Declaration))
         || cls.DeclaredProperties.Any(property => property.Name == field.Name);
 
+    // Whether a property of the class, or of a base class, has an accessor with a body. The accessors of such a property read and write
+    // their own code, not the storage that the class gives the property's name, so the bare name does not mean the property.
+    private bool IsBodyBackedProperty(ClassSymbol cls, string name)
+    {
+        for (ClassSymbol? current = cls; current is not null;
+             current = current.BaseTypeName is not null && _classesByName.TryGetValue(current.BaseTypeName, out var baseClass)
+                 ? baseClass
+                 : null)
+        {
+            if (current.Declaration.DeclaredProperties.Any(property => property.Name == name
+                && property.Accessors.Any(accessor => !accessor.IsAuto)))
+                return true;
+        }
+        return false;
+    }
+
     // The class that declares a field, found from a class or one of its base classes.
     private ClassSymbol DeclaringClass(ClassFieldSymbol field, ClassSymbol cls)
     {

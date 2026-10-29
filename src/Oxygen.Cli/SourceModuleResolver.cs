@@ -196,8 +196,7 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
         {
             try
             {
-                foreach (var path in Directory.EnumerateFiles(sourceDirectory, "*.oxy", SearchOption.AllDirectories)
-                             .OrderBy(path => path, PathComparer))
+                foreach (var path in SourceFilesUnder(sourceDirectory, diagnostics).OrderBy(path => path, PathComparer))
                 {
                     if (standardLibraries.Any(library => IsInside(path, library)))
                         continue;
@@ -229,6 +228,38 @@ internal sealed class SourceModuleResolver(Tokenizer tokenizer, ILogger logger)
         }
 
         return index;
+    }
+
+    // The .oxy files under a folder, including its subfolders. A subfolder that cannot be read is skipped with a warning: the program may
+    // not need its modules, and when it does, the missing module is reported at the import. The folder itself is not skipped; its error
+    // reaches the caller, which reports it.
+    private static List<string> SourceFilesUnder(string directory, DiagnosticBag diagnostics)
+    {
+        var files = new List<string>();
+        var pending = new Stack<string>();
+        pending.Push(directory);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            try
+            {
+                files.AddRange(Directory.GetFiles(current, "*.oxy"));
+                foreach (var child in Directory.GetDirectories(current))
+                    pending.Push(child);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                if (current == directory)
+                    throw;
+                diagnostics.Add(
+                    DiagnosticPhase.Toolchain,
+                    DiagnosticSeverity.Warning,
+                    $"Skipped the source folder '{current}', which cannot be read: {exception.Message}",
+                    new SourceLocation(1, 1),
+                    sourceName: current);
+            }
+        }
+        return files;
     }
 
     // The module a file declares, read from the start of the file: an optional visibility, then `module` and the dotted name.

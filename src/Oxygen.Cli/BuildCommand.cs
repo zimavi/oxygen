@@ -221,7 +221,9 @@ internal static class BuildCommand
                 resolved.Sources.Concat(input.Sources).GroupBy(source => source.Name, StringComparer.OrdinalIgnoreCase)
                     .Select(group => group.First()).ToList(),
                 formatter, useColor);
-            return ExitCodes.SourceError;
+            // A warning, such as a source folder that cannot be read, is shown and the build goes on.
+            if (resolved.Diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+                return ExitCodes.SourceError;
         }
         var sources = resolved.Sources;
 

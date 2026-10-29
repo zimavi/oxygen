@@ -598,6 +598,23 @@ public sealed partial class SemanticAnalyzer
         SetPointerNullness(variable, initialNullness);
     }
 
+    // A bare name that is not a variable but is a property with a body. The message names the fix (see docs/classes-and-interfaces.md).
+    private void RejectBodyBackedPropertyName(Expression target, Scope scope)
+    {
+        if (target is not IdentifierExpression identifier || _currentOwnerClass is null
+            || !IsBodyBackedProperty(_currentOwnerClass, identifier.Name))
+            return;
+        try
+        {
+            scope.Lookup(identifier.Name, identifier.Location);
+        }
+        catch (SemanticException)
+        {
+            throw Error($"Property '{identifier.Name}' has a body, so its bare name is not a variable here: write this.{identifier.Name}",
+                identifier.Location, identifier.Name.Length);
+        }
+    }
+
     private void AnalyzeAssignment(
         AssignmentStatement assignment,
         Scope scope,
@@ -608,6 +625,7 @@ public sealed partial class SemanticAnalyzer
         IDictionary<Expression, SemanticType> expressionTypes,
         IDictionary<CallExpression, FunctionSymbol> resolvedCalls)
     {
+        RejectBodyBackedPropertyName(assignment.Target, scope);
         // Assigning to a variable is not a use of it, so a deleted variable can be given a new value.
         // A plain `=` to a member is a write, so a set-only property is named without being read. A compound assignment reads it.
         var targetType = assignment.Target switch

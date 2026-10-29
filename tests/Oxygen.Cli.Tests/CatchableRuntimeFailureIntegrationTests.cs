@@ -180,6 +180,83 @@ public sealed class CatchableRuntimeFailureIntegrationTests : IDisposable
         Assert.Contains("Unhandled RuntimeException: The value 7 is not a case of the enum.", run.Error);
     }
 
+    [SkippableFact]
+    public void AnInvalidCastIsCaughtAsInvalidCastException()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.exception;
+
+            class Base { }
+            class Leaf : Base { }
+            class Other : Base { }
+
+            i32 main() {
+                Base b = new Other();
+                try {
+                    Leaf leaf = cast<Leaf>(b);
+                    return 0;
+                } catch (InvalidCastException error) {
+                    return 9;
+                }
+            }
+            """);
+
+        Assert.True(run.ExitCode == 9, $"Exit code {run.ExitCode}:\n{run.Error}");
+    }
+
+    // Uncaught, the failure reports its class and the two types, and the program ends with the runtime's exit code.
+    [SkippableFact]
+    public void AnUncaughtInvalidCastReportsTheSourceAndTargetTypes()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.exception;
+
+            class Base { }
+            class Leaf : Base { }
+            class Other : Base { }
+
+            i32 main() {
+                Base b = new Other();
+                Leaf leaf = cast<Leaf>(b);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Contains("Unhandled InvalidCastException: Cannot cast an object of type", run.Error);
+        Assert.Contains("to program.Leaf, because it is not an instance of program.Leaf.", run.Error);
+    }
+
+    // A null reference is not an instance of any class, so casting it fails, and the message says that it is null.
+    [SkippableFact]
+    public void ACastOfANullReferenceFailsWithAMessageThatSaysItIsNull()
+    {
+        NativeProgram.RequireNativeToolchain();
+
+        var run = BuildAndRun(
+            """
+            import std.exception;
+
+            class Base { }
+            class Leaf : Base { }
+
+            i32 main() {
+                Base b = null;
+                Leaf leaf = cast<Leaf>(b);
+                return 0;
+            }
+            """);
+
+        Assert.Equal(101, run.ExitCode);
+        Assert.Contains("Unhandled InvalidCastException: Cannot cast a null reference to program.Leaf.", run.Error);
+    }
+
     // The failure happens in a function that the try calls, so the exception unwinds the call and reaches the catch.
     [SkippableFact]
     public void AFailureInACalledFunctionUnwindsToTheCatch()
